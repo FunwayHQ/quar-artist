@@ -1,0 +1,85 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  background: var(--color-glass);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) var(--easing-default),
+    transform var(--duration-fast) var(--easing-default);
+  padding: 0;
+  text-align: left;
+  width: 100%;
+  font-family: var(--font-family-ui);
+}
+
+.card:hover {
+  border-color: var(--color-accent-primary);
+  transform: translateY(-2px);
+}
+
+.thumbnail {
+  aspect-ratio: 4 / 3;
+  background: var(--color-bg-tertiary);
+  overflow: hidden;
+}
+
+.thumbImg {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.thumbPlaceholder {
+  width: 100%;
+  height: 100%;
+  background: repeating-conic-gradient(
+    var(--color-bg-tertiary) 0% 25%,
+    var(--color-bg-secondary) 0% 50%
+  ) 50% / 16px 16px;
+}
+
+.info {
+  padding: var(--space-sm) var(--space-md);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.name {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meta {
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-tertiary);
+}
+
+.actions {
+  display: flex;
+  gap: 2px;
+  padding: 0 var(--space-sm) var(--space-sm);
+}
+
+.actionBtn {
+  background: transparent;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-xs);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  padding: 2px 8px;
+  font-size: var(--font-size-xs);
+  transition: color var(--duration-fast) var(--easing-default),
+    background var(--duration-fast) var(--easing-default);
+}
+
+.actionBtn:hover {
+  background: var(--color-bg-hover);
+  color: var(--color-text-primary);
+}

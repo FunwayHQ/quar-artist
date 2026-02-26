@@ -20,7 +20,10 @@
       "mcp__playwright__browser_run_code",
       "Bash(curl:*)",
       "mcp__playwright__browser_press_key",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(rm:*)",
+      "Bash(mkdir:*)",
+      "Bash(npm:*)"
     ]
   }
 }
