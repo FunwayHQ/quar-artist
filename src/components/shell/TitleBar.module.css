@@ -2,11 +2,11 @@
   height: var(--titlebar-height);
   display: flex;
   align-items: center;
-  justify-content: space-between;
   padding: 0 var(--space-md);
   border-bottom: 1px solid var(--color-border-subtle);
   z-index: var(--z-sticky);
   flex-shrink: 0;
+  gap: var(--space-lg);
   -webkit-app-region: drag;
 }
 
@@ -14,36 +14,48 @@
   display: flex;
   align-items: center;
   height: 100%;
+  flex-shrink: 0;
 }
 
 .logo {
-  height: 30px;
+  height: 28px;
   width: auto;
 }
 
-.actions {
+.menu {
   display: flex;
   align-items: center;
-  gap: var(--space-xs);
+  gap: 2px;
   -webkit-app-region: no-drag;
 }
 
-.iconButton {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
+.menuItem {
+  padding: 4px 10px;
   border: none;
   border-radius: var(--radius-xs);
   background: transparent;
-  color: var(--color-text-tertiary);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-ui);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
   cursor: pointer;
   transition: color var(--duration-fast) var(--easing-default),
     background var(--duration-fast) var(--easing-default);
+  white-space: nowrap;
 }
 
-.iconButton:hover {
-  color: var(--color-text-secondary);
+.menuItem:hover {
+  color: var(--color-text-primary);
   background: var(--color-bg-hover);
+}
+
+.projectName {
+  margin-left: auto;
+  font-family: var(--font-family-ui);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  padding: 4px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-hover);
+  -webkit-app-region: no-drag;
 }

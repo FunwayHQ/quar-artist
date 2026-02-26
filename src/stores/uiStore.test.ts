@@ -6,7 +6,7 @@ describe('uiStore', () => {
     useUIStore.setState({
       leftPanelOpen: true,
       rightPanelOpen: true,
-      rightPanelTab: 'layers',
+      rightPanelTab: 'color',
       fullscreen: false,
     })
   })
@@ -15,7 +15,7 @@ describe('uiStore', () => {
     const s = useUIStore.getState()
     expect(s.leftPanelOpen).toBe(true)
     expect(s.rightPanelOpen).toBe(true)
-    expect(s.rightPanelTab).toBe('layers')
+    expect(s.rightPanelTab).toBe('color')
     expect(s.fullscreen).toBe(false)
   })
 

@@ -1,33 +1,62 @@
-.controls {
+.toolStrip {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+
+/* ── Centered tool icons row ── */
+.toolRow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  border-bottom: 1px solid var(--color-border-subtle);
+  gap: var(--space-xs);
+}
+
+/* ── Context-sensitive options row (brush presets + sliders) ── */
+.optionsRow {
   display: flex;
   align-items: center;
   gap: var(--space-md);
   padding: 0 var(--space-lg);
   height: 32px;
   border-bottom: 1px solid var(--color-border-subtle);
-  flex-shrink: 0;
+}
+
+.presets {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.presets::-webkit-scrollbar {
+  display: none;
 }
 
 .group {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
+  flex-shrink: 0;
 }
 
 .label {
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
   color: var(--color-text-tertiary);
   text-transform: uppercase;
-  letter-spacing: 0.5px;
-  min-width: 32px;
+  letter-spacing: 0.6px;
+  min-width: 28px;
 }
 
 .slider {
   -webkit-appearance: none;
   appearance: none;
-  width: 100px;
-  height: 4px;
+  width: 80px;
+  height: 3px;
   border-radius: var(--radius-full);
   background: var(--color-border-default);
   outline: none;
@@ -37,22 +66,23 @@
 .slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: var(--color-accent-primary);
   border: 2px solid var(--color-bg-primary);
   cursor: pointer;
   transition: transform var(--duration-fast) var(--easing-spring);
+  box-shadow: 0 0 6px var(--color-accent-primary-glow);
 }
 
 .slider::-webkit-slider-thumb:hover {
-  transform: scale(1.2);
+  transform: scale(1.25);
 }
 
 .slider::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: var(--color-accent-primary);
   border: 2px solid var(--color-bg-primary);
@@ -61,9 +91,9 @@
 
 .value {
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-2xs);
   color: var(--color-text-secondary);
-  min-width: 32px;
+  min-width: 30px;
   text-align: right;
 }
 
@@ -73,10 +103,12 @@
   border-radius: var(--radius-xs);
   background: transparent;
   color: var(--color-text-tertiary);
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-2xs);
   font-family: var(--font-family-ui);
+  font-weight: var(--font-weight-medium);
   cursor: pointer;
   transition: all var(--duration-fast) var(--easing-default);
+  white-space: nowrap;
 }
 
 .presetButton:hover {
@@ -87,11 +119,13 @@
 .presetButton[data-active='true'] {
   color: var(--color-accent-primary);
   border-color: var(--color-accent-primary);
-  background: var(--color-bg-active);
+  background: rgba(245, 158, 11, 0.08);
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.1);
 }
 
 .divider {
   width: 1px;
   height: 16px;
   background: var(--color-border-subtle);
+  flex-shrink: 0;
 }

@@ -4,17 +4,21 @@ import { InputManager } from '../input/InputManager.ts'
 import { BrushEngine } from '../brush/BrushEngine.ts'
 import { LayerManager, type LayerChangeCallback } from '../layers/LayerManager.ts'
 import { LayerCompositor } from '../layers/LayerCompositor.ts'
+import { SelectionController } from '../selection/SelectionController.ts'
+import { TransformManager } from '../transform/TransformManager.ts'
 import { createRenderer } from '../renderer.ts'
-import type { ViewState, PointerState } from '../../types/engine.ts'
+import type { ViewState, PointerState, ToolType } from '../../types/engine.ts'
 import type { StrokePoint } from '../../types/brush.ts'
 import type { LayerSnapshot } from '../undo/UndoManager.ts'
+import type { SelectionToolType, SelectionMode, BoundingBox } from '../../types/selection.ts'
 
 /**
  * Manages the two-canvas architecture:
  *   1. Static canvas — PixiJS Application (artwork rendering)
  *   2. Interactive canvas — HTML overlay (cursor, selection, guides)
  *
- * Owns ViewTransform, InputManager, BrushEngine, LayerManager, LayerCompositor.
+ * Owns ViewTransform, InputManager, BrushEngine, LayerManager, LayerCompositor,
+ * SelectionController, TransformManager.
  * No React.
  */
 export class CanvasManager {
@@ -23,15 +27,24 @@ export class CanvasManager {
   private overlayCanvas: HTMLCanvasElement | null = null
   private overlayCtx: CanvasRenderingContext2D | null = null
   private destroyed = false
+  private activeTool: ToolType = 'brush'
+  private overlayRafId: number | null = null
 
   readonly viewTransform = new ViewTransform()
   readonly inputManager = new InputManager(this.viewTransform)
   readonly brushEngine = new BrushEngine()
   readonly layerManager = new LayerManager()
   readonly compositor = new LayerCompositor()
+  readonly selectionController: SelectionController
+  readonly transformManager = new TransformManager()
 
   private resizeObserver: ResizeObserver | null = null
   private container: HTMLElement | null = null
+
+  constructor() {
+    // Initialize SelectionController with a default canvas size (resized later)
+    this.selectionController = new SelectionController(1024, 768)
+  }
 
   /**
    * Initialize PixiJS on the static canvas and set up the overlay.
@@ -83,12 +96,21 @@ export class CanvasManager {
     this.brushEngine.setApp(this.app)
     this.syncBrushToActiveLayer()
 
-    // Wire input to brush engine
+    // Wire selection controller to overlay
+    if (this.overlayCtx) {
+      this.selectionController.setOverlayCtx(this.overlayCtx)
+    }
+    this.selectionController.resize(w, h)
+
+    // Wire input to tool routing
     this.inputManager.setStrokeCallbacks({
-      onPointerDown: (ps) => this.handleStrokeStart(ps),
-      onPointerMove: (ps, coalesced) => this.handleStrokeMove(ps, coalesced),
-      onPointerUp: () => this.handleStrokeEnd(),
+      onPointerDown: (ps) => this.handlePointerDown(ps),
+      onPointerMove: (ps, coalesced) => this.handlePointerMove(ps, coalesced),
+      onPointerUp: (ps) => this.handlePointerUp(ps),
     })
+
+    // Start overlay render loop (marching ants, tool previews)
+    this.startOverlayLoop()
 
     // Watch for view transform changes to update PixiJS stage
     this.viewTransform.setChangeCallback(this.applyViewTransform)
@@ -196,6 +218,141 @@ export class CanvasManager {
     tex.destroy(true)
   }
 
+  // ── Tool state management ─────────────────────────────────────────
+
+  /** Set the active tool (called from React when toolStore changes). */
+  setActiveTool(tool: ToolType) {
+    this.activeTool = tool
+  }
+
+  /** Set the selection sub-tool type. */
+  setSelectionSubTool(subTool: SelectionToolType) {
+    this.selectionController.setSubTool(subTool)
+  }
+
+  /** Set the selection combination mode. */
+  setSelectionMode(mode: SelectionMode) {
+    this.selectionController.setSelectionMode(mode)
+  }
+
+  /** Set selection change callback (for syncing to Zustand store). */
+  setSelectionChangeCallback(cb: (hasSelection: boolean, bounds: BoundingBox | null) => void) {
+    this.selectionController.setSelectionChangeCallback(cb)
+  }
+
+  /** Update constrain modifier state. */
+  setSelectionConstrained(constrained: boolean) {
+    this.selectionController.setConstrained(constrained)
+  }
+
+  // ── Selection actions ─────────────────────────────────────────────
+
+  selectAll() {
+    this.selectionController.selectAll()
+  }
+
+  deselectAll() {
+    this.selectionController.deselect()
+  }
+
+  invertSelection() {
+    this.selectionController.invertSelection()
+  }
+
+  // ── Pointer event routing ─────────────────────────────────────────
+
+  private handlePointerDown(ps: PointerState) {
+    const canvasPoint = this.viewTransform.screenToCanvas(ps.x, ps.y)
+
+    if (this.activeTool === 'selection') {
+      const subTool = this.selectionController.getSubTool()
+      if (subTool === 'magicWand') {
+        this.handleMagicWandClick(canvasPoint)
+      } else {
+        this.selectionController.handlePointerDown(canvasPoint)
+      }
+      return
+    }
+
+    if (this.activeTool === 'brush' || this.activeTool === 'eraser') {
+      this.handleStrokeStart(ps)
+      return
+    }
+  }
+
+  private handlePointerMove(ps: PointerState, coalesced: PointerState[]) {
+    if (this.activeTool === 'selection') {
+      const canvasPoint = this.viewTransform.screenToCanvas(ps.x, ps.y)
+      this.selectionController.handlePointerMove(canvasPoint)
+      return
+    }
+
+    if (this.activeTool === 'brush' || this.activeTool === 'eraser') {
+      this.handleStrokeMove(ps, coalesced)
+      return
+    }
+  }
+
+  private handlePointerUp(ps: PointerState) {
+    if (this.activeTool === 'selection') {
+      this.selectionController.handlePointerUp()
+      return
+    }
+
+    if (this.activeTool === 'brush' || this.activeTool === 'eraser') {
+      this.handleStrokeEnd()
+      return
+    }
+  }
+
+  private handleMagicWandClick(canvasPoint: { x: number; y: number }) {
+    if (!this.app) return
+    const layer = this.layerManager.getActiveLayer()
+    if (!layer) return
+
+    // Extract pixel data from the active layer
+    const extracted = this.app.renderer.extract.pixels({ target: layer.texture })
+    const pixels = new Uint8Array(
+      extracted.pixels.buffer,
+      extracted.pixels.byteOffset,
+      extracted.pixels.byteLength,
+    )
+    this.selectionController.executeMagicWand(canvasPoint, pixels)
+  }
+
+  // ── Overlay render loop ───────────────────────────────────────────
+
+  private startOverlayLoop() {
+    const loop = () => {
+      this.renderOverlay()
+      this.overlayRafId = requestAnimationFrame(loop)
+    }
+    this.overlayRafId = requestAnimationFrame(loop)
+  }
+
+  private renderOverlay() {
+    if (!this.overlayCtx || !this.overlayCanvas) return
+    const ctx = this.overlayCtx
+    const w = this.overlayCanvas.width
+    const h = this.overlayCanvas.height
+
+    ctx.clearRect(0, 0, w, h)
+
+    // Apply view transform to overlay context for canvas-space drawing
+    const view = this.viewTransform.getState()
+    ctx.save()
+    ctx.translate(view.x, view.y)
+    ctx.scale(view.zoom, view.zoom)
+    ctx.rotate(view.rotation)
+
+    // Draw selection overlay (marching ants + tool preview)
+    this.selectionController.drawOverlay(ctx, view.zoom)
+
+    ctx.restore()
+  }
+
+  // ── Stroke handlers (brush/eraser) ────────────────────────────────
+
   private handleStrokeStart(ps: PointerState) {
     this.syncBrushToActiveLayer()
     const canvasPoint = this.viewTransform.screenToCanvas(ps.x, ps.y)
@@ -277,6 +434,12 @@ export class CanvasManager {
     this.inputManager.detach()
     this.resizeObserver?.disconnect()
 
+    if (this.overlayRafId !== null) {
+      cancelAnimationFrame(this.overlayRafId)
+      this.overlayRafId = null
+    }
+
+    this.selectionController.destroy()
     this.layerManager.destroy()
     this.compositor.destroy()
 

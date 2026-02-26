@@ -16,10 +16,18 @@ describe('TitleBar', () => {
     expect(header).toBeInTheDocument()
   })
 
-  it('has a menu button', () => {
+  it('has menu items', () => {
     render(<TitleBar />)
-    const menuBtn = screen.getByRole('button', { name: 'Menu' })
-    expect(menuBtn).toBeInTheDocument()
+    expect(screen.getByText('File')).toBeInTheDocument()
+    expect(screen.getByText('Edit')).toBeInTheDocument()
+    expect(screen.getByText('View')).toBeInTheDocument()
+    expect(screen.getByText('Selection')).toBeInTheDocument()
+    expect(screen.getByText('Help')).toBeInTheDocument()
+  })
+
+  it('shows project name', () => {
+    render(<TitleBar />)
+    expect(screen.getByText('Untitled Project')).toBeInTheDocument()
   })
 
   it('applies glass class for frosted glass effect', () => {

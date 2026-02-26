@@ -14,7 +14,7 @@ interface UIStore {
 export const useUIStore = create<UIStore>((set) => ({
   leftPanelOpen: true,
   rightPanelOpen: true,
-  rightPanelTab: 'layers',
+  rightPanelTab: 'color',
   fullscreen: false,
 
   toggleLeftPanel: () => set((s) => ({ leftPanelOpen: !s.leftPanelOpen })),

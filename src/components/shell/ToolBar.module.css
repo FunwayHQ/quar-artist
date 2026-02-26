@@ -1,7 +1,7 @@
 .toolBar {
   display: flex;
   align-items: center;
-  gap: var(--space-xs);
+  gap: 2px;
   flex-shrink: 0;
 }
 
@@ -9,30 +9,46 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   border: none;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--color-text-tertiary);
   cursor: pointer;
   transition: color var(--duration-fast) var(--easing-default),
-    background var(--duration-fast) var(--easing-default);
+    background var(--duration-fast) var(--easing-default),
+    box-shadow var(--duration-fast) var(--easing-default);
+  position: relative;
 }
 
 .tool:hover {
-  color: var(--color-text-secondary);
+  color: var(--color-text-primary);
   background: var(--color-bg-hover);
 }
 
 .tool[data-active='true'] {
   color: var(--color-accent-primary);
-  background: var(--color-bg-active);
+  background: rgba(245, 158, 11, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(245, 158, 11, 0.2);
+}
+
+.tool[data-active='true']::after {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 12px;
+  height: 2px;
+  border-radius: var(--radius-full);
+  background: var(--color-accent-primary);
+  box-shadow: 0 0 6px var(--color-accent-primary-glow);
 }
 
 .divider {
   width: 1px;
-  height: 18px;
+  height: 20px;
   background: var(--color-border-subtle);
-  margin: 0 2px;
+  margin: 0 6px;
 }

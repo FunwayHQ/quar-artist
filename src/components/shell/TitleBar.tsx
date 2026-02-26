@@ -1,4 +1,3 @@
-import { MoreHorizontal } from 'lucide-react'
 import styles from './TitleBar.module.css'
 
 export function TitleBar() {
@@ -7,11 +6,14 @@ export function TitleBar() {
       <div className={styles.brand}>
         <img src="/logo.svg" alt="QUAR Artist" className={styles.logo} />
       </div>
-      <div className={styles.actions}>
-        <button className={styles.iconButton} aria-label="Menu">
-          <MoreHorizontal size={14} />
-        </button>
-      </div>
+      <nav className={styles.menu}>
+        <button className={styles.menuItem}>File</button>
+        <button className={styles.menuItem}>Edit</button>
+        <button className={styles.menuItem}>View</button>
+        <button className={styles.menuItem}>Selection</button>
+        <button className={styles.menuItem}>Help</button>
+      </nav>
+      <div className={styles.projectName}>Untitled Project</div>
     </header>
   )
 }

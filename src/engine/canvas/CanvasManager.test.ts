@@ -171,6 +171,41 @@ describe('CanvasManager', () => {
     })
   })
 
+  describe('selection integration', () => {
+    it('exposes selectionController', () => {
+      expect(cm.selectionController).toBeDefined()
+      expect(cm.selectionController.manager).toBeDefined()
+    })
+
+    it('exposes transformManager', () => {
+      expect(cm.transformManager).toBeDefined()
+    })
+
+    it('setActiveTool changes internal tool routing', () => {
+      cm.setActiveTool('selection')
+      // Should not throw
+      expect(typeof cm.setActiveTool).toBe('function')
+    })
+
+    it('selection actions are available', () => {
+      expect(typeof cm.selectAll).toBe('function')
+      expect(typeof cm.deselectAll).toBe('function')
+      expect(typeof cm.invertSelection).toBe('function')
+    })
+
+    it('selectAll/deselectAll work', () => {
+      cm.selectAll()
+      expect(cm.selectionController.hasSelection()).toBe(true)
+      cm.deselectAll()
+      expect(cm.selectionController.hasSelection()).toBe(false)
+    })
+
+    it('setSelectionSubTool changes the sub-tool', () => {
+      cm.setSelectionSubTool('ellipse')
+      expect(cm.selectionController.getSubTool()).toBe('ellipse')
+    })
+  })
+
   describe('destroy', () => {
     it('removes canvases from DOM', async () => {
       await cm.init(container)

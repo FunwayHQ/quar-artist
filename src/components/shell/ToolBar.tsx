@@ -38,7 +38,7 @@ export function ToolBar() {
             aria-label={tool.label}
             title={tool.label}
           >
-            <tool.icon size={18} />
+            <tool.icon size={20} />
           </button>
         </React.Fragment>
       ))}
