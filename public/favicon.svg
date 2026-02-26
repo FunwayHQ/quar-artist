@@ -1,0 +1,52 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <!-- Diagonal glass gradient -->
+    <linearGradient id="bg" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FBBF24"/>
+      <stop offset="50%" stop-color="#F59E0B"/>
+      <stop offset="100%" stop-color="#B45309"/>
+    </linearGradient>
+
+    <!-- Top-edge glass highlight -->
+    <linearGradient id="shine" x1="32" y1="0" x2="32" y2="36" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFF" stop-opacity="0.32"/>
+      <stop offset="100%" stop-color="#FFF" stop-opacity="0"/>
+    </linearGradient>
+
+    <!-- Ambient glow filter -->
+    <filter id="glow" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <!-- U letter drop shadow -->
+    <filter id="ts">
+      <feDropShadow dx="0" dy="1" stdDeviation="1" flood-color="#78350F" flood-opacity="0.45"/>
+    </filter>
+
+    <!-- Clip for highlight shape -->
+    <clipPath id="rc">
+      <rect width="64" height="64" rx="14"/>
+    </clipPath>
+  </defs>
+
+  <!-- Ambient glow halo -->
+  <rect x="3" y="3" width="58" height="58" rx="12" fill="#F59E0B" opacity="0.15" filter="url(#glow)"/>
+
+  <!-- Main glass body -->
+  <rect width="64" height="64" rx="14" fill="url(#bg)"/>
+
+  <!-- Frosted glass highlight (elliptical light catch at top) -->
+  <g clip-path="url(#rc)">
+    <ellipse cx="32" cy="-2" rx="36" ry="26" fill="url(#shine)"/>
+  </g>
+
+  <!-- Glass outer edge -->
+  <rect x="0.5" y="0.5" width="63" height="63" rx="13.5" fill="none" stroke="#FFF" stroke-opacity="0.18"/>
+
+  <!-- Glass inner bevel -->
+  <rect x="1.5" y="1.5" width="61" height="61" rx="12.5" fill="none" stroke="#FFF" stroke-opacity="0.06"/>
+
+  <!-- U letter (white on glass, with depth shadow) -->
+  <path d="M32 50C28.5 50 25.75 49.1 23.75 47.3C21.8 45.5 20.8 43 20.8 39.8V16H27.5V39.7C27.5 41.1 27.85 42.15 28.55 42.85C29.3 43.55 30.4 43.9 31.85 43.9C33.25 43.9 34.3 43.55 35 42.85C35.7 42.15 36.05 41.1 36.05 39.7V16H42.75V39.8C42.75 42.95 41.75 45.45 39.75 47.3C37.8 49.1 35.1 50 32 50Z" fill="white" filter="url(#ts)"/>
+</svg>

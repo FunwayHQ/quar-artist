@@ -1,0 +1,38 @@
+.toolBar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-shrink: 0;
+}
+
+.tool {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--easing-default),
+    background var(--duration-fast) var(--easing-default);
+}
+
+.tool:hover {
+  color: var(--color-text-secondary);
+  background: var(--color-bg-hover);
+}
+
+.tool[data-active='true'] {
+  color: var(--color-accent-primary);
+  background: var(--color-bg-active);
+}
+
+.divider {
+  width: 1px;
+  height: 18px;
+  background: var(--color-border-subtle);
+  margin: 0 2px;
+}

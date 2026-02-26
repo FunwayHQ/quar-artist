@@ -1,0 +1,122 @@
+/* ═══════════════════════════════════════════════════
+   QUAR Suite — Neo-Industrial Studio Design Tokens
+   Source: quar-suite-design-prompt.md
+   ═══════════════════════════════════════════════════ */
+
+:root {
+  /* ── Backgrounds (warm charcoal blacks) ── */
+  --color-bg-primary: #0a0a0b;
+  --color-bg-secondary: #111113;
+  --color-bg-tertiary: #18181b;
+  --color-bg-elevated: #1f1f23;
+  --color-bg-hover: rgba(255, 255, 255, 0.04);
+  --color-bg-active: rgba(255, 255, 255, 0.08);
+  --color-bg-canvas: #09090a;
+
+  /* ── Glass surfaces ── */
+  --color-glass: rgba(17, 17, 19, 0.85);
+  --color-glass-border: rgba(255, 255, 255, 0.06);
+  --color-glass-highlight: rgba(255, 255, 255, 0.03);
+
+  /* ── Text (warm whites) ── */
+  --color-text-primary: #fafaf9;
+  --color-text-secondary: #a1a1aa;
+  --color-text-tertiary: #71717a;
+  --color-text-disabled: #3f3f46;
+  --color-text-inverse: #0a0a0b;
+
+  /* ── Borders ── */
+  --color-border-default: rgba(255, 255, 255, 0.08);
+  --color-border-subtle: rgba(255, 255, 255, 0.04);
+  --color-border-strong: rgba(255, 255, 255, 0.12);
+
+  /* ── Semantic colors (constant across suite) ── */
+  --color-accent-secondary: #9f1239;
+  --color-accent-secondary-glow: rgba(159, 18, 57, 0.3);
+  --color-accent-success: #34d399;
+  --color-accent-warning: #fbbf24;
+  --color-accent-error: #fb7185;
+
+  /* ── Quar Artist — Amber accent ── */
+  --color-accent-primary: #f59e0b;
+  --color-accent-primary-hover: #fbbf24;
+  --color-accent-primary-active: #d97706;
+  --color-accent-primary-glow: rgba(245, 158, 11, 0.3);
+  --color-border-focus: #f59e0b;
+  --shadow-glow: 0 0 20px var(--color-accent-primary-glow);
+
+  /* ── Spacing ── */
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --space-xl: 24px;
+  --space-2xl: 32px;
+  --space-3xl: 48px;
+
+  /* ── Typography ── */
+  --font-family-ui: 'DM Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+  --font-family-mono: 'IBM Plex Mono', 'SF Mono', 'Consolas', monospace;
+  --font-size-2xs: 9px;
+  --font-size-xs: 10px;
+  --font-size-sm: 11px;
+  --font-size-md: 13px;
+  --font-size-lg: 15px;
+  --font-size-xl: 18px;
+  --font-size-2xl: 24px;
+  --font-weight-normal: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+
+  /* ── Border Radius ── */
+  --radius-none: 0px;
+  --radius-xs: 3px;
+  --radius-sm: 5px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-full: 9999px;
+
+  /* ── Shadows (layered) ── */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4), 0 2px 8px rgba(0, 0, 0, 0.3);
+  --shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.45), 0 4px 16px rgba(0, 0, 0, 0.35);
+  --shadow-inset: inset 0 1px 0 var(--color-glass-highlight);
+
+  /* ── Animation ── */
+  --duration-instant: 50ms;
+  --duration-fast: 120ms;
+  --duration-normal: 200ms;
+  --duration-slow: 350ms;
+  --duration-slower: 500ms;
+  --easing-default: cubic-bezier(0.2, 0, 0, 1);
+  --easing-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --easing-in: cubic-bezier(0.4, 0, 1, 1);
+  --easing-out: cubic-bezier(0, 0, 0.2, 1);
+  --easing-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ── Z-index scale ── */
+  --z-base: 0;
+  --z-dropdown: 100;
+  --z-sticky: 200;
+  --z-overlay: 1000;
+  --z-context-menu: 1010;
+  --z-popover: 1020;
+  --z-modal: 1030;
+  --z-color-picker: 1040;
+  --z-tooltip: 1050;
+
+  /* ── Noise overlay ── */
+  --noise-opacity: 0.015;
+
+  /* ── Layout dimensions ── */
+  --titlebar-height: 40px;
+  --toolbar-width: 48px;
+  --shelf-width: 48px;
+}
+
+::selection {
+  background-color: rgba(245, 158, 11, 0.35);
+  color: var(--color-text-primary);
+}

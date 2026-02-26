@@ -1,0 +1,6 @@
+.disc {
+  cursor: crosshair;
+  touch-action: none;
+  border-radius: 50%;
+  flex-shrink: 0;
+}

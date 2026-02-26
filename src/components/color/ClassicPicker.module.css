@@ -1,0 +1,6 @@
+.classic {
+  cursor: crosshair;
+  touch-action: none;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
