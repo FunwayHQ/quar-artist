@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm create:*)",
+      "Bash(cp:*)",
+      "Bash(npm install:*)",
+      "Bash(npx tsc:*)",
+      "mcp__playwright__browser_navigate",
+      "mcp__playwright__browser_take_screenshot",
+      "mcp__playwright__browser_console_messages",
+      "mcp__playwright__browser_evaluate",
+      "Bash(npx vite:*)",
+      "Bash(npx vitest:*)",
+      "mcp__playwright__browser_click",
+      "Bash(pkill:*)",
+      "Bash(xargs grep:*)",
+      "Bash(npm test:*)",
+      "Bash(npm run:*)",
+      "Bash(git:*)"
+    ]
+  }
+}

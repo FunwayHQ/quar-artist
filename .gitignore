@@ -25,6 +25,3 @@ dist-ssr
 
 # Screenshots (dev artifacts)
 sprint*.png
-
-# Claude Code local settings
-.claude/settings.local.json
