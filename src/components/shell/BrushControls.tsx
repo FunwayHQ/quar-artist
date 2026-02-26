@@ -1,7 +1,16 @@
 import { useBrushStore } from '@stores/brushStore.ts'
 import { useToolStore } from '@stores/toolStore.ts'
+import { useSelectionStore } from '@stores/selectionStore.ts'
 import { ToolBar } from './ToolBar.tsx'
 import styles from './BrushControls.module.css'
+import type { SelectionToolType } from '@app-types/selection.ts'
+
+const SUB_TOOLS: { id: SelectionToolType; label: string }[] = [
+  { id: 'rectangle', label: 'Rect' },
+  { id: 'ellipse', label: 'Ellipse' },
+  { id: 'freehand', label: 'Lasso' },
+  { id: 'magicWand', label: 'Wand' },
+]
 
 export function BrushControls() {
   const activeTool = useToolStore((s) => s.activeTool)
@@ -13,7 +22,17 @@ export function BrushControls() {
   const setSize = useBrushStore((s) => s.setSize)
   const setOpacity = useBrushStore((s) => s.setOpacity)
 
+  const activeSubTool = useSelectionStore((s) => s.activeSubTool)
+  const setSubTool = useSelectionStore((s) => s.setSubTool)
+  const tolerance = useSelectionStore((s) => s.magicWandOptions.tolerance)
+  const contiguous = useSelectionStore((s) => s.magicWandOptions.contiguous)
+  const featherRadius = useSelectionStore((s) => s.featherOptions.radius)
+  const setMagicWandTolerance = useSelectionStore((s) => s.setMagicWandTolerance)
+  const setMagicWandContiguous = useSelectionStore((s) => s.setMagicWandContiguous)
+  const setFeatherRadius = useSelectionStore((s) => s.setFeatherRadius)
+
   const showBrushOptions = activeTool === 'brush' || activeTool === 'eraser'
+  const showSelectionOptions = activeTool === 'selection'
 
   return (
     <div className={styles.toolStrip}>
@@ -22,7 +41,7 @@ export function BrushControls() {
         <ToolBar />
       </div>
 
-      {/* Context-sensitive options bar */}
+      {/* Brush options bar */}
       {showBrushOptions && (
         <div className={`glass ${styles.optionsRow}`}>
           <div className={styles.presets}>
@@ -70,6 +89,73 @@ export function BrushControls() {
             />
             <span className={styles.value}>{Math.round(opacity * 100)}%</span>
           </div>
+        </div>
+      )}
+
+      {/* Selection options bar */}
+      {showSelectionOptions && (
+        <div className={`glass ${styles.optionsRow}`}>
+          <div className={styles.presets}>
+            {SUB_TOOLS.map((t) => (
+              <button
+                key={t.id}
+                className={styles.presetButton}
+                data-active={activeSubTool === t.id}
+                onClick={() => setSubTool(t.id)}
+                title={t.label}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          <div className={styles.divider} />
+
+          <div className={styles.group}>
+            <span className={styles.label}>Feather</span>
+            <input
+              type="range"
+              className={styles.slider}
+              min={0}
+              max={50}
+              value={featherRadius}
+              onChange={(e) => setFeatherRadius(Number(e.target.value))}
+              aria-label="Feather radius"
+            />
+            <span className={styles.value}>{featherRadius}px</span>
+          </div>
+
+          {activeSubTool === 'magicWand' && (
+            <>
+              <div className={styles.divider} />
+
+              <div className={styles.group}>
+                <span className={styles.label}>Tolerance</span>
+                <input
+                  type="range"
+                  className={styles.slider}
+                  min={0}
+                  max={255}
+                  value={tolerance}
+                  onChange={(e) => setMagicWandTolerance(Number(e.target.value))}
+                  aria-label="Magic wand tolerance"
+                />
+                <span className={styles.value}>{tolerance}</span>
+              </div>
+
+              <div className={styles.divider} />
+
+              <label className={styles.checkGroup}>
+                <input
+                  type="checkbox"
+                  className={styles.checkbox}
+                  checked={contiguous}
+                  onChange={(e) => setMagicWandContiguous(e.target.checked)}
+                />
+                <span className={styles.checkLabel}>Contiguous</span>
+              </label>
+            </>
+          )}
         </div>
       )}
     </div>

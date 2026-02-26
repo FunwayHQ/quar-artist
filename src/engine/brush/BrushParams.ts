@@ -19,6 +19,7 @@ export const DEFAULT_PRESETS: BrushPreset[] = [
     scatter: 0,
     rotationJitter: 0,
     usesSmudge: false,
+    shapeTextureId: 'hard-round',
   },
   {
     id: 'pencil',
@@ -37,6 +38,8 @@ export const DEFAULT_PRESETS: BrushPreset[] = [
     scatter: 0.02,
     rotationJitter: 5,
     usesSmudge: false,
+    shapeTextureId: 'pencil-grain',
+    grainTextureId: 'paper-fine',
   },
   {
     id: 'ink',
@@ -55,6 +58,7 @@ export const DEFAULT_PRESETS: BrushPreset[] = [
     scatter: 0,
     rotationJitter: 0,
     usesSmudge: false,
+    shapeTextureId: 'ink-splatter',
   },
 
   // ── Paint ──
@@ -75,6 +79,8 @@ export const DEFAULT_PRESETS: BrushPreset[] = [
     scatter: 0.05,
     rotationJitter: 15,
     usesSmudge: false,
+    shapeTextureId: 'watercolor-bleed',
+    grainTextureId: 'paper-rough',
   },
   {
     id: 'oil',
@@ -93,6 +99,8 @@ export const DEFAULT_PRESETS: BrushPreset[] = [
     scatter: 0.03,
     rotationJitter: 8,
     usesSmudge: false,
+    shapeTextureId: 'oil-bristle',
+    grainTextureId: 'canvas-weave',
   },
   {
     id: 'marker',
@@ -111,6 +119,7 @@ export const DEFAULT_PRESETS: BrushPreset[] = [
     scatter: 0,
     rotationJitter: 0,
     usesSmudge: false,
+    shapeTextureId: 'marker-flat',
   },
 
   // ── Sketch ──
@@ -131,6 +140,8 @@ export const DEFAULT_PRESETS: BrushPreset[] = [
     scatter: 0.04,
     rotationJitter: 12,
     usesSmudge: false,
+    shapeTextureId: 'pastel-rough',
+    grainTextureId: 'paper-rough',
   },
   {
     id: 'charcoal',
@@ -149,6 +160,8 @@ export const DEFAULT_PRESETS: BrushPreset[] = [
     scatter: 0.06,
     rotationJitter: 20,
     usesSmudge: false,
+    shapeTextureId: 'charcoal-grain',
+    grainTextureId: 'paper-rough',
   },
   {
     id: 'soft-airbrush',
@@ -167,6 +180,7 @@ export const DEFAULT_PRESETS: BrushPreset[] = [
     scatter: 0,
     rotationJitter: 0,
     usesSmudge: false,
+    shapeTextureId: 'airbrush-gradient',
   },
   {
     id: 'flat',
@@ -185,6 +199,7 @@ export const DEFAULT_PRESETS: BrushPreset[] = [
     scatter: 0,
     rotationJitter: 0,
     usesSmudge: false,
+    shapeTextureId: 'flat-square',
   },
 
   // ── Blend ──
@@ -205,6 +220,7 @@ export const DEFAULT_PRESETS: BrushPreset[] = [
     scatter: 0,
     rotationJitter: 0,
     usesSmudge: true,
+    shapeTextureId: 'smudge-soft',
   },
 
   // ── Utility ──
@@ -225,6 +241,7 @@ export const DEFAULT_PRESETS: BrushPreset[] = [
     scatter: 0,
     rotationJitter: 0,
     usesSmudge: false,
+    shapeTextureId: 'hard-round',
   },
 ]
 

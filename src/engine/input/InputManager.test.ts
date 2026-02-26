@@ -88,7 +88,7 @@ describe('InputManager', () => {
       )
     })
 
-    it('fires onPointerMove with coalesced events', () => {
+    it('fires onPointerMove with coalesced and predicted events', () => {
       const onMove = vi.fn()
       input.setStrokeCallbacks({ onPointerMove: onMove })
       el.dispatchEvent(createPointerEvent('pointerdown', { pointerId: 1 }))
@@ -96,6 +96,7 @@ describe('InputManager', () => {
       expect(onMove).toHaveBeenCalledTimes(1)
       expect(onMove).toHaveBeenCalledWith(
         expect.objectContaining({ x: 10, y: 20 }),
+        expect.any(Array),
         expect.any(Array),
       )
     })
@@ -205,6 +206,42 @@ describe('InputManager', () => {
 
       el.dispatchEvent(createPointerEvent('pointerup', { pointerId: 1 }))
       el.dispatchEvent(createPointerEvent('pointerup', { pointerId: 2 }))
+    })
+  })
+
+  describe('predicted events', () => {
+    it('passes predicted events array to onPointerMove', () => {
+      const onMove = vi.fn()
+      input.setStrokeCallbacks({ onPointerMove: onMove })
+      el.dispatchEvent(createPointerEvent('pointerdown', { pointerId: 1 }))
+      el.dispatchEvent(createPointerEvent('pointermove', { pointerId: 1, clientX: 10, clientY: 10 }))
+
+      expect(onMove).toHaveBeenCalledTimes(1)
+      // Third argument is the predicted events array
+      const thirdArg = onMove.mock.calls[0][2]
+      expect(Array.isArray(thirdArg)).toBe(true)
+    })
+
+    it('extracts predicted events when getPredictedEvents is available', () => {
+      const onMove = vi.fn()
+      input.setStrokeCallbacks({ onPointerMove: onMove })
+
+      el.dispatchEvent(createPointerEvent('pointerdown', { pointerId: 1 }))
+
+      // Create event with getPredictedEvents returning mock data
+      const moveEvent = createPointerEvent('pointermove', { pointerId: 1, clientX: 20, clientY: 30 })
+      const predictedEvent = createPointerEvent('pointermove', { pointerId: 1, clientX: 25, clientY: 35 })
+      Object.defineProperty(moveEvent, 'getPredictedEvents', {
+        value: () => [predictedEvent],
+      })
+
+      el.dispatchEvent(moveEvent)
+
+      expect(onMove).toHaveBeenCalledTimes(1)
+      const predicted = onMove.mock.calls[0][2]
+      expect(predicted).toHaveLength(1)
+      expect(predicted[0].x).toBe(25)
+      expect(predicted[0].y).toBe(35)
     })
   })
 

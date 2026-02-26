@@ -32,7 +32,9 @@ export class InputManager {
 
   /** Callbacks for stroke input (consumed by brush engine) */
   private onPointerDown: ((state: PointerState) => void) | null = null
-  private onPointerMove: ((state: PointerState, coalesced: PointerState[]) => void) | null = null
+  private onPointerMove:
+    | ((state: PointerState, coalesced: PointerState[], predicted: PointerState[]) => void)
+    | null = null
   private onPointerUp: ((state: PointerState) => void) | null = null
 
   constructor(viewTransform: ViewTransform) {
@@ -41,7 +43,7 @@ export class InputManager {
 
   setStrokeCallbacks(callbacks: {
     onPointerDown?: (state: PointerState) => void
-    onPointerMove?: (state: PointerState, coalesced: PointerState[]) => void
+    onPointerMove?: (state: PointerState, coalesced: PointerState[], predicted: PointerState[]) => void
     onPointerUp?: (state: PointerState) => void
   }) {
     this.onPointerDown = callbacks.onPointerDown ?? null
@@ -121,10 +123,11 @@ export class InputManager {
       return
     }
 
-    // Single pointer — pass to stroke handler with coalesced events
+    // Single pointer — pass to stroke handler with coalesced + predicted events
     if (this.activePointers.size === 1) {
       const coalesced = (e.getCoalescedEvents?.() ?? []).map((ce) => this.toPointerState(ce))
-      this.onPointerMove?.(this.toPointerState(e), coalesced)
+      const predicted = (e.getPredictedEvents?.() ?? []).map((pe) => this.toPointerState(pe))
+      this.onPointerMove?.(this.toPointerState(e), coalesced, predicted)
     }
   }
 

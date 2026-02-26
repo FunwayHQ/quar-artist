@@ -270,6 +270,93 @@ export class TransformManager {
   }
 
   /**
+   * Sample a pixel from source data using bilinear interpolation.
+   * Returns [r, g, b, a] with values 0-255.
+   */
+  static bilinearSample(
+    srcPixels: Uint8Array | Uint8ClampedArray,
+    srcWidth: number,
+    srcHeight: number,
+    x: number,
+    y: number,
+  ): [number, number, number, number] {
+    const x0 = Math.floor(x)
+    const y0 = Math.floor(y)
+    const x1 = x0 + 1
+    const y1 = y0 + 1
+    const fx = x - x0
+    const fy = y - y0
+
+    const getPixel = (px: number, py: number): [number, number, number, number] => {
+      px = Math.max(0, Math.min(srcWidth - 1, px))
+      py = Math.max(0, Math.min(srcHeight - 1, py))
+      const idx = (py * srcWidth + px) * 4
+      return [srcPixels[idx], srcPixels[idx + 1], srcPixels[idx + 2], srcPixels[idx + 3]]
+    }
+
+    const tl = getPixel(x0, y0)
+    const tr = getPixel(x1, y0)
+    const bl = getPixel(x0, y1)
+    const br = getPixel(x1, y1)
+
+    const w00 = (1 - fx) * (1 - fy)
+    const w10 = fx * (1 - fy)
+    const w01 = (1 - fx) * fy
+    const w11 = fx * fy
+
+    return [
+      Math.round(tl[0] * w00 + tr[0] * w10 + bl[0] * w01 + br[0] * w11),
+      Math.round(tl[1] * w00 + tr[1] * w10 + bl[1] * w01 + br[1] * w11),
+      Math.round(tl[2] * w00 + tr[2] * w10 + bl[2] * w01 + br[2] * w11),
+      Math.round(tl[3] * w00 + tr[3] * w10 + bl[3] * w01 + br[3] * w11),
+    ]
+  }
+
+  /**
+   * Apply the current transform to source pixel data, writing to destination.
+   * Uses bilinear interpolation for smooth scaling and rotation.
+   */
+  applyToPixels(
+    srcPixels: Uint8Array | Uint8ClampedArray,
+    srcWidth: number,
+    srcHeight: number,
+    dstWidth: number,
+    dstHeight: number,
+  ): Uint8Array {
+    const dst = new Uint8Array(dstWidth * dstHeight * 4)
+    if (!this.state) return dst
+
+    const { translateX: tx, translateY: ty, scaleX: sx, scaleY: sy, rotation, pivotX, pivotY } = this.state
+    const cos = Math.cos(-rotation)
+    const sin = Math.sin(-rotation)
+    const cx = pivotX + tx
+    const cy = pivotY + ty
+
+    for (let dy = 0; dy < dstHeight; dy++) {
+      for (let dx = 0; dx < dstWidth; dx++) {
+        // Inverse transform: destination → source
+        const rx = dx - cx
+        const ry = dy - cy
+        const irx = rx * cos - ry * sin
+        const iry = rx * sin + ry * cos
+        const srcX = irx / sx + pivotX
+        const srcY = iry / sy + pivotY
+
+        if (srcX >= -0.5 && srcX < srcWidth + 0.5 && srcY >= -0.5 && srcY < srcHeight + 0.5) {
+          const [r, g, b, a] = TransformManager.bilinearSample(srcPixels, srcWidth, srcHeight, srcX, srcY)
+          const idx = (dy * dstWidth + dx) * 4
+          dst[idx] = r
+          dst[idx + 1] = g
+          dst[idx + 2] = b
+          dst[idx + 3] = a
+        }
+      }
+    }
+
+    return dst
+  }
+
+  /**
    * Get the current transformed bounding box (axis-aligned).
    */
   getTransformedBounds(): BoundingBox | null {

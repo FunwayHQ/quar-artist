@@ -16,7 +16,11 @@
       "Bash(xargs grep:*)",
       "Bash(npm test:*)",
       "Bash(npm run:*)",
-      "Bash(git:*)"
+      "Bash(git:*)",
+      "mcp__playwright__browser_run_code",
+      "Bash(curl:*)",
+      "mcp__playwright__browser_press_key",
+      "Bash(grep:*)"
     ]
   }
 }

@@ -1,4 +1,4 @@
-const MAX_UNDO_STATES = 30
+const MAX_UNDO_STATES = 50
 
 export interface LayerSnapshot {
   width: number
@@ -6,11 +6,20 @@ export interface LayerSnapshot {
   data: Uint8Array
 }
 
-export interface UndoEntry {
+export interface LayerUndoEntry {
+  type: 'layer'
   layerId: string
   before: LayerSnapshot
   after: LayerSnapshot
 }
+
+export interface SelectionUndoEntry {
+  type: 'selection'
+  before: Uint8Array
+  after: Uint8Array
+}
+
+export type UndoEntry = LayerUndoEntry | SelectionUndoEntry
 
 export type UndoStateChangeCallback = (canUndo: boolean, canRedo: boolean) => void
 
@@ -47,13 +56,28 @@ export class UndoManager {
   }
 
   /**
+   * Push a fully-formed undo entry directly (e.g., selection operations).
+   */
+  pushEntry(entry: UndoEntry) {
+    this.undoStack.push(entry)
+
+    while (this.undoStack.length > MAX_UNDO_STATES) {
+      this.undoStack.shift()
+    }
+
+    this.redoStack = []
+    this.notifyChange()
+  }
+
+  /**
    * Called after a stroke completes.
    * Saves the "after" state and pushes the entry onto the undo stack.
    */
   commitOperation(snapshot: LayerSnapshot) {
     if (!this.pendingBefore) return
 
-    const entry: UndoEntry = {
+    const entry: LayerUndoEntry = {
+      type: 'layer',
       layerId: this.pendingLayerId,
       before: this.pendingBefore,
       after: snapshot,

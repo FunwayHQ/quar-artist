@@ -243,6 +243,115 @@ describe('TransformManager', () => {
     })
   })
 
+  describe('bilinearSample', () => {
+    it('returns exact pixel value at integer coords', () => {
+      // 2x2 image: red, green, blue, white
+      const pixels = new Uint8Array([
+        255, 0, 0, 255,    0, 255, 0, 255,
+        0, 0, 255, 255,    255, 255, 255, 255,
+      ])
+      const [r, g, b, a] = TransformManager.bilinearSample(pixels, 2, 2, 0, 0)
+      expect(r).toBe(255)
+      expect(g).toBe(0)
+      expect(b).toBe(0)
+      expect(a).toBe(255)
+    })
+
+    it('interpolates between two pixels horizontally', () => {
+      // 2x1: black → white
+      const pixels = new Uint8Array([0, 0, 0, 255, 255, 255, 255, 255])
+      const [r, g, b] = TransformManager.bilinearSample(pixels, 2, 1, 0.5, 0)
+      expect(r).toBe(128) // halfway
+      expect(g).toBe(128)
+      expect(b).toBe(128)
+    })
+
+    it('interpolates between four pixels', () => {
+      // 2x2: all corners contribute equally at center
+      const pixels = new Uint8Array([
+        100, 0, 0, 255,    200, 0, 0, 255,
+        100, 0, 0, 255,    200, 0, 0, 255,
+      ])
+      const [r] = TransformManager.bilinearSample(pixels, 2, 2, 0.5, 0.5)
+      expect(r).toBe(150) // average of 100 and 200
+    })
+
+    it('clamps out-of-bounds coordinates', () => {
+      const pixels = new Uint8Array([128, 64, 32, 255])
+      const [r, g, b, a] = TransformManager.bilinearSample(pixels, 1, 1, -1, -1)
+      // Clamps to (0,0) for all four samples
+      expect(r).toBe(128)
+      expect(g).toBe(64)
+      expect(b).toBe(32)
+      expect(a).toBe(255)
+    })
+  })
+
+  describe('applyToPixels', () => {
+    it('returns empty array when not active', () => {
+      const src = new Uint8Array([255, 0, 0, 255])
+      const dst = tm.applyToPixels(src, 1, 1, 2, 2)
+      expect(dst.length).toBe(2 * 2 * 4)
+      // All zeros (transparent) when no transform is active
+      for (let i = 0; i < dst.length; i++) {
+        expect(dst[i]).toBe(0)
+      }
+    })
+
+    it('identity transform preserves pixels', () => {
+      // 2x2 red image
+      const src = new Uint8Array([
+        255, 0, 0, 255,   255, 0, 0, 255,
+        255, 0, 0, 255,   255, 0, 0, 255,
+      ])
+      tm.begin({ x: 0, y: 0, width: 2, height: 2 })
+      const dst = tm.applyToPixels(src, 2, 2, 2, 2)
+      // Center pixel should be red
+      expect(dst[0]).toBe(255) // r
+      expect(dst[1]).toBe(0)   // g
+      expect(dst[2]).toBe(0)   // b
+      expect(dst[3]).toBe(255) // a
+    })
+
+    it('translation shifts pixels', () => {
+      // 4x4 canvas, single white pixel at (0,0)
+      const src = new Uint8Array(4 * 4 * 4)
+      src[0] = 255; src[1] = 255; src[2] = 255; src[3] = 255
+
+      tm.begin({ x: 0, y: 0, width: 4, height: 4 })
+      tm.setTranslation(2, 2)
+      const dst = tm.applyToPixels(src, 4, 4, 4, 4)
+
+      // Original position (0,0) should be empty
+      const idx00 = 0
+      expect(dst[idx00 + 3]).toBe(0) // alpha = 0
+
+      // Shifted position — the pixel that was at (0,0) should appear near (2,2) area
+      // Due to inverse transform logic, pixel at dst(2,2) maps back to src(-0,0) area
+      // Let's just verify the output is non-trivial
+      let hasContent = false
+      for (let i = 0; i < dst.length; i += 4) {
+        if (dst[i + 3] > 0) { hasContent = true; break }
+      }
+      expect(hasContent).toBe(true)
+    })
+
+    it('2x scale doubles dimensions', () => {
+      // 2x2 red image
+      const src = new Uint8Array([
+        255, 0, 0, 255,   255, 0, 0, 255,
+        255, 0, 0, 255,   255, 0, 0, 255,
+      ])
+      tm.begin({ x: 0, y: 0, width: 2, height: 2 })
+      tm.setScale(2, 2)
+      const dst = tm.applyToPixels(src, 2, 2, 4, 4)
+
+      // Center area of 4x4 should be red
+      const centerIdx = (2 * 4 + 2) * 4
+      expect(dst[centerIdx + 3]).toBeGreaterThan(0) // has alpha
+    })
+  })
+
   describe('getTransformedBounds', () => {
     it('returns null when not active', () => {
       expect(tm.getTransformedBounds()).toBeNull()

@@ -17,6 +17,22 @@ export interface StampPosition {
 
 export type BrushCategory = 'draw' | 'paint' | 'sketch' | 'blend' | 'utility'
 
+export type ShapeTextureId =
+  | 'hard-round'
+  | 'soft-round'
+  | 'pencil-grain'
+  | 'ink-splatter'
+  | 'watercolor-bleed'
+  | 'oil-bristle'
+  | 'marker-flat'
+  | 'pastel-rough'
+  | 'charcoal-grain'
+  | 'smudge-soft'
+  | 'flat-square'
+  | 'airbrush-gradient'
+
+export type GrainTextureId = 'paper-fine' | 'paper-rough' | 'canvas-weave' | 'noise-perlin'
+
 export interface BrushPreset {
   id: string
   name: string
@@ -37,6 +53,10 @@ export interface BrushPreset {
   rotationJitter: number
   /** Whether this brush uses smudge mode (blend existing pixels along stroke) */
   usesSmudge: boolean
+  /** Optional shape texture ID for texture-based stamp rendering */
+  shapeTextureId?: ShapeTextureId
+  /** Optional grain texture ID for surface texture modulation */
+  grainTextureId?: GrainTextureId
 }
 
 export interface BrushState {

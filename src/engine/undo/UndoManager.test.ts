@@ -94,12 +94,12 @@ describe('UndoManager', () => {
   })
 
   describe('stack depth limit', () => {
-    it('trims undo stack at 30 entries', () => {
-      for (let i = 0; i < 40; i++) {
+    it('trims undo stack at 50 entries', () => {
+      for (let i = 0; i < 60; i++) {
         undo.beginOperation(snapshot([i]))
         undo.commitOperation(snapshot([i + 100]))
       }
-      expect(undo.undoDepth).toBe(30)
+      expect(undo.undoDepth).toBe(50)
     })
   })
 
@@ -144,6 +144,89 @@ describe('UndoManager', () => {
       undo.setChangeCallback(cb)
       undo.redo()
       expect(cb).toHaveBeenCalledWith(true, false)
+    })
+  })
+
+  describe('pushEntry (selection undo)', () => {
+    it('pushes a selection entry onto the undo stack', () => {
+      undo.pushEntry({
+        type: 'selection',
+        before: new Uint8Array([0, 0, 0]),
+        after: new Uint8Array([255, 255, 255]),
+      })
+      expect(undo.canUndo).toBe(true)
+      expect(undo.undoDepth).toBe(1)
+    })
+
+    it('clears redo stack on push', () => {
+      undo.beginOperation(snapshot([]))
+      undo.commitOperation(snapshot([]))
+      undo.undo()
+      expect(undo.canRedo).toBe(true)
+
+      undo.pushEntry({
+        type: 'selection',
+        before: new Uint8Array([0]),
+        after: new Uint8Array([1]),
+      })
+      expect(undo.canRedo).toBe(false)
+    })
+
+    it('selection entry can be undone and redone', () => {
+      undo.pushEntry({
+        type: 'selection',
+        before: new Uint8Array([0, 0]),
+        after: new Uint8Array([255, 255]),
+      })
+      const entry = undo.undo()
+      expect(entry).not.toBeNull()
+      expect(entry!.type).toBe('selection')
+      if (entry!.type === 'selection') {
+        expect(Array.from(entry!.before)).toEqual([0, 0])
+      }
+
+      const redone = undo.redo()
+      expect(redone).not.toBeNull()
+      if (redone!.type === 'selection') {
+        expect(Array.from(redone!.after)).toEqual([255, 255])
+      }
+    })
+
+    it('interleaves with layer entries', () => {
+      undo.beginOperation(snapshot([10]))
+      undo.commitOperation(snapshot([20]))
+      undo.pushEntry({
+        type: 'selection',
+        before: new Uint8Array([0]),
+        after: new Uint8Array([1]),
+      })
+      undo.beginOperation(snapshot([30]))
+      undo.commitOperation(snapshot([40]))
+
+      expect(undo.undoDepth).toBe(3)
+
+      // Undo layer entry
+      const e3 = undo.undo()
+      expect(e3!.type).toBe('layer')
+
+      // Undo selection entry
+      const e2 = undo.undo()
+      expect(e2!.type).toBe('selection')
+
+      // Undo first layer entry
+      const e1 = undo.undo()
+      expect(e1!.type).toBe('layer')
+    })
+
+    it('respects max undo states', () => {
+      for (let i = 0; i < 55; i++) {
+        undo.pushEntry({
+          type: 'selection',
+          before: new Uint8Array([i]),
+          after: new Uint8Array([i + 100]),
+        })
+      }
+      expect(undo.undoDepth).toBe(50)
     })
   })
 

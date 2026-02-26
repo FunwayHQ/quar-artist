@@ -115,4 +115,36 @@ describe('BrushParams', () => {
     expect(smudges).toHaveLength(1)
     expect(smudges[0].id).toBe('smudge')
   })
+
+  it('every preset has a shapeTextureId', () => {
+    for (const preset of DEFAULT_PRESETS) {
+      expect(preset.shapeTextureId).toBeDefined()
+      expect(typeof preset.shapeTextureId).toBe('string')
+    }
+  })
+
+  it('pencil has grain texture', () => {
+    const pencil = getPresetById('pencil')
+    expect(pencil!.grainTextureId).toBe('paper-fine')
+  })
+
+  it('watercolor has grain texture', () => {
+    const wc = getPresetById('watercolor')
+    expect(wc!.grainTextureId).toBe('paper-rough')
+  })
+
+  it('oil has canvas grain texture', () => {
+    const oil = getPresetById('oil')
+    expect(oil!.grainTextureId).toBe('canvas-weave')
+  })
+
+  it('round-pen uses hard-round shape', () => {
+    const pen = getPresetById('round-pen')
+    expect(pen!.shapeTextureId).toBe('hard-round')
+  })
+
+  it('airbrush uses airbrush-gradient shape', () => {
+    const ab = getPresetById('soft-airbrush')
+    expect(ab!.shapeTextureId).toBe('airbrush-gradient')
+  })
 })

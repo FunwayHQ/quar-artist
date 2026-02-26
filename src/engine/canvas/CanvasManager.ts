@@ -11,6 +11,7 @@ import type { ViewState, PointerState, ToolType } from '../../types/engine.ts'
 import type { StrokePoint } from '../../types/brush.ts'
 import type { LayerSnapshot } from '../undo/UndoManager.ts'
 import type { SelectionToolType, SelectionMode, BoundingBox } from '../../types/selection.ts'
+import type { SelectionUndoEntry } from '../undo/UndoManager.ts'
 
 /**
  * Manages the two-canvas architecture:
@@ -29,6 +30,7 @@ export class CanvasManager {
   private destroyed = false
   private activeTool: ToolType = 'brush'
   private overlayRafId: number | null = null
+  private pendingSelectionSnapshot: Uint8Array | null = null
 
   readonly viewTransform = new ViewTransform()
   readonly inputManager = new InputManager(this.viewTransform)
@@ -105,7 +107,7 @@ export class CanvasManager {
     // Wire input to tool routing
     this.inputManager.setStrokeCallbacks({
       onPointerDown: (ps) => this.handlePointerDown(ps),
-      onPointerMove: (ps, coalesced) => this.handlePointerMove(ps, coalesced),
+      onPointerMove: (ps, coalesced, _predicted) => this.handlePointerMove(ps, coalesced),
       onPointerUp: (ps) => this.handlePointerUp(ps),
     })
 
@@ -152,10 +154,15 @@ export class CanvasManager {
     }
   }
 
-  /** Undo the last brush operation — restore layer pixels and recomposite. */
+  /** Undo the last operation (layer stroke or selection change). */
   performUndo(): boolean {
     const entry = this.brushEngine.undoManager.undo()
     if (!entry) return false
+
+    if (entry.type === 'selection') {
+      this.selectionController.manager.restoreSnapshot(entry.before)
+      return true
+    }
 
     const layer = this.layerManager.getLayerById(entry.layerId)
     if (!layer) return false
@@ -166,10 +173,15 @@ export class CanvasManager {
     return true
   }
 
-  /** Redo the last undone operation — restore layer pixels and recomposite. */
+  /** Redo the last undone operation (layer stroke or selection change). */
   performRedo(): boolean {
     const entry = this.brushEngine.undoManager.redo()
     if (!entry) return false
+
+    if (entry.type === 'selection') {
+      this.selectionController.manager.restoreSnapshot(entry.after)
+      return true
+    }
 
     const layer = this.layerManager.getLayerById(entry.layerId)
     if (!layer) return false
@@ -248,26 +260,52 @@ export class CanvasManager {
   // ── Selection actions ─────────────────────────────────────────────
 
   selectAll() {
+    this.snapshotSelectionBefore()
     this.selectionController.selectAll()
+    this.commitSelectionUndo()
   }
 
   deselectAll() {
+    this.snapshotSelectionBefore()
     this.selectionController.deselect()
+    this.commitSelectionUndo()
   }
 
   invertSelection() {
+    this.snapshotSelectionBefore()
     this.selectionController.invertSelection()
+    this.commitSelectionUndo()
   }
 
   // ── Pointer event routing ─────────────────────────────────────────
+
+  /** Snapshot selection mask before a selection operation, for undo. */
+  private snapshotSelectionBefore() {
+    this.pendingSelectionSnapshot = this.selectionController.manager.snapshot()
+  }
+
+  /** Commit a selection undo entry with the after snapshot. */
+  private commitSelectionUndo() {
+    if (!this.pendingSelectionSnapshot) return
+    const after = this.selectionController.manager.snapshot()
+    const entry: SelectionUndoEntry = {
+      type: 'selection',
+      before: this.pendingSelectionSnapshot,
+      after,
+    }
+    this.brushEngine.undoManager.pushEntry(entry)
+    this.pendingSelectionSnapshot = null
+  }
 
   private handlePointerDown(ps: PointerState) {
     const canvasPoint = this.viewTransform.screenToCanvas(ps.x, ps.y)
 
     if (this.activeTool === 'selection') {
+      this.snapshotSelectionBefore()
       const subTool = this.selectionController.getSubTool()
       if (subTool === 'magicWand') {
         this.handleMagicWandClick(canvasPoint)
+        this.commitSelectionUndo()
       } else {
         this.selectionController.handlePointerDown(canvasPoint)
       }
@@ -296,6 +334,7 @@ export class CanvasManager {
   private handlePointerUp(ps: PointerState) {
     if (this.activeTool === 'selection') {
       this.selectionController.handlePointerUp()
+      this.commitSelectionUndo()
       return
     }
 

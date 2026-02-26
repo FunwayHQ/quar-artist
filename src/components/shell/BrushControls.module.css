@@ -129,3 +129,25 @@
   background: var(--color-border-subtle);
   flex-shrink: 0;
 }
+
+.checkGroup {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.checkbox {
+  accent-color: var(--color-accent-primary);
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+.checkLabel {
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
