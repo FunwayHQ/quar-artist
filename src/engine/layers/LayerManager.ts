@@ -58,6 +58,11 @@ export class LayerManager {
       width: this.canvasWidth,
       height: this.canvasHeight,
     })
+    // Clear to transparent — GPU memory may be uninitialized
+    if (this.app) {
+      const emptyContainer = new Container()
+      this.app.renderer.render({ container: emptyContainer, target: texture, clear: true })
+    }
     const sprite = new Sprite(texture)
     const info: LayerInfo = {
       id,

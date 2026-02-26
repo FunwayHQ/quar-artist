@@ -102,6 +102,8 @@
   align-items: center;
   gap: 2px;
   flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 6px;
 }
 
 .iconBtn {

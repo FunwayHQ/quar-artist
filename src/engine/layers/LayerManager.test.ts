@@ -20,6 +20,10 @@ vi.mock('pixi.js', () => {
       this.texture = texture
     }
   }
+  class MockContainer {
+    children: unknown[] = []
+    addChild(child: unknown) { this.children.push(child) }
+  }
   return {
     RenderTexture: {
       create: vi.fn(({ width, height }: { width: number; height: number }) =>
@@ -27,6 +31,7 @@ vi.mock('pixi.js', () => {
       ),
     },
     Sprite: MockSprite,
+    Container: MockContainer,
     Application: class {},
   }
 })

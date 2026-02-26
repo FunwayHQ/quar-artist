@@ -1,26 +1,27 @@
-const MAX_UNDO_STATES = 50
+const MAX_UNDO_STATES = 30
 
-export interface TileSnapshot {
-  key: string
+export interface LayerSnapshot {
+  width: number
+  height: number
   data: Uint8Array
 }
 
 export interface UndoEntry {
   layerId: string
-  before: TileSnapshot[]
-  after: TileSnapshot[]
+  before: LayerSnapshot
+  after: LayerSnapshot
 }
 
 export type UndoStateChangeCallback = (canUndo: boolean, canRedo: boolean) => void
 
 /**
- * Tile-diff based undo/redo.
- * Stores before/after snapshots of only the dirty tiles per operation.
+ * Full-layer snapshot undo/redo.
+ * Stores before/after pixel data for the entire layer per operation.
  */
 export class UndoManager {
   private undoStack: UndoEntry[] = []
   private redoStack: UndoEntry[] = []
-  private pendingBefore: TileSnapshot[] | null = null
+  private pendingBefore: LayerSnapshot | null = null
   private pendingLayerId: string = ''
   private onChange: UndoStateChangeCallback | null = null
 
@@ -38,10 +39,10 @@ export class UndoManager {
 
   /**
    * Called before a stroke begins.
-   * Saves snapshot of tiles that will be modified.
+   * Saves full layer pixel snapshot.
    */
-  beginOperation(tileSnapshots: TileSnapshot[], layerId: string = '') {
-    this.pendingBefore = tileSnapshots
+  beginOperation(snapshot: LayerSnapshot, layerId: string = '') {
+    this.pendingBefore = snapshot
     this.pendingLayerId = layerId
   }
 
@@ -49,13 +50,13 @@ export class UndoManager {
    * Called after a stroke completes.
    * Saves the "after" state and pushes the entry onto the undo stack.
    */
-  commitOperation(tileSnapshots: TileSnapshot[]) {
+  commitOperation(snapshot: LayerSnapshot) {
     if (!this.pendingBefore) return
 
     const entry: UndoEntry = {
       layerId: this.pendingLayerId,
       before: this.pendingBefore,
-      after: tileSnapshots,
+      after: snapshot,
     }
 
     this.undoStack.push(entry)
@@ -78,7 +79,7 @@ export class UndoManager {
 
   /**
    * Undo the last operation.
-   * Returns the full undo entry (with layerId and before snapshots), or null.
+   * Returns the full undo entry (with layerId and before snapshot), or null.
    */
   undo(): UndoEntry | null {
     const entry = this.undoStack.pop()
@@ -91,7 +92,7 @@ export class UndoManager {
 
   /**
    * Redo the last undone operation.
-   * Returns the full undo entry (with layerId and after snapshots), or null.
+   * Returns the full undo entry (with layerId and after snapshot), or null.
    */
   redo(): UndoEntry | null {
     const entry = this.redoStack.pop()

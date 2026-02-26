@@ -37,7 +37,15 @@ export class PathInterpolator {
     const p0 = pts[Math.max(n - 3, 0)]
     const p1 = pts[n - 2]
     const p2 = pts[n - 1]
-    const p3 = p2 // For the last segment, duplicate the last point
+    // Extrapolate p3 from p1→p2 direction to preserve forward tangent
+    const p3: StrokePoint = {
+      x: 2 * p2.x - p1.x,
+      y: 2 * p2.y - p1.y,
+      pressure: p2.pressure,
+      tiltX: p2.tiltX,
+      tiltY: p2.tiltY,
+      timestamp: p2.timestamp + (p2.timestamp - p1.timestamp),
+    }
 
     // Distance between the two most recent points
     const segDist = distance(p1, p2)

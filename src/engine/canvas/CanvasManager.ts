@@ -1,4 +1,4 @@
-import { type Application, Texture, Sprite, Graphics, Container, RenderTexture } from 'pixi.js'
+import { type Application, Texture, Sprite, Container, RenderTexture } from 'pixi.js'
 import { ViewTransform } from './ViewTransform.ts'
 import { InputManager } from '../input/InputManager.ts'
 import { BrushEngine } from '../brush/BrushEngine.ts'
@@ -7,8 +7,7 @@ import { LayerCompositor } from '../layers/LayerCompositor.ts'
 import { createRenderer } from '../renderer.ts'
 import type { ViewState, PointerState } from '../../types/engine.ts'
 import type { StrokePoint } from '../../types/brush.ts'
-import { TILE_SIZE } from '../layers/TileManager.ts'
-import type { TileSnapshot } from '../undo/UndoManager.ts'
+import type { LayerSnapshot } from '../undo/UndoManager.ts'
 
 /**
  * Manages the two-canvas architecture:
@@ -131,7 +130,7 @@ export class CanvasManager {
     }
   }
 
-  /** Undo the last brush operation — restore tile pixels and recomposite. */
+  /** Undo the last brush operation — restore layer pixels and recomposite. */
   performUndo(): boolean {
     const entry = this.brushEngine.undoManager.undo()
     if (!entry) return false
@@ -139,13 +138,13 @@ export class CanvasManager {
     const layer = this.layerManager.getLayerById(entry.layerId)
     if (!layer) return false
 
-    this.restoreTileSnapshots(layer.texture, entry.before)
+    this.restoreLayerSnapshot(layer.texture, entry.before)
     this.recomposite()
     this.layerManager.updateThumbnails()
     return true
   }
 
-  /** Redo the last undone operation — restore tile pixels and recomposite. */
+  /** Redo the last undone operation — restore layer pixels and recomposite. */
   performRedo(): boolean {
     const entry = this.brushEngine.undoManager.redo()
     if (!entry) return false
@@ -153,68 +152,48 @@ export class CanvasManager {
     const layer = this.layerManager.getLayerById(entry.layerId)
     if (!layer) return false
 
-    this.restoreTileSnapshots(layer.texture, entry.after)
+    this.restoreLayerSnapshot(layer.texture, entry.after)
     this.recomposite()
     this.layerManager.updateThumbnails()
     return true
   }
 
   /**
-   * Write tile snapshots back to a layer's RenderTexture.
-   * For each tile: erase the region, then paint the snapshot pixels.
+   * Restore a full layer snapshot to a RenderTexture.
+   * Creates a canvas from the pixel data and renders it with clear:true
+   * to completely replace the texture contents.
    */
-  private restoreTileSnapshots(layerTexture: RenderTexture, snapshots: TileSnapshot[]) {
-    if (!this.app || snapshots.length === 0) return
+  private restoreLayerSnapshot(layerTexture: RenderTexture, snapshot: LayerSnapshot) {
+    if (!this.app) return
 
-    const texW = layerTexture.width
-    const texH = layerTexture.height
+    const { width: w, height: h, data } = snapshot
+    if (w <= 0 || h <= 0) return
 
-    for (const snapshot of snapshots) {
-      const parts = snapshot.key.split('_')
-      const tx = Number(parts[0])
-      const ty = Number(parts[1])
-      const px = tx * TILE_SIZE
-      const py = ty * TILE_SIZE
+    const expectedLen = w * h * 4
+    if (data.length < expectedLen) return
 
-      const w = Math.min(TILE_SIZE, texW - px)
-      const h = Math.min(TILE_SIZE, texH - py)
-      if (w <= 0 || h <= 0) continue
+    // Create a canvas with the snapshot pixel data
+    const canvas = document.createElement('canvas')
+    canvas.width = w
+    canvas.height = h
+    const ctx = canvas.getContext('2d')!
+    const imageData = new ImageData(
+      new Uint8ClampedArray(data.buffer, data.byteOffset, expectedLen),
+      w,
+      h,
+    )
+    ctx.putImageData(imageData, 0, 0)
 
-      // Step 1: Erase the tile region
-      const eraseG = new Graphics()
-      eraseG.rect(px, py, w, h)
-      eraseG.fill({ color: 0xffffff, alpha: 1 })
-      const eraseContainer = new Container()
-      eraseContainer.addChild(eraseG)
-      eraseContainer.blendMode = 'erase'
-      this.app.renderer.render({
-        container: eraseContainer,
-        target: layerTexture,
-        clear: false,
-      })
-
-      // Step 2: Paint the snapshot pixels from a temp canvas
-      const canvas = document.createElement('canvas')
-      canvas.width = w
-      canvas.height = h
-      const ctx = canvas.getContext('2d')!
-      const imageData = new ImageData(
-        new Uint8ClampedArray(snapshot.data.buffer, snapshot.data.byteOffset, snapshot.data.byteLength),
-        w,
-        h,
-      )
-      ctx.putImageData(imageData, 0, 0)
-
-      const tex = Texture.from(canvas)
-      const sprite = new Sprite(tex)
-      sprite.position.set(px, py)
-      this.app.renderer.render({
-        container: sprite,
-        target: layerTexture,
-        clear: false,
-      })
-      tex.destroy(true)
-    }
+    // Create texture from canvas and render to the layer with clear:true
+    // This completely replaces the layer contents
+    const tex = Texture.from(canvas)
+    const sprite = new Sprite(tex)
+    this.app.renderer.render({
+      container: sprite,
+      target: layerTexture,
+      clear: true,
+    })
+    tex.destroy(true)
   }
 
   private handleStrokeStart(ps: PointerState) {

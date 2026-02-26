@@ -12,8 +12,10 @@ export interface TileKey {
 export class TileManager {
   private dirtyTiles = new Set<string>()
 
-  /** Mark tiles that a stamp at (x, y) with given radius touches. */
-  markDirty(x: number, y: number, radius: number) {
+  /** Mark tiles that a stamp at (x, y) with given radius touches.
+   *  Returns keys of tiles that were NOT already dirty (newly dirtied). */
+  markDirty(x: number, y: number, radius: number): string[] {
+    const newlyDirty: string[] = []
     const left = Math.floor((x - radius) / TILE_SIZE)
     const right = Math.floor((x + radius) / TILE_SIZE)
     const top = Math.floor((y - radius) / TILE_SIZE)
@@ -21,9 +23,14 @@ export class TileManager {
 
     for (let tx = left; tx <= right; tx++) {
       for (let ty = top; ty <= bottom; ty++) {
-        this.dirtyTiles.add(tileKeyStr(tx, ty))
+        const key = tileKeyStr(tx, ty)
+        if (!this.dirtyTiles.has(key)) {
+          newlyDirty.push(key)
+          this.dirtyTiles.add(key)
+        }
       }
     }
+    return newlyDirty
   }
 
   /** Get all dirty tile keys since last reset. */

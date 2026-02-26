@@ -1,9 +1,9 @@
-import { Graphics, RenderTexture, Sprite, Container, Rectangle, type Application } from 'pixi.js'
+import { Graphics, RenderTexture, Sprite, Container, type Application } from 'pixi.js'
 import { StrokeSmoother } from './StrokeSmoother.ts'
 import { PathInterpolator } from './PathInterpolator.ts'
-import { TileManager, TILE_SIZE } from '../layers/TileManager.ts'
+import { TileManager } from '../layers/TileManager.ts'
 import { UndoManager } from '../undo/UndoManager.ts'
-import type { TileSnapshot } from '../undo/UndoManager.ts'
+import type { LayerSnapshot } from '../undo/UndoManager.ts'
 import type { StrokePoint, StampPosition, BrushPreset } from '../../types/brush.ts'
 import type { RGBAColor } from '../../types/color.ts'
 
@@ -67,13 +67,13 @@ export class BrushEngine {
     this.interpolator.reset()
     this.tileManager.reset()
 
-    // Mark initial tile dirty
+    // Snapshot full layer "before" state
+    const beforeSnapshot = this.extractFullLayerSnapshot()
+    if (beforeSnapshot) {
+      this.undoManager.beginOperation(beforeSnapshot, this.activeLayerId)
+    }
+
     this.tileManager.markDirty(point.x, point.y, this.activePreset.size / 2)
-
-    // Snapshot "before" state of the tiles we're about to paint on
-    const beforeSnapshots = this.extractTileSnapshots()
-    this.undoManager.beginOperation(beforeSnapshots, this.activeLayerId)
-
     const smoothed = this.smoother.smooth(point)
     const stamps = this.interpolator.addPoint(smoothed, this.activePreset)
     this.renderStamps(stamps)
@@ -102,9 +102,11 @@ export class BrushEngine {
     if (!this.strokeActive) return
     this.strokeActive = false
 
-    // Snapshot "after" state of dirty tiles and commit to undo
-    const afterSnapshots = this.extractTileSnapshots()
-    this.undoManager.commitOperation(afterSnapshots)
+    // Snapshot full layer "after" state and commit
+    const afterSnapshot = this.extractFullLayerSnapshot()
+    if (afterSnapshot) {
+      this.undoManager.commitOperation(afterSnapshot)
+    }
 
     this.tileManager.reset()
   }
@@ -117,39 +119,20 @@ export class BrushEngine {
   }
 
   /**
-   * Extract pixel data for all dirty tiles from the active layer texture.
-   * Returns snapshots that can be stored for undo/redo.
+   * Extract full layer pixel data for undo/redo snapshots.
    */
-  private extractTileSnapshots(): TileSnapshot[] {
-    if (!this.app || !this.activeLayerTexture) return []
+  private extractFullLayerSnapshot(): LayerSnapshot | null {
+    if (!this.app || !this.activeLayerTexture) return null
 
-    const dirtyTiles = this.tileManager.getDirtyTiles()
-    const snapshots: TileSnapshot[] = []
-    const texW = this.activeLayerTexture.width
-    const texH = this.activeLayerTexture.height
+    const w = this.activeLayerTexture.width
+    const h = this.activeLayerTexture.height
+    const pixels = this.app.renderer.extract.pixels({ target: this.activeLayerTexture })
 
-    for (const tile of dirtyTiles) {
-      const px = tile.tx * TILE_SIZE
-      const py = tile.ty * TILE_SIZE
-      // Clamp to texture bounds
-      if (px >= texW || py >= texH || px + TILE_SIZE <= 0 || py + TILE_SIZE <= 0) continue
-
-      const w = Math.min(TILE_SIZE, texW - px)
-      const h = Math.min(TILE_SIZE, texH - py)
-      if (w <= 0 || h <= 0) continue
-
-      const frame = new Rectangle(px, py, w, h)
-      const pixels = this.app.renderer.extract.pixels({
-        target: this.activeLayerTexture,
-        frame,
-      })
-      snapshots.push({
-        key: `${tile.tx}_${tile.ty}`,
-        data: new Uint8Array(pixels.pixels.buffer, pixels.pixels.byteOffset, pixels.pixels.byteLength),
-      })
+    return {
+      width: w,
+      height: h,
+      data: new Uint8Array(pixels.pixels.buffer, pixels.pixels.byteOffset, pixels.pixels.byteLength),
     }
-
-    return snapshots
   }
 
   /** Render stamp positions to the active layer texture. */
@@ -168,16 +151,30 @@ export class BrushEngine {
       const halfSize = stamp.size / 2
 
       if (this.activePreset.hardness >= 0.9) {
-        // Hard edge — filled circle
-        g.circle(stamp.x, stamp.y, halfSize)
+        // Hard edge with 1.5px anti-aliased falloff
+        const feather = Math.min(1.5, halfSize * 0.15)
+        const innerRadius = Math.max(0.5, halfSize - feather)
+        // Solid core
+        g.circle(stamp.x, stamp.y, innerRadius)
         g.fill({ color: hexColor, alpha: stamp.opacity })
+        // Anti-aliased edge rings
+        const aaSteps = 3
+        for (let i = 1; i <= aaSteps; i++) {
+          const t = i / aaSteps
+          const radius = innerRadius + feather * t
+          const alpha = stamp.opacity * (1 - t * 0.8)
+          g.circle(stamp.x, stamp.y, radius)
+          g.fill({ color: hexColor, alpha })
+        }
       } else {
         // Soft edge — multiple concentric rings with fading alpha
-        const rings = Math.max(3, Math.ceil(halfSize / 4))
+        const rings = Math.max(4, Math.ceil(halfSize / 3))
         for (let i = rings; i >= 0; i--) {
           const t = i / rings
           const radius = halfSize * t
-          const alpha = stamp.opacity * (1 - t) * (1 - this.activePreset.hardness)
+          // Remap hardness: at hardness=0 full soft falloff, at hardness=0.89 mostly hard with soft edge
+          const hardT = Math.pow(t, 1 + this.activePreset.hardness * 4)
+          const alpha = stamp.opacity * (1 - hardT)
           if (radius > 0 && alpha > 0.001) {
             g.circle(stamp.x, stamp.y, radius)
             g.fill({ color: hexColor, alpha })
