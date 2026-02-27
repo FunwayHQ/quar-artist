@@ -138,9 +138,6 @@ export class CanvasManager {
     this.resizeObserver.observe(container)
     this.syncSize()
 
-    // Fit document into viewport on init
-    this.fitToDocument()
-
     // Initial composite
     this.recomposite()
   }
@@ -260,6 +257,69 @@ export class CanvasManager {
     if (!this.container) return
     const { clientWidth: vw, clientHeight: vh } = this.container
     this.viewTransform.fitToDocument(this.documentWidth, this.documentHeight, vw, vh)
+  }
+
+  // ── Image import ──────────────────────────────────────────────────
+
+  /**
+   * Import an image (from clipboard paste, file, or drag-and-drop) into a new layer.
+   * The image is drawn centered on the document at its native size (clamped to doc bounds).
+   * Returns the new layer name, or null on failure.
+   */
+  importImageToNewLayer(pixels: Uint8ClampedArray, imgW: number, imgH: number, name?: string): string | null {
+    if (!this.app) return null
+
+    // Create a new layer for the imported image
+    const layerId = this.layerManager.createLayer(name ?? 'Imported Image')
+    if (!layerId) return null
+
+    this.layerManager.setActiveLayer(layerId)
+    const layer = this.layerManager.getLayerById(layerId)
+    if (!layer) return null
+
+    // Build a canvas with the image composited onto a doc-sized transparent background
+    const docW = this.documentWidth
+    const docH = this.documentHeight
+    const canvas = document.createElement('canvas')
+    canvas.width = docW
+    canvas.height = docH
+    const ctx = canvas.getContext('2d')!
+
+    // Draw the imported image centered, clamped to document size
+    const srcCanvas = document.createElement('canvas')
+    srcCanvas.width = imgW
+    srcCanvas.height = imgH
+    const srcCtx = srcCanvas.getContext('2d')!
+    srcCtx.putImageData(new ImageData(pixels, imgW, imgH), 0, 0)
+
+    const drawX = Math.round((docW - imgW) / 2)
+    const drawY = Math.round((docH - imgH) / 2)
+    ctx.drawImage(srcCanvas, drawX, drawY)
+
+    // Extract the composited data as a snapshot
+    const resultData = ctx.getImageData(0, 0, docW, docH)
+    const snapshot: LayerSnapshot = {
+      width: docW,
+      height: docH,
+      data: new Uint8Array(resultData.data.buffer),
+    }
+
+    // Write to the layer texture
+    this.restoreLayerSnapshot(layer.texture, snapshot)
+    this.recomposite()
+    this.layerManager.updateThumbnails()
+
+    // Push undo entry (before = blank layer, after = imported image)
+    const blankData = new Uint8Array(docW * docH * 4) // all zeros = transparent
+    const undoEntry: LayerUndoEntry = {
+      type: 'layer',
+      layerId,
+      before: { width: docW, height: docH, data: blankData },
+      after: snapshot,
+    }
+    this.brushEngine.undoManager.pushEntry(undoEntry)
+
+    return layer.info.name
   }
 
   // ── Tool state management ─────────────────────────────────────────

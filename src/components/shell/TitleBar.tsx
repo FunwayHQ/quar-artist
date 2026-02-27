@@ -11,12 +11,13 @@ interface TitleBarProps {
   onUndo?: () => void
   onRedo?: () => void
   onSave?: () => void
+  onImportImage?: () => void
   manager?: CanvasManager | null
 }
 
 type MenuName = 'file' | 'edit' | 'adjustments' | 'selection' | 'help'
 
-export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, manager }: TitleBarProps) {
+export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, manager }: TitleBarProps) {
   const [openMenu, setOpenMenu] = useState<MenuName | null>(null)
   const buttonRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const zoom = useUIStore((s) => s.zoom)
@@ -33,6 +34,9 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, manager }: Titl
       case 'file':
         return [
           { label: 'New', shortcut: 'Ctrl+N', action: () => useUIStore.getState().setShowNewProjectDialog(true) },
+          { separator: true, label: '' },
+          { label: 'Canvas Size...', action: () => useUIStore.getState().setShowCanvasSizeDialog(true) },
+          { label: 'Import Image...', action: () => onImportImage?.() },
           { separator: true, label: '' },
           { label: 'Export...', shortcut: 'Ctrl+E', action: () => useUIStore.getState().setShowExportDialog(true) },
           { label: 'Save', shortcut: 'Ctrl+S', action: () => onSave?.() },

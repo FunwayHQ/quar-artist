@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
+import { createPortal } from 'react-dom'
 import styles from './ContextMenu.module.css'
 
 export interface ContextMenuItem {
@@ -20,17 +21,19 @@ export function ContextMenu({ items, x, y, onClose }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
   const [focusIndex, setFocusIndex] = useState(-1)
 
-  // Clamp position to viewport
+  // Clamp position to viewport (useLayoutEffect to avoid flash)
   const [position, setPosition] = useState({ x, y })
-  useEffect(() => {
+  const [visible, setVisible] = useState(false)
+  useLayoutEffect(() => {
     if (!menuRef.current) return
     const rect = menuRef.current.getBoundingClientRect()
     const vw = window.innerWidth
     const vh = window.innerHeight
     setPosition({
-      x: x + rect.width > vw ? vw - rect.width - 4 : x,
-      y: y + rect.height > vh ? vh - rect.height - 4 : y,
+      x: x + rect.width > vw ? Math.max(4, vw - rect.width - 4) : x,
+      y: y + rect.height > vh ? Math.max(4, vh - rect.height - 4) : y,
     })
+    setVisible(true)
   }, [x, y])
 
   // Keyboard navigation
@@ -77,13 +80,14 @@ export function ContextMenu({ items, x, y, onClose }: ContextMenuProps) {
 
   let actionIndex = -1
 
-  return (
+  // Render via portal to escape parent overflow/stacking constraints
+  return createPortal(
     <>
       <div className={styles.overlay} onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose() }} />
       <div
         ref={menuRef}
         className={styles.menu}
-        style={{ left: position.x, top: position.y }}
+        style={{ left: position.x, top: position.y, visibility: visible ? 'visible' : 'hidden' }}
         role="menu"
       >
         {items.map((item, i) => {
@@ -107,6 +111,7 @@ export function ContextMenu({ items, x, y, onClose }: ContextMenuProps) {
           )
         })}
       </div>
-    </>
+    </>,
+    document.body,
   )
 }

@@ -21,6 +21,7 @@ interface ProjectStore {
   setProjectName: (name: string) => void
   setSaveStatus: (status: 'idle' | 'saving' | 'saved' | 'error') => void
   setLastSaved: (date: Date) => void
+  setCanvasSize: (width: number, height: number) => void
   clearCurrentProject: () => void
 }
 
@@ -58,6 +59,8 @@ export const useProjectStore = create<ProjectStore>((set) => ({
       isSaving: status === 'saving',
       lastSaved: status === 'saved' ? new Date() : undefined,
     }),
+
+  setCanvasSize: (width, height) => set({ canvasWidth: width, canvasHeight: height }),
 
   clearCurrentProject: () =>
     set({

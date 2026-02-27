@@ -76,10 +76,11 @@ export class ViewTransform {
 
   /** Fit the document into the viewport with padding, centered */
   fitToDocument(docW: number, docH: number, viewportW: number, viewportH: number) {
+    if (viewportW <= 0 || viewportH <= 0 || docW <= 0 || docH <= 0) return
     const padding = 40
-    const availW = viewportW - padding * 2
-    const availH = viewportH - padding * 2
-    const zoom = Math.min(availW / docW, availH / docH, 1)
+    const availW = Math.max(viewportW - padding * 2, viewportW * 0.5)
+    const availH = Math.max(viewportH - padding * 2, viewportH * 0.5)
+    const zoom = clamp(Math.min(availW / docW, availH / docH, 1), MIN_ZOOM, MAX_ZOOM)
     const x = (viewportW - docW * zoom) / 2
     const y = (viewportH - docH * zoom) / 2
     this.state = { x, y, zoom, rotation: 0 }

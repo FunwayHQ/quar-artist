@@ -17,6 +17,7 @@ interface UIStore {
   showNewProjectDialog: boolean
   showShortcutsModal: boolean
   showAboutModal: boolean
+  showCanvasSizeDialog: boolean
   toasts: Toast[]
   toggleLeftPanel: () => void
   toggleRightPanel: () => void
@@ -28,6 +29,7 @@ interface UIStore {
   setShowNewProjectDialog: (show: boolean) => void
   setShowShortcutsModal: (show: boolean) => void
   setShowAboutModal: (show: boolean) => void
+  setShowCanvasSizeDialog: (show: boolean) => void
   addToast: (message: string, type?: Toast['type']) => void
   dismissToast: (id: string) => void
 }
@@ -45,6 +47,7 @@ export const useUIStore = create<UIStore>((set) => ({
   showNewProjectDialog: false,
   showShortcutsModal: false,
   showAboutModal: false,
+  showCanvasSizeDialog: false,
   toasts: [],
 
   toggleLeftPanel: () => set((s) => ({ leftPanelOpen: !s.leftPanelOpen })),
@@ -57,6 +60,7 @@ export const useUIStore = create<UIStore>((set) => ({
   setShowNewProjectDialog: (show) => set({ showNewProjectDialog: show }),
   setShowShortcutsModal: (show) => set({ showShortcutsModal: show }),
   setShowAboutModal: (show) => set({ showAboutModal: show }),
+  setShowCanvasSizeDialog: (show) => set({ showCanvasSizeDialog: show }),
 
   addToast: (message, type = 'info') => {
     const id = `toast_${++toastIdCounter}`

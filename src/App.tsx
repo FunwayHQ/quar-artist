@@ -7,6 +7,7 @@ import { ColorPanel } from '@components/color/ColorPanel.tsx'
 import { FilterDialogRouter } from '@components/filters/FilterDialogRouter.tsx'
 import { ExportDialog } from '@components/dialogs/ExportDialog.tsx'
 import { NewProjectDialog } from '@components/dialogs/NewProjectDialog.tsx'
+import { CanvasSizeDialog } from '@components/dialogs/CanvasSizeDialog.tsx'
 import { GalleryView } from '@components/gallery/GalleryView.tsx'
 import { FullscreenHud } from '@components/shell/FullscreenHud.tsx'
 import { ToastContainer } from '@components/ui/ToastContainer.tsx'
@@ -24,6 +25,7 @@ import { useUIStore } from '@stores/uiStore.ts'
 import { useFilterStore } from '@stores/filterStore.ts'
 import { useProjectStore } from '@stores/projectStore.ts'
 import { exportImage, downloadBlob } from './io/formats/image/ImageExporter.ts'
+import { getImageFromClipboard, getImageFromDrop, decodeImageBlob, pickImageFile } from './io/importImage.ts'
 import { hsbToRgba, rgbaToHsb } from '@app-types/color.ts'
 import type { ExportOptions } from '@app-types/project.ts'
 import type { FilterType } from '@app-types/filter.ts'
@@ -37,6 +39,7 @@ export default function App() {
   const showNewProjectDialog = useUIStore((s) => s.showNewProjectDialog)
   const showShortcutsModal = useUIStore((s) => s.showShortcutsModal)
   const showAboutModal = useUIStore((s) => s.showAboutModal)
+  const showCanvasSizeDialog = useUIStore((s) => s.showCanvasSizeDialog)
   const fullscreen = useUIStore((s) => s.fullscreen)
   const panelsHidden = useUIStore((s) => s.panelsHidden)
   const leftPanelOpen = useUIStore((s) => s.leftPanelOpen)
@@ -119,11 +122,18 @@ export default function App() {
     })
   }, [manager])
 
-  // Sync document size to engine
+  // Sync document size to engine and fit to viewport
   useEffect(() => {
     if (!manager) return
     manager.setDocumentSize(canvasWidth, canvasHeight)
-    manager.fitToDocument()
+    // Use double-RAF to ensure the browser has fully laid out the container
+    // before we measure its dimensions for fit-to-document calculation
+    const rafId = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        manager.fitToDocument()
+      })
+    })
+    return () => cancelAnimationFrame(rafId)
   }, [manager, canvasWidth, canvasHeight])
 
   // Wire filter store to engine: begin/update/apply/cancel
@@ -219,6 +229,13 @@ export default function App() {
     // Engine reinit will happen via the view change
   }, [])
 
+  // Canvas resize handler
+  const handleCanvasResize = useCallback((width: number, height: number) => {
+    useProjectStore.getState().setCanvasSize(width, height)
+    useUIStore.getState().setShowCanvasSizeDialog(false)
+    useUIStore.getState().addToast(`Canvas resized to ${width}×${height}`, 'success')
+  }, [])
+
   // Gallery handlers
   const handleOpenProject = useCallback((id: number) => {
     useProjectStore.getState().setView('canvas')
@@ -227,6 +244,80 @@ export default function App() {
   const handleGalleryNewProject = useCallback(() => {
     useUIStore.getState().setShowNewProjectDialog(true)
   }, [])
+
+  // ── Image import: clipboard paste (Ctrl+V) ──
+  useEffect(() => {
+    if (!manager) return
+    const handlePaste = async (e: ClipboardEvent) => {
+      const blob = getImageFromClipboard(e)
+      if (!blob) return
+      e.preventDefault()
+      try {
+        const { pixels, width, height } = await decodeImageBlob(blob)
+        const layerName = manager.importImageToNewLayer(pixels, width, height, 'Pasted Image')
+        if (layerName) {
+          useUIStore.getState().addToast(`Pasted image (${width}×${height}) as new layer`, 'success')
+        }
+      } catch (err) {
+        console.error('Paste failed:', err)
+        useUIStore.getState().addToast('Failed to paste image', 'error')
+      }
+    }
+    document.addEventListener('paste', handlePaste)
+    return () => document.removeEventListener('paste', handlePaste)
+  }, [manager])
+
+  // ── Image import: drag-and-drop ──
+  useEffect(() => {
+    if (!manager) return
+    const container = containerRef.current
+    if (!container) return
+
+    const handleDragOver = (e: DragEvent) => {
+      if (e.dataTransfer?.types.includes('Files')) {
+        e.preventDefault()
+        e.dataTransfer.dropEffect = 'copy'
+      }
+    }
+    const handleDrop = async (e: DragEvent) => {
+      const file = getImageFromDrop(e)
+      if (!file) return
+      e.preventDefault()
+      try {
+        const { pixels, width, height } = await decodeImageBlob(file)
+        const layerName = manager.importImageToNewLayer(pixels, width, height, file.name.replace(/\.[^.]+$/, ''))
+        if (layerName) {
+          useUIStore.getState().addToast(`Imported "${file.name}" (${width}×${height})`, 'success')
+        }
+      } catch (err) {
+        console.error('Drop import failed:', err)
+        useUIStore.getState().addToast('Failed to import dropped image', 'error')
+      }
+    }
+    container.addEventListener('dragover', handleDragOver)
+    container.addEventListener('drop', handleDrop)
+    return () => {
+      container.removeEventListener('dragover', handleDragOver)
+      container.removeEventListener('drop', handleDrop)
+    }
+  }, [manager])
+
+  // ── Image import: file picker (File > Import Image) ──
+  const handleImportImage = useCallback(async () => {
+    if (!manager) return
+    try {
+      const file = await pickImageFile()
+      if (!file) return
+      const { pixels, width, height } = await decodeImageBlob(file)
+      const layerName = manager.importImageToNewLayer(pixels, width, height, file.name.replace(/\.[^.]+$/, ''))
+      if (layerName) {
+        useUIStore.getState().addToast(`Imported "${file.name}" (${width}×${height})`, 'success')
+      }
+    } catch (err) {
+      console.error('Import failed:', err)
+      useUIStore.getState().addToast('Failed to import image', 'error')
+    }
+  }, [manager])
 
   // Keyboard shortcuts (declarative registry-based system)
   useKeyboardShortcuts({ manager, undo, redo, onOpenFilter: handleOpenFilter })
@@ -286,6 +377,7 @@ export default function App() {
             onOpenFilter={handleOpenFilter}
             onUndo={undo}
             onRedo={redo}
+            onImportImage={handleImportImage}
             manager={manager}
           />
           <BrushControls />
@@ -300,7 +392,7 @@ export default function App() {
 
         {/* Center: Canvas */}
         {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
-        <div onContextMenu={handleCanvasContextMenu} style={{ flex: 1, minWidth: 0 }}>
+        <div onContextMenu={handleCanvasContextMenu} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           <CanvasViewport ref={containerRef} />
         </div>
 
@@ -343,6 +435,13 @@ export default function App() {
         open={showNewProjectDialog}
         onClose={() => useUIStore.getState().setShowNewProjectDialog(false)}
         onCreate={handleNewProject}
+      />
+      <CanvasSizeDialog
+        open={showCanvasSizeDialog}
+        currentWidth={canvasWidth}
+        currentHeight={canvasHeight}
+        onClose={() => useUIStore.getState().setShowCanvasSizeDialog(false)}
+        onResize={handleCanvasResize}
       />
       <ShortcutsModal
         open={showShortcutsModal}
