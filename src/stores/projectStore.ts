@@ -25,7 +25,7 @@ interface ProjectStore {
 }
 
 export const useProjectStore = create<ProjectStore>((set) => ({
-  view: 'gallery',
+  view: 'canvas',
   currentProjectId: null,
   currentProjectName: 'Untitled Project',
   projects: [],

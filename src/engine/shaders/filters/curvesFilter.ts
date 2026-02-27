@@ -1,4 +1,4 @@
-import { Filter, GlProgram, GpuProgram, Texture } from 'pixi.js'
+import { Filter, GlProgram, Texture } from 'pixi.js'
 import type { CurvePoint, CurveChannel } from '@app-types/filter.ts'
 
 const VERTEX = `
@@ -64,50 +64,8 @@ const FRAGMENT = `
   }
 `
 
-const WGSL_VERTEX = `
-  struct VSOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-  };
-
-  @vertex
-  fn main(
-    @location(0) aPosition: vec2<f32>,
-    @location(1) aUV: vec2<f32>,
-  ) -> VSOutput {
-    var output: VSOutput;
-    output.position = vec4<f32>(aPosition, 0.0, 1.0);
-    output.uv = aUV;
-    return output;
-  }
-`
-
-const WGSL_FRAGMENT = `
-  @group(0) @binding(0) var uTexture: texture_2d<f32>;
-  @group(0) @binding(1) var uSampler: sampler;
-  @group(1) @binding(0) var uLutTexture: texture_2d<f32>;
-  @group(1) @binding(1) var uLutSampler: sampler;
-
-  @fragment
-  fn main(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
-    let color = textureSample(uTexture, uSampler, uv);
-    if (color.a < 0.001) {
-      return color;
-    }
-
-    let rgb = color.rgb / color.a;
-
-    var r = textureSample(uLutTexture, uLutSampler, vec2<f32>(rgb.r, 0.375)).r;
-    var g = textureSample(uLutTexture, uLutSampler, vec2<f32>(rgb.g, 0.625)).r;
-    var b = textureSample(uLutTexture, uLutSampler, vec2<f32>(rgb.b, 0.875)).r;
-
-    r = textureSample(uLutTexture, uLutSampler, vec2<f32>(r, 0.125)).r;
-    g = textureSample(uLutTexture, uLutSampler, vec2<f32>(g, 0.125)).r;
-    b = textureSample(uLutTexture, uLutSampler, vec2<f32>(b, 0.125)).r;
-
-    return vec4<f32>(vec3<f32>(r, g, b) * color.a, color.a);
-  }
-`
+// Note: Custom WGSL shaders removed — PixiJS v8's WebGPU pipeline vertex buffer
+// layout is incompatible with custom vertex shaders. Filters use GlProgram only.
 
 /**
  * Compute a 256-entry LUT from curve control points using monotone cubic interpolation.
@@ -245,19 +203,8 @@ export function computeCurvesLUT(channels: Record<CurveChannel, CurvePoint[]>): 
 export function createCurvesFilter(lutTexture: Texture): Filter {
   const glProgram = GlProgram.from({ vertex: VERTEX, fragment: FRAGMENT })
 
-  let gpuProgram: GpuProgram | undefined
-  try {
-    gpuProgram = GpuProgram.from({
-      vertex: { source: WGSL_VERTEX, entryPoint: 'main' },
-      fragment: { source: WGSL_FRAGMENT, entryPoint: 'main' },
-    })
-  } catch {
-    // Fall back to GL
-  }
-
   return new Filter({
     glProgram,
-    gpuProgram,
     resources: {
       curvesUniforms: {
         uLutTexture: { value: lutTexture, type: 'f32' },

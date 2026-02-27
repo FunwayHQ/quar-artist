@@ -5,6 +5,9 @@ import { CanvasViewport } from '@components/shell/CanvasViewport.tsx'
 import { LayersPanel } from '@components/layers/LayersPanel.tsx'
 import { ColorPanel } from '@components/color/ColorPanel.tsx'
 import { FilterDialogRouter } from '@components/filters/FilterDialogRouter.tsx'
+import { ExportDialog } from '@components/dialogs/ExportDialog.tsx'
+import { NewProjectDialog } from '@components/dialogs/NewProjectDialog.tsx'
+import { GalleryView } from '@components/gallery/GalleryView.tsx'
 import { useEngine } from '@hooks/useEngine.ts'
 import { useBrushStore } from '@stores/brushStore.ts'
 import { useColorStore } from '@stores/colorStore.ts'
@@ -12,7 +15,10 @@ import { useToolStore } from '@stores/toolStore.ts'
 import { useSelectionStore } from '@stores/selectionStore.ts'
 import { useUIStore } from '@stores/uiStore.ts'
 import { useFilterStore } from '@stores/filterStore.ts'
+import { useProjectStore } from '@stores/projectStore.ts'
+import { exportImage, downloadBlob } from './io/formats/image/ImageExporter.ts'
 import { hsbToRgba, rgbaToHsb } from '@app-types/color.ts'
+import type { ExportOptions } from '@app-types/project.ts'
 import type { FilterType } from '@app-types/filter.ts'
 import styles from './App.module.css'
 
@@ -20,6 +26,12 @@ export default function App() {
   const containerRef = useRef<HTMLDivElement>(null)
   const { manager, undo, redo } = useEngine(containerRef)
   const rightPanelTab = useUIStore((s) => s.rightPanelTab)
+  const showExportDialog = useUIStore((s) => s.showExportDialog)
+  const showNewProjectDialog = useUIStore((s) => s.showNewProjectDialog)
+  const appView = useProjectStore((s) => s.view)
+  const canvasWidth = useProjectStore((s) => s.canvasWidth)
+  const canvasHeight = useProjectStore((s) => s.canvasHeight)
+  const projectName = useProjectStore((s) => s.currentProjectName)
 
   // Sync brush preset changes to the engine
   useEffect(() => {
@@ -86,6 +98,14 @@ export default function App() {
     })
   }, [manager])
 
+  // Wire view transform → zoom display
+  useEffect(() => {
+    if (!manager) return
+    manager.setViewChangeCallback((state) => {
+      useUIStore.getState().setZoom(state.zoom)
+    })
+  }, [manager])
+
   // Wire filter store to engine: begin/update/apply/cancel
   useEffect(() => {
     if (!manager) return
@@ -149,6 +169,43 @@ export default function App() {
     useFilterStore.getState().closeFilter()
   }, [manager])
 
+  // Export handler
+  const handleExport = useCallback(async (options: ExportOptions) => {
+    if (!manager) return
+    try {
+      const pixels = manager.getCompositePixels()
+      if (!pixels) return
+      if (options.format === 'png' || options.format === 'jpeg') {
+        const blob = await exportImage(pixels, canvasWidth, canvasHeight, {
+          format: options.format,
+          quality: options.jpegQuality,
+        })
+        const ext = options.format === 'jpeg' ? 'jpg' : 'png'
+        downloadBlob(blob, `${projectName}.${ext}`)
+      }
+      // PSD and QART exports can be added here when needed
+    } catch (err) {
+      console.error('Export failed:', err)
+    }
+    useUIStore.getState().setShowExportDialog(false)
+  }, [manager, canvasWidth, canvasHeight, projectName])
+
+  // New project handler
+  const handleNewProject = useCallback((name: string, width: number, height: number, dpi: number) => {
+    useProjectStore.getState().setCurrentProject(Date.now(), name, width, height, dpi)
+    useUIStore.getState().setShowNewProjectDialog(false)
+    // Engine reinit will happen via the view change
+  }, [])
+
+  // Gallery handlers
+  const handleOpenProject = useCallback((id: number) => {
+    useProjectStore.getState().setView('canvas')
+  }, [])
+
+  const handleGalleryNewProject = useCallback(() => {
+    useUIStore.getState().setShowNewProjectDialog(true)
+  }, [])
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -190,17 +247,36 @@ export default function App() {
         e.preventDefault()
         handleOpenFilter('curves')
       }
+      // Export — Ctrl+E
+      if (mod && e.key === 'e' && !e.shiftKey) {
+        e.preventDefault()
+        useUIStore.getState().setShowExportDialog(true)
+      }
+      // New — Ctrl+N
+      if (mod && e.key === 'n') {
+        e.preventDefault()
+        useUIStore.getState().setShowNewProjectDialog(true)
+      }
+      // Save — Ctrl+S
+      if (mod && e.key === 's') {
+        e.preventDefault()
+        // Auto-save is already active; this is a manual trigger
+      }
       // Swap colors — X
       if (e.key === 'x' && !mod) {
         useColorStore.getState().swapColors()
       }
-      // Fill tool — G
-      if (e.key === 'g' && !mod) {
-        useToolStore.getState().setTool('fill')
-      }
-      // Eyedropper tool — I
-      if (e.key === 'i' && !mod && !e.shiftKey) {
-        useToolStore.getState().setTool('eyedropper')
+      // Tool shortcuts (single key, no modifier)
+      if (!mod && !e.shiftKey && !e.altKey) {
+        switch (e.key) {
+          case 'b': useToolStore.getState().setTool('brush'); break
+          case 'e': useToolStore.getState().setTool('eraser'); break
+          case 'g': useToolStore.getState().setTool('fill'); break
+          case 'i': useToolStore.getState().setTool('eyedropper'); break
+          case 'v': useToolStore.getState().setTool('move'); break
+          case 'm': useToolStore.getState().setTool('selection'); break
+          case 't': useToolStore.getState().setTool('transform'); break
+        }
       }
     }
 
@@ -232,6 +308,27 @@ export default function App() {
     }
   }, [undo, redo, manager, handleOpenFilter])
 
+  // Gallery view
+  if (appView === 'gallery') {
+    return (
+      <div className={styles.app}>
+        <GalleryView
+          onOpenProject={handleOpenProject}
+          onNewProject={handleGalleryNewProject}
+          onDeleteProject={() => {}}
+          onDuplicateProject={() => {}}
+          onRenameProject={() => {}}
+        />
+        <NewProjectDialog
+          open={showNewProjectDialog}
+          onClose={() => useUIStore.getState().setShowNewProjectDialog(false)}
+          onCreate={handleNewProject}
+        />
+      </div>
+    )
+  }
+
+  // Canvas view
   return (
     <div className={styles.app}>
       <TitleBar
@@ -274,6 +371,20 @@ export default function App() {
         </div>
       </div>
       <FilterDialogRouter onApply={handleFilterApply} onCancel={handleFilterCancel} />
+      <ExportDialog
+        open={showExportDialog}
+        projectName={projectName}
+        width={canvasWidth}
+        height={canvasHeight}
+        layerCount={manager?.layerManager.layers.length ?? 1}
+        onClose={() => useUIStore.getState().setShowExportDialog(false)}
+        onExport={handleExport}
+      />
+      <NewProjectDialog
+        open={showNewProjectDialog}
+        onClose={() => useUIStore.getState().setShowNewProjectDialog(false)}
+        onCreate={handleNewProject}
+      />
     </div>
   )
 }

@@ -49,6 +49,7 @@ export class CanvasManager {
   readonly eyedropperTool = new EyedropperTool()
 
   private onColorSampled: ((color: RGBAColor) => void) | null = null
+  private onViewChange: ((state: ViewState) => void) | null = null
   private resizeObserver: ResizeObserver | null = null
   private container: HTMLElement | null = null
 
@@ -344,6 +345,13 @@ export class CanvasManager {
 
   // ── Flood fill & Eyedropper ─────────────────────────────────────
 
+  /** Set callback for view transform changes (zoom, pan, rotation). */
+  setViewChangeCallback(cb: (state: ViewState) => void): void {
+    this.onViewChange = cb
+    // Emit current state immediately so caller has initial value
+    cb(this.viewTransform.getState())
+  }
+
   /** Set callback for color sampling (eyedropper). */
   setColorSampledCallback(cb: (color: RGBAColor) => void): void {
     this.onColorSampled = cb
@@ -429,6 +437,20 @@ export class CanvasManager {
     if (color && this.onColorSampled) {
       this.onColorSampled(color)
     }
+  }
+
+  /** Extract composite pixel data (all visible layers) for export. */
+  getCompositePixels(): Uint8ClampedArray | null {
+    if (!this.app) return null
+    this.recomposite()
+    const outputTexture = this.compositor.getOutputTexture()
+    if (!outputTexture) return null
+    const extracted = this.app.renderer.extract.pixels({ target: outputTexture })
+    return new Uint8ClampedArray(
+      extracted.pixels.buffer,
+      extracted.pixels.byteOffset,
+      extracted.pixels.byteLength,
+    )
   }
 
   /** Fill tolerance (0-255), set from React via toolStore. */
@@ -575,6 +597,8 @@ export class CanvasManager {
       timestamp: performance.now(),
     }
     this.brushEngine.beginStroke(strokePoint)
+    // Show initial stamp immediately
+    this.recomposite()
   }
 
   private handleStrokeMove(ps: PointerState, coalesced: PointerState[]) {
@@ -599,6 +623,8 @@ export class CanvasManager {
         }]
 
     this.brushEngine.continueStroke(points)
+    // Recomposite to show brush strokes in real-time
+    this.recomposite()
   }
 
   private handleStrokeEnd() {
@@ -615,6 +641,7 @@ export class CanvasManager {
     stage.position.set(state.x, state.y)
     stage.scale.set(state.zoom)
     stage.rotation = state.rotation
+    this.onViewChange?.(state)
   }
 
   private handleResize = () => {

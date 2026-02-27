@@ -60,3 +60,23 @@
   background: var(--color-bg-hover);
   -webkit-app-region: no-drag;
 }
+
+.zoomIndicator {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  padding: 4px 10px;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  cursor: pointer;
+  transition: color var(--duration-fast) var(--easing-default),
+    background var(--duration-fast) var(--easing-default);
+  white-space: nowrap;
+  -webkit-app-region: no-drag;
+}
+
+.zoomIndicator:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}

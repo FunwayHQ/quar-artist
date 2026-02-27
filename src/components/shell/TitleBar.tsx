@@ -1,5 +1,7 @@
 import { useState, useRef, useCallback } from 'react'
 import { DropdownMenu, type MenuItem } from './DropdownMenu.tsx'
+import { useUIStore } from '@stores/uiStore.ts'
+import { useProjectStore } from '@stores/projectStore.ts'
 import type { CanvasManager } from '@engine/canvas/CanvasManager.ts'
 import type { FilterType } from '@app-types/filter.ts'
 import styles from './TitleBar.module.css'
@@ -8,14 +10,17 @@ interface TitleBarProps {
   onOpenFilter?: (filterType: FilterType) => void
   onUndo?: () => void
   onRedo?: () => void
+  onSave?: () => void
   manager?: CanvasManager | null
 }
 
 type MenuName = 'file' | 'edit' | 'adjustments' | 'selection' | 'help'
 
-export function TitleBar({ onOpenFilter, onUndo, onRedo, manager }: TitleBarProps) {
+export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, manager }: TitleBarProps) {
   const [openMenu, setOpenMenu] = useState<MenuName | null>(null)
   const buttonRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+  const zoom = useUIStore((s) => s.zoom)
+  const projectName = useProjectStore((s) => s.currentProjectName)
 
   const closeMenu = useCallback(() => setOpenMenu(null), [])
 
@@ -27,10 +32,12 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, manager }: TitleBarProp
     switch (name) {
       case 'file':
         return [
-          { label: 'New', shortcut: 'Ctrl+N', action: () => {} },
+          { label: 'New', shortcut: 'Ctrl+N', action: () => useUIStore.getState().setShowNewProjectDialog(true) },
           { separator: true, label: '' },
-          { label: 'Export...', shortcut: 'Ctrl+E', action: () => {} },
-          { label: 'Save', shortcut: 'Ctrl+S', action: () => {} },
+          { label: 'Export...', shortcut: 'Ctrl+E', action: () => useUIStore.getState().setShowExportDialog(true) },
+          { label: 'Save', shortcut: 'Ctrl+S', action: () => onSave?.() },
+          { separator: true, label: '' },
+          { label: 'Gallery', action: () => useProjectStore.getState().setView('gallery') },
         ]
       case 'edit':
         return [
@@ -90,7 +97,15 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, manager }: TitleBarProp
           </button>
         ))}
       </nav>
-      <div className={styles.projectName}>Untitled Project</div>
+      <div className={styles.projectName}>{projectName}</div>
+      <button
+        className={styles.zoomIndicator}
+        onClick={() => manager?.viewTransform.reset()}
+        title="Reset zoom to 100%"
+        type="button"
+      >
+        {Math.round(zoom * 100)}%
+      </button>
       {openMenu && (
         <DropdownMenu
           items={getMenuItems(openMenu)}
