@@ -309,8 +309,9 @@ export class CanvasManager {
       ? this.selectionController.manager.getMask()
       : null
 
-    const w = this.container?.clientWidth || 1024
-    const h = this.container?.clientHeight || 768
+    // Use actual layer texture dimensions (not viewport size) for correct filter resolution
+    const w = layer.texture.width
+    const h = layer.texture.height
 
     this.filterManager.beginPreview(layer.texture, layer.info.id, snapshot, mask, w, h)
   }

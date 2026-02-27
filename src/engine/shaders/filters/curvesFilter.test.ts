@@ -1,30 +1,5 @@
-import { describe, it, expect, vi } from 'vitest'
-
-vi.mock('pixi.js', () => {
-  class MockGlProgram {
-    static from() { return new MockGlProgram() }
-  }
-  class MockGpuProgram {
-    static from() { return new MockGpuProgram() }
-  }
-  class MockFilter {
-    resources: unknown
-    constructor(opts: { resources?: unknown }) {
-      this.resources = opts.resources
-    }
-  }
-  class MockTexture {
-    static from() { return new MockTexture() }
-  }
-  return {
-    Filter: MockFilter,
-    GlProgram: MockGlProgram,
-    GpuProgram: MockGpuProgram,
-    Texture: MockTexture,
-  }
-})
-
-import { computeSingleChannelLUT, computeCurvesLUT, createCurvesFilter } from './curvesFilter.ts'
+import { describe, it, expect } from 'vitest'
+import { computeSingleChannelLUT, cpuApplyCurves } from './curvesFilter.ts'
 
 describe('curvesFilter', () => {
   describe('computeSingleChannelLUT', () => {
@@ -34,10 +9,8 @@ describe('curvesFilter', () => {
         { x: 255, y: 255 },
       ])
       expect(lut).toHaveLength(256)
-      // Check endpoints
       expect(lut[0]).toBeCloseTo(0, 2)
       expect(lut[255]).toBeCloseTo(1, 2)
-      // Check midpoint is approximately identity
       expect(lut[128]).toBeCloseTo(128 / 255, 1)
     })
 
@@ -57,9 +30,7 @@ describe('curvesFilter', () => {
         { x: 128, y: 200 },
         { x: 255, y: 255 },
       ])
-      // At x=128, should be close to 200/255
       expect(lut[128]).toBeCloseTo(200 / 255, 1)
-      // Values should be clamped to [0, 1]
       for (let i = 0; i < 256; i++) {
         expect(lut[i]).toBeGreaterThanOrEqual(0)
         expect(lut[i]).toBeLessThanOrEqual(1)
@@ -78,61 +49,53 @@ describe('curvesFilter', () => {
         { x: 0, y: 0 },
         { x: 128, y: 64 },
       ])
-      // Should sort internally
       expect(lut[0]).toBeCloseTo(0, 2)
       expect(lut[255]).toBeCloseTo(1, 2)
     })
   })
 
-  describe('computeCurvesLUT', () => {
-    it('produces 256x4 RGBA data', () => {
-      const data = computeCurvesLUT({
+  describe('cpuApplyCurves', () => {
+    it('identity curves leave pixels unchanged', () => {
+      const pixels = new Uint8Array([255, 0, 0, 255, 0, 255, 0, 255])
+      const result = cpuApplyCurves(pixels, {
         rgb: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
         red: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
         green: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
         blue: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
       })
-      expect(data).toHaveLength(256 * 4 * 4) // 256 wide, 4 rows, RGBA
+      expect(result).toHaveLength(8)
+      // Red pixel: R=255, G=0, B=0, A=255
+      expect(result[0]).toBe(255)
+      expect(result[1]).toBe(0)
+      expect(result[2]).toBe(0)
+      expect(result[3]).toBe(255)
     })
 
-    it('identity channels produce identity LUT data', () => {
-      const data = computeCurvesLUT({
+    it('flat red curve clamps red to constant', () => {
+      const pixels = new Uint8Array([200, 100, 50, 255])
+      const result = cpuApplyCurves(pixels, {
         rgb: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+        red: [{ x: 0, y: 128 }, { x: 255, y: 128 }],
+        green: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+        blue: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
+      })
+      expect(result[0]).toBeCloseTo(128, 0) // Red channel clamped to ~128
+      expect(result[1]).toBe(100) // Green unchanged
+      expect(result[2]).toBe(50) // Blue unchanged
+    })
+
+    it('preserves transparent pixels', () => {
+      const pixels = new Uint8Array([0, 0, 0, 0])
+      const result = cpuApplyCurves(pixels, {
+        rgb: [{ x: 0, y: 128 }, { x: 255, y: 128 }],
         red: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
         green: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
         blue: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
       })
-      // First pixel of row 0 (RGB master) should be ~0
-      expect(data[0]).toBe(0)
-      // Last pixel of row 0 should be ~255
-      const lastPixelRow0 = 255 * 4
-      expect(data[lastPixelRow0]).toBe(255)
-      // Alpha should always be 255
-      expect(data[3]).toBe(255)
-    })
-
-    it('per-channel curves affect correct rows', () => {
-      const data = computeCurvesLUT({
-        rgb: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
-        red: [{ x: 0, y: 128 }, { x: 255, y: 128 }], // flat at 128
-        green: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
-        blue: [{ x: 0, y: 0 }, { x: 255, y: 255 }],
-      })
-      // Row 1 (red) should have all values near 128
-      const midRow1 = (1 * 256 + 0) * 4
-      expect(data[midRow1]).toBeCloseTo(128, 0)
-      const endRow1 = (1 * 256 + 255) * 4
-      expect(data[endRow1]).toBeCloseTo(128, 0)
-    })
-  })
-
-  describe('createCurvesFilter', () => {
-    it('creates a filter with LUT texture resource', async () => {
-      const { Texture } = await import('pixi.js')
-      const mockTexture = Texture.from('test')
-      const filter = createCurvesFilter(mockTexture)
-      expect(filter).toBeDefined()
-      expect((filter as any).resources.curvesUniforms.uLutTexture.value).toBe(mockTexture)
+      expect(result[0]).toBe(0)
+      expect(result[1]).toBe(0)
+      expect(result[2]).toBe(0)
+      expect(result[3]).toBe(0)
     })
   })
 })

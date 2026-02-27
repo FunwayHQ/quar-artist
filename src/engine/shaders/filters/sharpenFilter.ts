@@ -1,86 +1,48 @@
-import { Filter, GlProgram } from 'pixi.js'
-
-const VERTEX = `
-  in vec2 aPosition;
-  in vec2 aUV;
-  out vec2 vTextureCoord;
-
-  uniform vec4 uInputSize;
-  uniform vec4 uOutputFrame;
-  uniform vec4 uOutputTexture;
-
-  vec4 filterVertexPosition(void) {
-    vec2 position = aPosition * uOutputFrame.zw + uOutputFrame.xy;
-    position.x = position.x * (2.0 / uOutputTexture.x) - 1.0;
-    position.y = position.y * (2.0*uOutputTexture.z / uOutputTexture.y) - uOutputTexture.z;
-    return vec4(position, 0.0, 1.0);
-  }
-
-  vec2 filterTextureCoord(void) {
-    return aUV * (uOutputFrame.zw * uInputSize.zw);
-  }
-
-  void main(void) {
-    gl_Position = filterVertexPosition();
-    vTextureCoord = filterTextureCoord();
-  }
-`
-
 /**
- * Unsharp mask: output = original + amount * (original - blurred)
- * Gated by luminance threshold to avoid sharpening noise in smooth areas.
+ * CPU-based unsharp mask sharpen.
+ * output = original + amount * (original - blurred), gated by luminance threshold.
+ *
+ * Custom GLSL shaders don't auto-transpile to WGSL on PixiJS v8 WebGPU,
+ * so we perform the unsharp mask computation on CPU instead.
  */
-const FRAGMENT = `
-  in vec2 vTextureCoord;
-  out vec4 finalColor;
+export function cpuUnsharpMask(
+  original: Uint8Array,
+  blurred: Uint8Array,
+  amount: number,
+  threshold: number,
+): Uint8Array {
+  const len = original.length
+  const result = new Uint8Array(len)
+  const amt = amount / 100
+  const thresh = threshold / 255
 
-  uniform sampler2D uTexture;
-  uniform sampler2D uBlurTexture;
-  uniform float uAmount;
-  uniform float uThreshold;
+  for (let i = 0; i < len; i += 4) {
+    const oR = original[i] / 255
+    const oG = original[i + 1] / 255
+    const oB = original[i + 2] / 255
+    const oA = original[i + 3]
 
-  void main(void) {
-    vec4 original = texture(uTexture, vTextureCoord);
-    vec4 blurred = texture(uBlurTexture, vTextureCoord);
+    const bR = blurred[i] / 255
+    const bG = blurred[i + 1] / 255
+    const bB = blurred[i + 2] / 255
 
-    vec4 diff = original - blurred;
+    const dR = oR - bR
+    const dG = oG - bG
+    const dB = oB - bB
 
     // Luminance-based threshold gating
-    float lum = dot(abs(diff.rgb), vec3(0.299, 0.587, 0.114));
-    float gate = smoothstep(uThreshold / 255.0, uThreshold / 255.0 + 0.01, lum);
+    const lum = Math.abs(dR) * 0.299 + Math.abs(dG) * 0.587 + Math.abs(dB) * 0.114
+    const gate = lum > thresh + 0.01 ? 1 : lum > thresh ? (lum - thresh) / 0.01 : 0
 
-    finalColor = original + diff * uAmount * gate;
-    finalColor = clamp(finalColor, vec4(0.0), vec4(1.0));
-    finalColor.a = original.a;
+    const rR = Math.max(0, Math.min(1, oR + dR * amt * gate))
+    const rG = Math.max(0, Math.min(1, oG + dG * amt * gate))
+    const rB = Math.max(0, Math.min(1, oB + dB * amt * gate))
+
+    result[i] = Math.round(rR * 255)
+    result[i + 1] = Math.round(rG * 255)
+    result[i + 2] = Math.round(rB * 255)
+    result[i + 3] = oA
   }
-`
 
-// Note: Custom WGSL shaders removed — PixiJS v8's WebGPU pipeline vertex buffer
-// layout is incompatible with custom vertex shaders. Filters use GlProgram only.
-
-/**
- * Create a sharpen (unsharp mask) filter.
- * Requires a pre-blurred texture to be set as uBlurTexture.
- */
-export function createSharpenFilter(amount: number, threshold: number): Filter {
-  const glProgram = GlProgram.from({ vertex: VERTEX, fragment: FRAGMENT })
-
-  return new Filter({
-    glProgram,
-    resources: {
-      sharpenUniforms: {
-        uAmount: { value: amount / 100, type: 'f32' },
-        uThreshold: { value: threshold, type: 'f32' },
-        uBlurTexture: { value: null, type: 'f32' },
-      },
-    },
-  })
-}
-
-export function updateSharpenUniforms(filter: Filter, amount: number, threshold: number): void {
-  const res = filter.resources.sharpenUniforms as any
-  if (!res) return
-  const u = res.uniforms ?? res
-  if (u.uAmount) u.uAmount.value = amount / 100
-  if (u.uThreshold) u.uThreshold.value = threshold
+  return result
 }

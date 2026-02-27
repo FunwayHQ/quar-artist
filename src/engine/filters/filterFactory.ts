@@ -1,18 +1,20 @@
 import type { Filter } from 'pixi.js'
-import type { FilterParams } from '@app-types/filter.ts'
+import type { FilterParams, SharpenParams, CurvesParams } from '@app-types/filter.ts'
 import { createGaussianBlurFilters } from '../shaders/filters/gaussianBlurFilter.ts'
-import { createSharpenFilter } from '../shaders/filters/sharpenFilter.ts'
 import { createHSBAdjustmentFilter } from '../shaders/filters/hsbAdjustmentFilter.ts'
-import { createCurvesFilter, createLUTTexture } from '../shaders/filters/curvesFilter.ts'
 
 export interface FilterPipeline {
   filters: Filter[]
   /** For sharpen: the blur radius needed to generate the pre-blur texture. */
   preBlurRadius?: number
+  /** CPU-based operation type (for filters that can't use GPU shaders on WebGPU). */
+  cpuOperation?: 'sharpen' | 'curves'
+  /** Params for CPU-based operations. */
+  cpuParams?: SharpenParams | CurvesParams
 }
 
 /**
- * Route filter params to the correct shader constructors.
+ * Route filter params to the correct filter constructors.
  */
 export function createFilterPipeline(
   params: FilterParams,
@@ -26,9 +28,11 @@ export function createFilterPipeline(
       }
 
     case 'sharpen':
+      // Sharpen uses GPU blur + CPU unsharp mask (custom shaders don't work on WebGPU)
       return {
-        filters: [createSharpenFilter(params.amount, params.threshold)],
-        preBlurRadius: params.radius,
+        filters: createGaussianBlurFilters(params.radius, width, height),
+        cpuOperation: 'sharpen',
+        cpuParams: params,
       }
 
     case 'hsbAdjustment':
@@ -36,11 +40,12 @@ export function createFilterPipeline(
         filters: [createHSBAdjustmentFilter(params.hueShift, params.saturation, params.brightness)],
       }
 
-    case 'curves': {
-      const lutTexture = createLUTTexture(params.channels)
+    case 'curves':
+      // Curves uses CPU-based LUT application (custom shaders don't work on WebGPU)
       return {
-        filters: [createCurvesFilter(lutTexture)],
+        filters: [],
+        cpuOperation: 'curves',
+        cpuParams: params,
       }
-    }
   }
 }

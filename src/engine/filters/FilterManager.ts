@@ -1,8 +1,9 @@
 import { type Application, RenderTexture, Texture, Sprite, Container, Filter } from 'pixi.js'
-import type { FilterParams } from '@app-types/filter.ts'
+import type { FilterParams, SharpenParams, CurvesParams } from '@app-types/filter.ts'
 import type { LayerSnapshot } from '../undo/UndoManager.ts'
 import { createFilterPipeline } from './filterFactory.ts'
-import { createGaussianBlurFilters } from '../shaders/filters/gaussianBlurFilter.ts'
+import { cpuUnsharpMask } from '../shaders/filters/sharpenFilter.ts'
+import { cpuApplyCurves } from '../shaders/filters/curvesFilter.ts'
 
 /**
  * Non-destructive filter preview system.
@@ -53,23 +54,29 @@ export class FilterManager {
    * Restores original snapshot to layer texture, then applies the filter pipeline.
    */
   updatePreview(params: FilterParams): void {
-    if (!this.active || !this.app || !this.layerTexture || !this.originalSnapshot) return
+    if (!this.active || !this.app || !this.layerTexture || !this.originalSnapshot) {
+      return
+    }
 
     // Restore original to layer texture first
     this.restoreSnapshot(this.layerTexture, this.originalSnapshot)
 
     // Create filter pipeline
-    const { filters, preBlurRadius } = createFilterPipeline(
+    const pipeline = createFilterPipeline(
       params,
       this.canvasWidth,
       this.canvasHeight,
     )
 
-    // For sharpen: we need to render a blurred version first
-    if (preBlurRadius !== undefined && preBlurRadius > 0) {
-      this.applySharpenPipeline(filters, preBlurRadius)
-    } else {
-      this.applyFilterPipeline(filters)
+    if (pipeline.cpuOperation === 'sharpen') {
+      // Sharpen: GPU blur + CPU unsharp mask
+      this.applySharpenCPU(pipeline.filters, pipeline.cpuParams as SharpenParams)
+    } else if (pipeline.cpuOperation === 'curves') {
+      // Curves: fully CPU-based LUT application
+      this.applyCurvesCPU(pipeline.cpuParams as CurvesParams)
+    } else if (pipeline.filters.length > 0) {
+      // GPU-based filters (Gaussian Blur, HSB Adjustment)
+      this.applyFilterPipeline(pipeline.filters)
     }
 
     // Selection masking (CPU post-process): blend filtered with original where mask is 0
@@ -77,8 +84,8 @@ export class FilterManager {
       this.applySelectionMask()
     }
 
-    // Clean up filters
-    for (const f of filters) f.destroy()
+    // Clean up GPU filters
+    for (const f of pipeline.filters) f.destroy()
   }
 
   /**
@@ -117,71 +124,86 @@ export class FilterManager {
     // Keep layerId until after apply() returns it
   }
 
-  /** Apply filter(s) to the layer texture using a sprite+filter pipeline. */
+  /** Apply GPU filter(s) to the layer texture using a sprite+filter pipeline. */
   private applyFilterPipeline(filters: Filter[]): void {
-    if (!this.app || !this.layerTexture) return
+    if (!this.app || !this.layerTexture || filters.length === 0) return
 
-    const sprite = new Sprite(this.layerTexture)
-    sprite.filters = filters
-
-    // Render filtered sprite to a temp container, then back to layer texture
-    const container = new Container()
-    container.addChild(sprite)
-
-    this.app.renderer.render({
-      container,
-      target: this.layerTexture,
-      clear: true,
-    })
-
-    container.destroy({ children: true })
-  }
-
-  /** Apply sharpen using pre-blur + unsharp mask. */
-  private applySharpenPipeline(sharpenFilters: Filter[], blurRadius: number): void {
-    if (!this.app || !this.layerTexture) return
-
-    // Step 1: Create blurred version in a temp texture
+    // WebGPU forbids reading and writing the same texture in one pass.
+    // Use a temp RenderTexture as intermediate: layerTexture → temp → layerTexture.
     const tempTexture = RenderTexture.create({
       width: this.canvasWidth,
       height: this.canvasHeight,
     })
 
-    // Copy layer to temp
-    const copySprite = new Sprite(this.layerTexture)
+    // Pass 1: render filtered layer into temp texture
+    const sprite = new Sprite(this.layerTexture)
+    sprite.filters = filters
+    const container = new Container()
+    container.addChild(sprite)
+
+    this.app.renderer.render({
+      container,
+      target: tempTexture,
+      clear: true,
+    })
+    container.destroy({ children: true })
+
+    // Pass 2: copy temp back to layer texture
+    const copySprite = new Sprite(tempTexture)
     this.app.renderer.render({
       container: copySprite,
-      target: tempTexture,
+      target: this.layerTexture,
       clear: true,
     })
-
-    // Apply blur to temp
-    const blurFilters = createGaussianBlurFilters(blurRadius, this.canvasWidth, this.canvasHeight)
-    const blurSprite = new Sprite(tempTexture)
-    blurSprite.filters = blurFilters
-    const blurContainer = new Container()
-    blurContainer.addChild(blurSprite)
-    this.app.renderer.render({
-      container: blurContainer,
-      target: tempTexture,
-      clear: true,
-    })
-    blurContainer.destroy({ children: true })
-
-    // Step 2: Apply unsharp mask with blurred texture
-    // Set the blur texture uniform on the sharpen filter
-    const sharpenFilter = sharpenFilters[0]
-    const res = sharpenFilter.resources.sharpenUniforms as any
-    if (res) {
-      const u = res.uniforms ?? res
-      if (u.uBlurTexture) u.uBlurTexture.value = tempTexture
-    }
-
-    this.applyFilterPipeline(sharpenFilters)
-
-    // Clean up
-    for (const f of blurFilters) f.destroy()
+    copySprite.destroy()
     tempTexture.destroy(true)
+  }
+
+  /**
+   * Apply sharpen using GPU blur + CPU unsharp mask.
+   * Custom GLSL shaders don't auto-transpile to WGSL, so the unsharp mask is done on CPU.
+   */
+  private applySharpenCPU(blurFilters: Filter[], params: SharpenParams): void {
+    if (!this.app || !this.layerTexture || !this.originalSnapshot) return
+
+    // Step 1: Apply blur to the layer texture using GPU
+    this.applyFilterPipeline(blurFilters)
+
+    // Step 2: Extract the blurred pixels
+    const blurredSnapshot = this.extractSnapshot(this.layerTexture)
+
+    // Step 3: CPU unsharp mask: original + amount * (original - blurred)
+    const result = cpuUnsharpMask(
+      this.originalSnapshot.data,
+      blurredSnapshot.data,
+      params.amount,
+      params.threshold,
+    )
+
+    // Step 4: Restore the sharpened result to the layer texture
+    const sharpened: LayerSnapshot = {
+      width: this.originalSnapshot.width,
+      height: this.originalSnapshot.height,
+      data: result,
+    }
+    this.restoreSnapshot(this.layerTexture, sharpened)
+  }
+
+  /**
+   * Apply curves using CPU-based LUT lookup.
+   * Custom GLSL shaders don't auto-transpile to WGSL, so curves are computed on CPU.
+   */
+  private applyCurvesCPU(params: CurvesParams): void {
+    if (!this.app || !this.layerTexture || !this.originalSnapshot) return
+
+    const result = cpuApplyCurves(this.originalSnapshot.data, params.channels)
+
+    const curved: LayerSnapshot = {
+      width: this.originalSnapshot.width,
+      height: this.originalSnapshot.height,
+      data: result,
+    }
+    this.restoreSnapshot(this.layerTexture, curved)
   }
 
   /** CPU-side selection mask blend: only keep filtered pixels where mask > 0. */

@@ -1,42 +1,24 @@
 import { describe, it, expect, vi } from 'vitest'
 
-// Polyfill ImageData for jsdom
-if (typeof globalThis.ImageData === 'undefined') {
-  (globalThis as any).ImageData = class ImageData {
-    width: number; height: number; data: Uint8ClampedArray
-    constructor(data: Uint8ClampedArray, width: number, height?: number) {
-      this.data = data; this.width = width; this.height = height ?? (data.length / (width * 4))
-    }
-  }
-}
-
-// Mock canvas getContext for jsdom
-const mockCtx2d = {
-  putImageData: vi.fn(),
-}
-HTMLCanvasElement.prototype.getContext = vi.fn().mockReturnValue(mockCtx2d) as any
-
 vi.mock('pixi.js', () => {
-  class MockGlProgram {
-    static from() { return new MockGlProgram() }
-  }
-  class MockGpuProgram {
-    static from() { return new MockGpuProgram() }
-  }
-  class MockFilter {
-    resources: unknown
-    constructor(opts?: { resources?: unknown }) {
-      this.resources = opts?.resources
+  class MockBlurFilter {
+    strength: number
+    quality: number
+    constructor(opts?: { strength?: number; quality?: number }) {
+      this.strength = opts?.strength ?? 8
+      this.quality = opts?.quality ?? 4
     }
   }
-  class MockTexture {
-    static from() { return new MockTexture() }
+  class MockColorMatrixFilter {
+    hue() {}
+    saturate() {}
+    brightness() {}
+    reset() {}
   }
   return {
-    Filter: MockFilter,
-    GlProgram: MockGlProgram,
-    GpuProgram: MockGpuProgram,
-    Texture: MockTexture,
+    BlurFilter: MockBlurFilter,
+    ColorMatrixFilter: MockColorMatrixFilter,
+    Filter: class {},
   }
 })
 
@@ -44,28 +26,29 @@ import { createFilterPipeline } from './filterFactory.ts'
 import type { GaussianBlurParams, SharpenParams, HSBAdjustmentParams, CurvesParams } from '@app-types/filter.ts'
 
 describe('filterFactory', () => {
-  it('creates 2-filter pipeline for gaussian blur', () => {
+  it('creates 1-filter pipeline for gaussian blur (built-in BlurFilter)', () => {
     const params: GaussianBlurParams = { type: 'gaussianBlur', radius: 10 }
     const pipeline = createFilterPipeline(params, 800, 600)
-    expect(pipeline.filters).toHaveLength(2)
-    expect(pipeline.preBlurRadius).toBeUndefined()
+    expect(pipeline.filters).toHaveLength(1)
+    expect(pipeline.cpuOperation).toBeUndefined()
   })
 
-  it('creates 1-filter pipeline with preBlurRadius for sharpen', () => {
+  it('creates blur filters + CPU sharpen operation for sharpen', () => {
     const params: SharpenParams = { type: 'sharpen', amount: 100, radius: 5, threshold: 10 }
     const pipeline = createFilterPipeline(params, 800, 600)
-    expect(pipeline.filters).toHaveLength(1)
-    expect(pipeline.preBlurRadius).toBe(5)
+    expect(pipeline.filters).toHaveLength(1) // Blur filter for pre-blur
+    expect(pipeline.cpuOperation).toBe('sharpen')
+    expect(pipeline.cpuParams).toBe(params)
   })
 
-  it('creates 1-filter pipeline for HSB adjustment', () => {
+  it('creates 1-filter pipeline for HSB adjustment (built-in ColorMatrixFilter)', () => {
     const params: HSBAdjustmentParams = { type: 'hsbAdjustment', hueShift: 45, saturation: 20, brightness: -10 }
     const pipeline = createFilterPipeline(params, 800, 600)
     expect(pipeline.filters).toHaveLength(1)
-    expect(pipeline.preBlurRadius).toBeUndefined()
+    expect(pipeline.cpuOperation).toBeUndefined()
   })
 
-  it('creates 1-filter pipeline for curves', () => {
+  it('creates empty filter pipeline + CPU curves operation for curves', () => {
     const params: CurvesParams = {
       type: 'curves',
       channels: {
@@ -76,7 +59,8 @@ describe('filterFactory', () => {
       },
     }
     const pipeline = createFilterPipeline(params, 800, 600)
-    expect(pipeline.filters).toHaveLength(1)
-    expect(pipeline.preBlurRadius).toBeUndefined()
+    expect(pipeline.filters).toHaveLength(0)
+    expect(pipeline.cpuOperation).toBe('curves')
+    expect(pipeline.cpuParams).toBe(params)
   })
 })
