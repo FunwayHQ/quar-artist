@@ -6,5 +6,5 @@ import styles from './CanvasViewport.module.css'
  * Engine lifecycle is managed by the parent via useEngine.
  */
 export const CanvasViewport = forwardRef<HTMLDivElement>(function CanvasViewport(_, ref) {
-  return <div ref={ref} className={styles.viewport} />
+  return <div ref={ref} className={styles.viewport} data-testid="canvas-container" />
 })

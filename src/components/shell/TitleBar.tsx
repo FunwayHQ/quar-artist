@@ -80,7 +80,7 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, 
   ]
 
   return (
-    <header className={`glass ${styles.titleBar}`}>
+    <header className={`glass ${styles.titleBar}`} data-testid="title-bar">
       <div className={styles.brand}>
         <img src="/logo.svg" alt="QUAR Artist" className={styles.logo} />
       </div>
@@ -91,6 +91,7 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, 
             ref={(el) => { buttonRefs.current[name] = el }}
             className={styles.menuItem}
             data-active={openMenu === name}
+            data-testid={`menu-${name}`}
             onClick={() => toggleMenu(name)}
             onMouseEnter={() => {
               if (openMenu && openMenu !== name) setOpenMenu(name)

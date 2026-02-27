@@ -36,6 +36,8 @@ export class CanvasManager {
   private activeTool: ToolType = 'brush'
   private overlayRafId: number | null = null
   private pendingSelectionSnapshot: Uint8Array | null = null
+  private compositeScheduled = false
+  private compositeRafId: number | null = null
 
   readonly viewTransform = new ViewTransform()
   readonly inputManager = new InputManager(this.viewTransform)
@@ -101,6 +103,11 @@ export class CanvasManager {
     this.compositor.setApp(this.app)
     this.compositor.setSize(w, h)
 
+    // Invalidate compositor cache on any structural layer change
+    this.layerManager.setStructuralChangeCallback(() => {
+      this.compositor.invalidateCache()
+    })
+
     // Add compositor output to stage
     const outputSprite = this.compositor.getOutputSprite()
     if (outputSprite) {
@@ -160,6 +167,29 @@ export class CanvasManager {
     this.compositor.composite(this.layerManager.getLayers())
   }
 
+  /** Schedule a composite for the next animation frame (batches multiple calls). */
+  private scheduleComposite() {
+    if (this.compositeScheduled) return
+    this.compositeScheduled = true
+    this.compositeRafId = requestAnimationFrame(() => {
+      this.compositeScheduled = false
+      this.compositeRafId = null
+      this.recomposite()
+    })
+  }
+
+  /** Flush any pending RAF-batched composite immediately. */
+  private flushComposite() {
+    if (this.compositeScheduled) {
+      if (this.compositeRafId !== null) {
+        cancelAnimationFrame(this.compositeRafId)
+        this.compositeRafId = null
+      }
+      this.compositeScheduled = false
+      this.recomposite()
+    }
+  }
+
   /** Sync brush engine to current active layer. */
   syncBrushToActiveLayer() {
     const layer = this.layerManager.getActiveLayer()
@@ -167,13 +197,16 @@ export class CanvasManager {
       this.brushEngine.setActiveLayerTexture(layer.texture)
       this.brushEngine.setActiveLayerId(layer.info.id)
       this.brushEngine.setAlphaLock(layer.info.alphaLock)
+      this.compositor.setActiveLayerId(layer.info.id)
     }
   }
 
   /** Undo the last operation (layer stroke or selection change). */
-  performUndo(): boolean {
-    const entry = this.brushEngine.undoManager.undo()
+  async performUndo(): Promise<boolean> {
+    const entry = await this.brushEngine.undoManager.undo()
     if (!entry) return false
+
+    this.brushEngine.clearSnapshotCache()
 
     if (entry.type === 'selection') {
       this.selectionController.manager.restoreSnapshot(entry.before)
@@ -184,15 +217,18 @@ export class CanvasManager {
     if (!layer) return false
 
     this.restoreLayerSnapshot(layer.texture, entry.before)
+    this.compositor.invalidateCache()
     this.recomposite()
     this.layerManager.updateThumbnails()
     return true
   }
 
   /** Redo the last undone operation (layer stroke or selection change). */
-  performRedo(): boolean {
-    const entry = this.brushEngine.undoManager.redo()
+  async performRedo(): Promise<boolean> {
+    const entry = await this.brushEngine.undoManager.redo()
     if (!entry) return false
+
+    this.brushEngine.clearSnapshotCache()
 
     if (entry.type === 'selection') {
       this.selectionController.manager.restoreSnapshot(entry.after)
@@ -203,6 +239,7 @@ export class CanvasManager {
     if (!layer) return false
 
     this.restoreLayerSnapshot(layer.texture, entry.after)
+    this.compositor.invalidateCache()
     this.recomposite()
     this.layerManager.updateThumbnails()
     return true
@@ -246,10 +283,19 @@ export class CanvasManager {
     tex.destroy(true)
   }
 
-  /** Set the document dimensions (for pasteboard boundary rendering). */
+  /** Set the document dimensions and resize all layer/compositor textures to match. */
   setDocumentSize(width: number, height: number) {
     this.documentWidth = width
     this.documentHeight = height
+
+    // Resize layer textures and compositor to document dimensions
+    if (this.app) {
+      this.layerManager.resizeAllLayers(width, height)
+      this.compositor.setSize(width, height)
+      this.selectionController.resize(width, height)
+      this.syncBrushToActiveLayer()
+      this.recomposite()
+    }
   }
 
   /** Fit document into the viewport, centering with padding. */
@@ -268,6 +314,7 @@ export class CanvasManager {
    */
   importImageToNewLayer(pixels: Uint8ClampedArray, imgW: number, imgH: number, name?: string): string | null {
     if (!this.app) return null
+    this.brushEngine.clearSnapshotCache()
 
     // Create a new layer for the imported image
     const layerId = this.layerManager.createLayer(name ?? 'Imported Image')
@@ -285,16 +332,24 @@ export class CanvasManager {
     canvas.height = docH
     const ctx = canvas.getContext('2d')!
 
-    // Draw the imported image centered, clamped to document size
+    // Draw the imported image centered, scaled to fit if larger than document
     const srcCanvas = document.createElement('canvas')
     srcCanvas.width = imgW
     srcCanvas.height = imgH
     const srcCtx = srcCanvas.getContext('2d')!
     srcCtx.putImageData(new ImageData(pixels, imgW, imgH), 0, 0)
 
-    const drawX = Math.round((docW - imgW) / 2)
-    const drawY = Math.round((docH - imgH) / 2)
-    ctx.drawImage(srcCanvas, drawX, drawY)
+    // Scale down to fit within document bounds (maintain aspect ratio)
+    let drawW = imgW
+    let drawH = imgH
+    if (imgW > docW || imgH > docH) {
+      const scale = Math.min(docW / imgW, docH / imgH)
+      drawW = Math.round(imgW * scale)
+      drawH = Math.round(imgH * scale)
+    }
+    const drawX = Math.round((docW - drawW) / 2)
+    const drawY = Math.round((docH - drawH) / 2)
+    ctx.drawImage(srcCanvas, 0, 0, imgW, imgH, drawX, drawY, drawW, drawH)
 
     // Extract the composited data as a snapshot
     const resultData = ctx.getImageData(0, 0, docW, docH)
@@ -520,17 +575,23 @@ export class CanvasManager {
   }
 
   /** Extract composite pixel data (all visible layers) for export. */
-  getCompositePixels(): Uint8ClampedArray | null {
+  getCompositePixels(): { pixels: Uint8ClampedArray; width: number; height: number } | null {
     if (!this.app) return null
+    // Force a full N-layer composite for accuracy (bypass cache fast path)
+    this.compositor.invalidateCache()
     this.recomposite()
     const outputTexture = this.compositor.getOutputTexture()
     if (!outputTexture) return null
     const extracted = this.app.renderer.extract.pixels({ target: outputTexture })
-    return new Uint8ClampedArray(
-      extracted.pixels.buffer,
-      extracted.pixels.byteOffset,
-      extracted.pixels.byteLength,
-    )
+    return {
+      pixels: new Uint8ClampedArray(
+        extracted.pixels.buffer,
+        extracted.pixels.byteOffset,
+        extracted.pixels.byteLength,
+      ),
+      width: extracted.width,
+      height: extracted.height,
+    }
   }
 
   /** Fill tolerance (0-255), set from React via toolStore. */
@@ -731,11 +792,13 @@ export class CanvasManager {
         }]
 
     this.brushEngine.continueStroke(points)
-    // Recomposite to show brush strokes in real-time
-    this.recomposite()
+    // Batch composite to once per animation frame during painting
+    this.scheduleComposite()
   }
 
   private handleStrokeEnd() {
+    // Flush any pending RAF composite before stroke end snapshot
+    this.flushComposite()
     this.brushEngine.endStroke()
     // Recomposite after stroke completion
     this.recomposite()
@@ -782,6 +845,10 @@ export class CanvasManager {
     if (this.overlayRafId !== null) {
       cancelAnimationFrame(this.overlayRafId)
       this.overlayRafId = null
+    }
+    if (this.compositeRafId !== null) {
+      cancelAnimationFrame(this.compositeRafId)
+      this.compositeRafId = null
     }
 
     this.selectionController.destroy()

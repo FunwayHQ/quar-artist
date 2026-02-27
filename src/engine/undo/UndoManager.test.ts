@@ -28,11 +28,11 @@ describe('UndoManager', () => {
       expect(undo.undoDepth).toBe(1)
     })
 
-    it('clears the redo stack on new commit', () => {
+    it('clears the redo stack on new commit', async () => {
       // Do an operation, undo it, then do a new operation
       undo.beginOperation(snapshot([]))
       undo.commitOperation(snapshot([]))
-      undo.undo()
+      await undo.undo()
       expect(undo.canRedo).toBe(true)
 
       undo.beginOperation(snapshot([]))
@@ -42,52 +42,58 @@ describe('UndoManager', () => {
   })
 
   describe('undo', () => {
-    it('returns before snapshot', () => {
+    it('returns before snapshot', async () => {
       const before = snapshot([1, 2, 3])
       const after = snapshot([4, 5, 6])
       undo.beginOperation(before)
       undo.commitOperation(after)
 
-      const result = undo.undo()
+      const result = await undo.undo()
       expect(result).not.toBeNull()
-      expect(Array.from(result!.before.data)).toEqual([1, 2, 3])
+      expect(result!.type).toBe('layer')
+      if (result!.type === 'layer') {
+        expect(Array.from(result!.before.data)).toEqual([1, 2, 3])
+      }
     })
 
-    it('returns null when nothing to undo', () => {
-      expect(undo.undo()).toBeNull()
+    it('returns null when nothing to undo', async () => {
+      expect(await undo.undo()).toBeNull()
     })
 
-    it('moves entry to redo stack', () => {
+    it('moves entry to redo stack', async () => {
       undo.beginOperation(snapshot([]))
       undo.commitOperation(snapshot([]))
-      undo.undo()
+      await undo.undo()
       expect(undo.canUndo).toBe(false)
       expect(undo.canRedo).toBe(true)
     })
   })
 
   describe('redo', () => {
-    it('returns after snapshot', () => {
+    it('returns after snapshot', async () => {
       const before = snapshot([1, 2, 3])
       const after = snapshot([4, 5, 6])
       undo.beginOperation(before)
       undo.commitOperation(after)
-      undo.undo()
+      await undo.undo()
 
-      const result = undo.redo()
+      const result = await undo.redo()
       expect(result).not.toBeNull()
-      expect(Array.from(result!.after.data)).toEqual([4, 5, 6])
+      expect(result!.type).toBe('layer')
+      if (result!.type === 'layer') {
+        expect(Array.from(result!.after.data)).toEqual([4, 5, 6])
+      }
     })
 
-    it('returns null when nothing to redo', () => {
-      expect(undo.redo()).toBeNull()
+    it('returns null when nothing to redo', async () => {
+      expect(await undo.redo()).toBeNull()
     })
 
-    it('moves entry back to undo stack', () => {
+    it('moves entry back to undo stack', async () => {
       undo.beginOperation(snapshot([]))
       undo.commitOperation(snapshot([]))
-      undo.undo()
-      undo.redo()
+      await undo.undo()
+      await undo.redo()
       expect(undo.canUndo).toBe(true)
       expect(undo.canRedo).toBe(false)
     })
@@ -127,22 +133,22 @@ describe('UndoManager', () => {
       expect(cb).toHaveBeenCalledWith(true, false)
     })
 
-    it('fires on undo', () => {
+    it('fires on undo', async () => {
       const cb = vi.fn()
       undo.beginOperation(snapshot([]))
       undo.commitOperation(snapshot([]))
       undo.setChangeCallback(cb)
-      undo.undo()
+      await undo.undo()
       expect(cb).toHaveBeenCalledWith(false, true)
     })
 
-    it('fires on redo', () => {
+    it('fires on redo', async () => {
       const cb = vi.fn()
       undo.beginOperation(snapshot([]))
       undo.commitOperation(snapshot([]))
-      undo.undo()
+      await undo.undo()
       undo.setChangeCallback(cb)
-      undo.redo()
+      await undo.redo()
       expect(cb).toHaveBeenCalledWith(true, false)
     })
   })
@@ -158,10 +164,10 @@ describe('UndoManager', () => {
       expect(undo.undoDepth).toBe(1)
     })
 
-    it('clears redo stack on push', () => {
+    it('clears redo stack on push', async () => {
       undo.beginOperation(snapshot([]))
       undo.commitOperation(snapshot([]))
-      undo.undo()
+      await undo.undo()
       expect(undo.canRedo).toBe(true)
 
       undo.pushEntry({
@@ -172,27 +178,27 @@ describe('UndoManager', () => {
       expect(undo.canRedo).toBe(false)
     })
 
-    it('selection entry can be undone and redone', () => {
+    it('selection entry can be undone and redone', async () => {
       undo.pushEntry({
         type: 'selection',
         before: new Uint8Array([0, 0]),
         after: new Uint8Array([255, 255]),
       })
-      const entry = undo.undo()
+      const entry = await undo.undo()
       expect(entry).not.toBeNull()
       expect(entry!.type).toBe('selection')
       if (entry!.type === 'selection') {
         expect(Array.from(entry!.before)).toEqual([0, 0])
       }
 
-      const redone = undo.redo()
+      const redone = await undo.redo()
       expect(redone).not.toBeNull()
       if (redone!.type === 'selection') {
         expect(Array.from(redone!.after)).toEqual([255, 255])
       }
     })
 
-    it('interleaves with layer entries', () => {
+    it('interleaves with layer entries', async () => {
       undo.beginOperation(snapshot([10]))
       undo.commitOperation(snapshot([20]))
       undo.pushEntry({
@@ -206,15 +212,15 @@ describe('UndoManager', () => {
       expect(undo.undoDepth).toBe(3)
 
       // Undo layer entry
-      const e3 = undo.undo()
+      const e3 = await undo.undo()
       expect(e3!.type).toBe('layer')
 
       // Undo selection entry
-      const e2 = undo.undo()
+      const e2 = await undo.undo()
       expect(e2!.type).toBe('selection')
 
       // Undo first layer entry
-      const e1 = undo.undo()
+      const e1 = await undo.undo()
       expect(e1!.type).toBe('layer')
     })
 
@@ -231,12 +237,12 @@ describe('UndoManager', () => {
   })
 
   describe('clear', () => {
-    it('empties both stacks', () => {
+    it('empties both stacks', async () => {
       undo.beginOperation(snapshot([]))
       undo.commitOperation(snapshot([]))
       undo.beginOperation(snapshot([]))
       undo.commitOperation(snapshot([]))
-      undo.undo()
+      await undo.undo()
 
       undo.clear()
       expect(undo.canUndo).toBe(false)

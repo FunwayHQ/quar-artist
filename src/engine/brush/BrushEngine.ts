@@ -3,6 +3,7 @@ import { StrokeSmoother } from './StrokeSmoother.ts'
 import { PathInterpolator } from './PathInterpolator.ts'
 import { TileManager } from '../layers/TileManager.ts'
 import { UndoManager } from '../undo/UndoManager.ts'
+import { PerfMonitor } from '../perf/PerfMonitor.ts'
 import type { LayerSnapshot } from '../undo/UndoManager.ts'
 import type { StrokePoint, StampPosition, BrushPreset } from '../../types/brush.ts'
 import type { RGBAColor } from '../../types/color.ts'
@@ -25,6 +26,9 @@ export class BrushEngine {
   private alphaLock: boolean = false
   private strokeActive = false
   private color: RGBAColor = { r: 1, g: 1, b: 1, a: 1 }
+
+  /** Cached post-stroke snapshot per layer — avoids redundant GPU readbacks. */
+  private lastSnapshot = new Map<string, LayerSnapshot>()
 
   /** Reusable stamp graphics to minimize object allocation */
   private stampGraphics = new Graphics()
@@ -54,7 +58,15 @@ export class BrushEngine {
 
   /** Set which layer the brush is painting on (for undo tracking). */
   setActiveLayerId(id: string) {
+    if (id !== this.activeLayerId) {
+      this.lastSnapshot.delete(this.activeLayerId)
+    }
     this.activeLayerId = id
+  }
+
+  /** Clear cached snapshots (call on undo/redo, layer delete, import). */
+  clearSnapshotCache(): void {
+    this.lastSnapshot.clear()
   }
 
   /** Set whether the active layer has alpha lock enabled. */
@@ -65,14 +77,23 @@ export class BrushEngine {
   /** Called on pointerdown — begin a new stroke. */
   beginStroke(point: StrokePoint) {
     if (!this.activePreset || !this.activeLayerTexture || !this.app) return
+    PerfMonitor.mark('stroke-begin')
 
     this.strokeActive = true
     this.smoother.reset()
     this.interpolator.reset()
     this.tileManager.reset()
 
-    // Snapshot full layer "before" state
-    const beforeSnapshot = this.extractFullLayerSnapshot()
+    // Snapshot full layer "before" state — reuse cached post-stroke snapshot if available
+    const cached = this.lastSnapshot.get(this.activeLayerId)
+    let beforeSnapshot: LayerSnapshot | null
+    if (cached) {
+      beforeSnapshot = cached
+    } else {
+      PerfMonitor.mark('snapshot-extract-start')
+      beforeSnapshot = this.extractFullLayerSnapshot()
+      PerfMonitor.measure('gpu-readback', 'snapshot-extract-start')
+    }
     if (beforeSnapshot) {
       this.undoManager.beginOperation(beforeSnapshot, this.activeLayerId)
     }
@@ -107,12 +128,17 @@ export class BrushEngine {
     this.strokeActive = false
 
     // Snapshot full layer "after" state and commit
+    PerfMonitor.mark('snapshot-extract-start')
     const afterSnapshot = this.extractFullLayerSnapshot()
+    PerfMonitor.measure('gpu-readback', 'snapshot-extract-start')
     if (afterSnapshot) {
       this.undoManager.commitOperation(afterSnapshot)
+      // Cache for next stroke's "before" snapshot
+      this.lastSnapshot.set(this.activeLayerId, afterSnapshot)
     }
 
     this.tileManager.reset()
+    PerfMonitor.measure('stroke-total', 'stroke-begin')
   }
 
   /** Cancel an in-progress stroke. */

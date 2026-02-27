@@ -173,7 +173,7 @@ export function LayersPanel({ manager }: LayersPanelProps) {
   )
 
   return (
-    <div className={`glass ${styles.panel}`} role="tree" aria-label="Layers">
+    <div className={`glass ${styles.panel}`} role="tree" aria-label="Layers" data-testid="layers-panel">
       <div className={styles.header}>
         <span className={styles.title}>Layers</span>
         <div className={styles.headerActions}>
@@ -182,6 +182,7 @@ export function LayersPanel({ manager }: LayersPanelProps) {
               className={styles.headerBtn}
               onClick={handleAddLayer}
               aria-label="Add layer"
+              data-testid="add-layer-btn"
             >
               <Plus size={16} />
             </button>

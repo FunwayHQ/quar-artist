@@ -16,6 +16,7 @@ export interface Layer {
 }
 
 export type LayerChangeCallback = (layers: LayerInfo[], activeId: string) => void
+export type StructuralChangeCallback = () => void
 
 /**
  * Manages multiple painting layers, each backed by a PixiJS RenderTexture.
@@ -28,6 +29,7 @@ export class LayerManager {
   private canvasWidth = 1024
   private canvasHeight = 768
   private onChange: LayerChangeCallback | null = null
+  private onStructuralChange: StructuralChangeCallback | null = null
 
   setApp(app: Application) {
     this.app = app
@@ -38,8 +40,45 @@ export class LayerManager {
     this.canvasHeight = height
   }
 
+  /**
+   * Resize all existing layer textures to new dimensions, preserving content.
+   * Content is rendered top-left aligned; areas beyond old size become transparent.
+   */
+  resizeAllLayers(width: number, height: number) {
+    if (!this.app) return
+    if (width === this.canvasWidth && height === this.canvasHeight) return
+
+    this.canvasWidth = width
+    this.canvasHeight = height
+
+    for (const layer of this.layers) {
+      const oldTexture = layer.texture
+      const newTexture = RenderTexture.create({ width, height })
+
+      // Clear new texture to transparent
+      const emptyContainer = new Container()
+      this.app.renderer.render({ container: emptyContainer, target: newTexture, clear: true })
+
+      // Copy old content into new texture (top-left aligned)
+      const sprite = new Sprite(oldTexture)
+      this.app.renderer.render({ container: sprite, target: newTexture, clear: false })
+
+      layer.texture = newTexture
+      layer.sprite.texture = newTexture
+      oldTexture.destroy(true)
+    }
+
+    this.notifyStructuralChange()
+    this.notifyChange()
+  }
+
   setChangeCallback(cb: LayerChangeCallback) {
     this.onChange = cb
+  }
+
+  /** Set callback for structural changes (layer add/remove/reorder/visibility/opacity/blend/active change). */
+  setStructuralChangeCallback(cb: StructuralChangeCallback) {
+    this.onStructuralChange = cb
   }
 
   /** Initialize with a single default layer. */
@@ -86,6 +125,7 @@ export class LayerManager {
     const insertIdx = activeIdx >= 0 ? activeIdx + 1 : this.layers.length
     this.layers.splice(insertIdx, 0, layer)
     this.activeLayerId = id
+    this.notifyStructuralChange()
     this.notifyChange()
     return id
   }
@@ -104,6 +144,7 @@ export class LayerManager {
       this.activeLayerId = this.layers[Math.max(0, idx - 1)].info.id
     }
 
+    this.notifyStructuralChange()
     this.notifyChange()
     return true
   }
@@ -144,6 +185,7 @@ export class LayerManager {
 
     this.layers.splice(sourceIdx + 1, 0, newLayer)
     this.activeLayerId = newId
+    this.notifyStructuralChange()
     this.notifyChange()
     return newId
   }
@@ -157,6 +199,7 @@ export class LayerManager {
     }
     if (reordered.length === this.layers.length) {
       this.layers = reordered
+      this.notifyStructuralChange()
       this.notifyChange()
     }
   }
@@ -185,6 +228,7 @@ export class LayerManager {
     source.texture.destroy(true)
 
     this.activeLayerId = target.info.id
+    this.notifyStructuralChange()
     this.notifyChange()
     return true
   }
@@ -193,6 +237,7 @@ export class LayerManager {
   setActiveLayer(id: string) {
     if (this.layers.find((l) => l.info.id === id)) {
       this.activeLayerId = id
+      this.notifyStructuralChange()
       this.notifyChange()
     }
   }
@@ -201,6 +246,10 @@ export class LayerManager {
   updateLayerInfo(id: string, updates: Partial<Omit<LayerInfo, 'id'>>) {
     const layer = this.layers.find((l) => l.info.id === id)
     if (!layer) return
+    // Structural changes that affect compositing
+    if ('visible' in updates || 'opacity' in updates || 'blendMode' in updates || 'clippingMask' in updates) {
+      this.notifyStructuralChange()
+    }
     Object.assign(layer.info, updates)
     this.notifyChange()
   }
@@ -329,6 +378,10 @@ export class LayerManager {
 
   private notifyChange() {
     this.onChange?.(this.getLayerInfos(), this.activeLayerId)
+  }
+
+  private notifyStructuralChange() {
+    this.onStructuralChange?.()
   }
 }
 

@@ -23,6 +23,7 @@ export default defineConfig({
         manualChunks: {
           'pixi': ['pixi.js'],
           'react-vendor': ['react', 'react-dom'],
+          'vendor-utils': ['zustand', 'jszip', 'ag-psd', 'idb'],
         },
       },
     },

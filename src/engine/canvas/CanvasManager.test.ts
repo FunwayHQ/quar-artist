@@ -157,12 +157,12 @@ describe('CanvasManager', () => {
   })
 
   describe('performUndo / performRedo', () => {
-    it('returns false when nothing to undo', () => {
-      expect(cm.performUndo()).toBe(false)
+    it('returns false when nothing to undo', async () => {
+      expect(await cm.performUndo()).toBe(false)
     })
 
-    it('returns false when nothing to redo', () => {
-      expect(cm.performRedo()).toBe(false)
+    it('returns false when nothing to redo', async () => {
+      expect(await cm.performRedo()).toBe(false)
     })
 
     it('exposes undo/redo methods', () => {

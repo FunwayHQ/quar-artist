@@ -1,20 +1,22 @@
-import { useRef, useState, useEffect, useCallback } from 'react'
+import { useRef, useState, useEffect, useCallback, lazy, Suspense } from 'react'
 import { TitleBar } from '@components/shell/TitleBar.tsx'
 import { BrushControls } from '@components/shell/BrushControls.tsx'
 import { CanvasViewport } from '@components/shell/CanvasViewport.tsx'
 import { LayersPanel } from '@components/layers/LayersPanel.tsx'
 import { ColorPanel } from '@components/color/ColorPanel.tsx'
 import { FilterDialogRouter } from '@components/filters/FilterDialogRouter.tsx'
-import { ExportDialog } from '@components/dialogs/ExportDialog.tsx'
-import { NewProjectDialog } from '@components/dialogs/NewProjectDialog.tsx'
-import { CanvasSizeDialog } from '@components/dialogs/CanvasSizeDialog.tsx'
 import { GalleryView } from '@components/gallery/GalleryView.tsx'
 import { FullscreenHud } from '@components/shell/FullscreenHud.tsx'
 import { ToastContainer } from '@components/ui/ToastContainer.tsx'
-import { ShortcutsModal } from '@components/dialogs/ShortcutsModal.tsx'
-import { AboutModal } from '@components/dialogs/AboutModal.tsx'
 import { ContextMenu, type ContextMenuItem } from '@components/ui/ContextMenu.tsx'
 import { LoadingOverlay } from '@components/ui/LoadingOverlay.tsx'
+
+// Lazy-loaded dialogs — only fetched when opened
+const ExportDialog = lazy(() => import('@components/dialogs/ExportDialog.tsx').then(m => ({ default: m.ExportDialog })))
+const NewProjectDialog = lazy(() => import('@components/dialogs/NewProjectDialog.tsx').then(m => ({ default: m.NewProjectDialog })))
+const CanvasSizeDialog = lazy(() => import('@components/dialogs/CanvasSizeDialog.tsx').then(m => ({ default: m.CanvasSizeDialog })))
+const ShortcutsModal = lazy(() => import('@components/dialogs/ShortcutsModal.tsx').then(m => ({ default: m.ShortcutsModal })))
+const AboutModal = lazy(() => import('@components/dialogs/AboutModal.tsx').then(m => ({ default: m.AboutModal })))
 import { useEngine } from '@hooks/useEngine.ts'
 import { useKeyboardShortcuts } from '@hooks/useKeyboardShortcuts.ts'
 import { useBrushStore } from '@stores/brushStore.ts'
@@ -203,10 +205,10 @@ export default function App() {
   const handleExport = useCallback(async (options: ExportOptions) => {
     if (!manager) return
     try {
-      const pixels = manager.getCompositePixels()
-      if (!pixels) return
+      const result = manager.getCompositePixels()
+      if (!result) return
       if (options.format === 'png' || options.format === 'jpeg') {
-        const blob = await exportImage(pixels, canvasWidth, canvasHeight, {
+        const blob = await exportImage(result.pixels, result.width, result.height, {
           format: options.format,
           quality: options.jpegQuality,
         })
@@ -220,7 +222,7 @@ export default function App() {
       useUIStore.getState().addToast('Export failed', 'error')
     }
     useUIStore.getState().setShowExportDialog(false)
-  }, [manager, canvasWidth, canvasHeight, projectName])
+  }, [manager, projectName])
 
   // New project handler
   const handleNewProject = useCallback((name: string, width: number, height: number, dpi: number) => {
@@ -351,11 +353,15 @@ export default function App() {
           onDuplicateProject={() => {}}
           onRenameProject={() => {}}
         />
-        <NewProjectDialog
-          open={showNewProjectDialog}
-          onClose={() => useUIStore.getState().setShowNewProjectDialog(false)}
-          onCreate={handleNewProject}
-        />
+        <Suspense fallback={null}>
+          {showNewProjectDialog && (
+            <NewProjectDialog
+              open={showNewProjectDialog}
+              onClose={() => useUIStore.getState().setShowNewProjectDialog(false)}
+              onCreate={handleNewProject}
+            />
+          )}
+        </Suspense>
       </div>
     )
   }
@@ -422,35 +428,47 @@ export default function App() {
       </div>
       {fullscreen && <FullscreenHud manager={manager} />}
       <FilterDialogRouter onApply={handleFilterApply} onCancel={handleFilterCancel} />
-      <ExportDialog
-        open={showExportDialog}
-        projectName={projectName}
-        width={canvasWidth}
-        height={canvasHeight}
-        layerCount={manager?.layerManager.layers.length ?? 1}
-        onClose={() => useUIStore.getState().setShowExportDialog(false)}
-        onExport={handleExport}
-      />
-      <NewProjectDialog
-        open={showNewProjectDialog}
-        onClose={() => useUIStore.getState().setShowNewProjectDialog(false)}
-        onCreate={handleNewProject}
-      />
-      <CanvasSizeDialog
-        open={showCanvasSizeDialog}
-        currentWidth={canvasWidth}
-        currentHeight={canvasHeight}
-        onClose={() => useUIStore.getState().setShowCanvasSizeDialog(false)}
-        onResize={handleCanvasResize}
-      />
-      <ShortcutsModal
-        open={showShortcutsModal}
-        onClose={() => useUIStore.getState().setShowShortcutsModal(false)}
-      />
-      <AboutModal
-        open={showAboutModal}
-        onClose={() => useUIStore.getState().setShowAboutModal(false)}
-      />
+      <Suspense fallback={null}>
+        {showExportDialog && (
+          <ExportDialog
+            open={showExportDialog}
+            projectName={projectName}
+            width={canvasWidth}
+            height={canvasHeight}
+            layerCount={manager?.layerManager.layers.length ?? 1}
+            onClose={() => useUIStore.getState().setShowExportDialog(false)}
+            onExport={handleExport}
+          />
+        )}
+        {showNewProjectDialog && (
+          <NewProjectDialog
+            open={showNewProjectDialog}
+            onClose={() => useUIStore.getState().setShowNewProjectDialog(false)}
+            onCreate={handleNewProject}
+          />
+        )}
+        {showCanvasSizeDialog && (
+          <CanvasSizeDialog
+            open={showCanvasSizeDialog}
+            currentWidth={canvasWidth}
+            currentHeight={canvasHeight}
+            onClose={() => useUIStore.getState().setShowCanvasSizeDialog(false)}
+            onResize={handleCanvasResize}
+          />
+        )}
+        {showShortcutsModal && (
+          <ShortcutsModal
+            open={showShortcutsModal}
+            onClose={() => useUIStore.getState().setShowShortcutsModal(false)}
+          />
+        )}
+        {showAboutModal && (
+          <AboutModal
+            open={showAboutModal}
+            onClose={() => useUIStore.getState().setShowAboutModal(false)}
+          />
+        )}
+      </Suspense>
       {ctxMenu && (
         <ContextMenu
           items={canvasContextItems}

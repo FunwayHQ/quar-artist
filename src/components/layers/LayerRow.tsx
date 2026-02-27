@@ -73,6 +73,7 @@ export function LayerRow({
       onContextMenu={handleContextMenu}
       role="treeitem"
       aria-selected={isActive}
+      data-testid="layer-row"
     >
       <div className={styles.dragHandle} {...attributes} {...listeners}>
         <GripVertical size={14} />

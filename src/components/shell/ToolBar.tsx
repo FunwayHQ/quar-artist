@@ -43,6 +43,7 @@ export function ToolBar() {
                 data-active={activeTool === tool.id}
                 onClick={() => setTool(tool.id)}
                 aria-label={tool.label}
+                data-testid={`tool-${tool.id}`}
               >
                 <tool.icon size={20} />
               </button>
