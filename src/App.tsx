@@ -17,6 +17,7 @@ const NewProjectDialog = lazy(() => import('@components/dialogs/NewProjectDialog
 const CanvasSizeDialog = lazy(() => import('@components/dialogs/CanvasSizeDialog.tsx').then(m => ({ default: m.CanvasSizeDialog })))
 const ShortcutsModal = lazy(() => import('@components/dialogs/ShortcutsModal.tsx').then(m => ({ default: m.ShortcutsModal })))
 const AboutModal = lazy(() => import('@components/dialogs/AboutModal.tsx').then(m => ({ default: m.AboutModal })))
+const BrushStudio = lazy(() => import('@components/dialogs/BrushStudio.tsx').then(m => ({ default: m.BrushStudio })))
 import { useEngine } from '@hooks/useEngine.ts'
 import { useKeyboardShortcuts } from '@hooks/useKeyboardShortcuts.ts'
 import { useBrushStore } from '@stores/brushStore.ts'
@@ -42,6 +43,7 @@ export default function App() {
   const showShortcutsModal = useUIStore((s) => s.showShortcutsModal)
   const showAboutModal = useUIStore((s) => s.showAboutModal)
   const showCanvasSizeDialog = useUIStore((s) => s.showCanvasSizeDialog)
+  const showBrushStudio = useUIStore((s) => s.showBrushStudio)
   const fullscreen = useUIStore((s) => s.fullscreen)
   const panelsHidden = useUIStore((s) => s.panelsHidden)
   const leftPanelOpen = useUIStore((s) => s.leftPanelOpen)
@@ -466,6 +468,12 @@ export default function App() {
           <AboutModal
             open={showAboutModal}
             onClose={() => useUIStore.getState().setShowAboutModal(false)}
+          />
+        )}
+        {showBrushStudio && (
+          <BrushStudio
+            open={showBrushStudio}
+            onClose={() => useUIStore.getState().setShowBrushStudio(false)}
           />
         )}
       </Suspense>

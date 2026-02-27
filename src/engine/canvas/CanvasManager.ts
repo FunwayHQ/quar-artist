@@ -39,6 +39,19 @@ export class CanvasManager {
   private compositeScheduled = false
   private compositeRafId: number | null = null
 
+  /** Hand tool (pan) state */
+  private handPanState: { lastX: number; lastY: number } | null = null
+
+  /** Layer move tool state */
+  private layerMoveState: {
+    startCanvasX: number
+    startCanvasY: number
+    beforeSnapshot: LayerSnapshot
+    tempSprite: Sprite
+    tempTexture: Texture
+    layerId: string
+  } | null = null
+
   readonly viewTransform = new ViewTransform()
   readonly inputManager = new InputManager(this.viewTransform)
   readonly brushEngine = new BrushEngine()
@@ -386,6 +399,16 @@ export class CanvasManager {
   /** Set the active tool (called from React when toolStore changes). */
   setActiveTool(tool: ToolType) {
     this.activeTool = tool
+    // Update cursor based on tool
+    if (this.overlayCanvas) {
+      if (tool === 'move') {
+        this.overlayCanvas.style.cursor = 'grab'
+      } else if (tool === 'transform') {
+        this.overlayCanvas.style.cursor = 'move'
+      } else {
+        this.overlayCanvas.style.cursor = ''
+      }
+    }
   }
 
   /** Set the selection sub-tool type. */
@@ -628,6 +651,17 @@ export class CanvasManager {
   private handlePointerDown(ps: PointerState) {
     const canvasPoint = this.viewTransform.screenToCanvas(ps.x, ps.y)
 
+    if (this.activeTool === 'move') {
+      this.handPanState = { lastX: ps.x, lastY: ps.y }
+      if (this.overlayCanvas) this.overlayCanvas.style.cursor = 'grabbing'
+      return
+    }
+
+    if (this.activeTool === 'transform') {
+      this.startLayerMove(ps)
+      return
+    }
+
     if (this.activeTool === 'fill') {
       this.handleFloodFill(canvasPoint)
       return
@@ -657,6 +691,20 @@ export class CanvasManager {
   }
 
   private handlePointerMove(ps: PointerState, coalesced: PointerState[]) {
+    if (this.activeTool === 'move' && this.handPanState) {
+      const dx = ps.x - this.handPanState.lastX
+      const dy = ps.y - this.handPanState.lastY
+      this.handPanState.lastX = ps.x
+      this.handPanState.lastY = ps.y
+      this.viewTransform.pan(dx, dy)
+      return
+    }
+
+    if (this.activeTool === 'transform' && this.layerMoveState) {
+      this.updateLayerMove(ps)
+      return
+    }
+
     if (this.activeTool === 'selection') {
       const canvasPoint = this.viewTransform.screenToCanvas(ps.x, ps.y)
       this.selectionController.handlePointerMove(canvasPoint)
@@ -670,6 +718,17 @@ export class CanvasManager {
   }
 
   private handlePointerUp(ps: PointerState) {
+    if (this.activeTool === 'move' && this.handPanState) {
+      this.handPanState = null
+      if (this.overlayCanvas) this.overlayCanvas.style.cursor = 'grab'
+      return
+    }
+
+    if (this.activeTool === 'transform' && this.layerMoveState) {
+      this.finishLayerMove()
+      return
+    }
+
     if (this.activeTool === 'selection') {
       this.selectionController.handlePointerUp()
       this.commitSelectionUndo()
@@ -695,6 +754,102 @@ export class CanvasManager {
       extracted.pixels.byteLength,
     )
     this.selectionController.executeMagicWand(canvasPoint, pixels)
+  }
+
+  // ── Layer move tool ──────────────────────────────────────────────
+
+  private startLayerMove(ps: PointerState) {
+    if (!this.app) return
+    const layer = this.layerManager.getActiveLayer()
+    if (!layer) return
+
+    const canvasPoint = this.viewTransform.screenToCanvas(ps.x, ps.y)
+
+    // Extract current pixel data for undo
+    const extracted = this.app.renderer.extract.pixels({ target: layer.texture })
+    const before: LayerSnapshot = {
+      width: extracted.width,
+      height: extracted.height,
+      data: new Uint8Array(extracted.pixels.buffer, extracted.pixels.byteOffset, extracted.pixels.byteLength),
+    }
+
+    // Create a temporary canvas with the layer content
+    const canvas = document.createElement('canvas')
+    canvas.width = before.width
+    canvas.height = before.height
+    const ctx = canvas.getContext('2d')!
+    const imageData = new ImageData(
+      new Uint8ClampedArray(before.data.buffer, before.data.byteOffset, before.width * before.height * 4),
+      before.width,
+      before.height,
+    )
+    ctx.putImageData(imageData, 0, 0)
+
+    const tempTexture = Texture.from(canvas)
+    const tempSprite = new Sprite(tempTexture)
+
+    this.layerMoveState = {
+      startCanvasX: canvasPoint.x,
+      startCanvasY: canvasPoint.y,
+      beforeSnapshot: before,
+      tempSprite,
+      tempTexture,
+      layerId: layer.info.id,
+    }
+  }
+
+  private updateLayerMove(ps: PointerState) {
+    if (!this.app || !this.layerMoveState) return
+    const layer = this.layerManager.getLayerById(this.layerMoveState.layerId)
+    if (!layer) return
+
+    const canvasPoint = this.viewTransform.screenToCanvas(ps.x, ps.y)
+    const dx = canvasPoint.x - this.layerMoveState.startCanvasX
+    const dy = canvasPoint.y - this.layerMoveState.startCanvasY
+
+    // Position the temp sprite at the offset and render to layer texture
+    this.layerMoveState.tempSprite.position.set(dx, dy)
+    this.app.renderer.render({
+      container: this.layerMoveState.tempSprite,
+      target: layer.texture,
+      clear: true,
+    })
+
+    this.scheduleComposite()
+  }
+
+  private finishLayerMove() {
+    if (!this.app || !this.layerMoveState) return
+
+    this.flushComposite()
+
+    const layer = this.layerManager.getLayerById(this.layerMoveState.layerId)
+    if (layer) {
+      // Create after snapshot
+      const extracted = this.app.renderer.extract.pixels({ target: layer.texture })
+      const after: LayerSnapshot = {
+        width: extracted.width,
+        height: extracted.height,
+        data: new Uint8Array(extracted.pixels.buffer, extracted.pixels.byteOffset, extracted.pixels.byteLength),
+      }
+
+      // Push undo entry
+      const entry: LayerUndoEntry = {
+        type: 'layer',
+        layerId: this.layerMoveState.layerId,
+        before: this.layerMoveState.beforeSnapshot,
+        after,
+      }
+      this.brushEngine.undoManager.pushEntry(entry)
+
+      this.recomposite()
+      this.layerManager.updateThumbnails()
+    }
+
+    // Cleanup
+    this.layerMoveState.tempTexture.destroy(true)
+    this.layerMoveState.tempSprite.destroy()
+    this.layerMoveState = null
   }
 
   // ── Overlay render loop ───────────────────────────────────────────

@@ -31,7 +31,7 @@ describe('BrushControls', () => {
     expect(screen.getByText('Watercolor')).toBeInTheDocument()
     const presetButtons = screen.getAllByTitle(/.+/)
       .filter((el) => el.classList.toString().includes('presetButton'))
-    expect(presetButtons).toHaveLength(12)
+    expect(presetButtons).toHaveLength(13) // 12 presets + 1 gear button
   })
 
   it('marks active preset', () => {

@@ -6,13 +6,37 @@ import type { BlendMode } from '../../../types/layer.ts'
  */
 const QUAR_TO_PSD: Record<BlendMode, string> = {
   normal: 'normal',
+  // Darken
+  darken: 'darken',
   multiply: 'multiply',
+  colorBurn: 'color burn',
+  // Lighten
+  lighten: 'lighten',
   screen: 'screen',
+  colorDodge: 'color dodge',
+  add: 'linear dodge',
+  // Contrast
   overlay: 'overlay',
   softLight: 'soft light',
-  add: 'linear dodge',
+  hardLight: 'hard light',
+  vividLight: 'vivid light',
+  linearLight: 'linear light',
+  pinLight: 'pin light',
+  hardMix: 'hard mix',
+  // Comparative
+  difference: 'difference',
+  exclusion: 'exclusion',
+  subtract: 'subtract',
+  divide: 'divide',
+  // Component
+  hue: 'hue',
+  saturation: 'saturation',
   color: 'color',
   luminosity: 'luminosity',
+  // Special
+  darkerColor: 'darker color',
+  lighterColor: 'lighter color',
+  dissolve: 'dissolve',
 }
 
 const PSD_TO_QUAR: Record<string, BlendMode> = {}

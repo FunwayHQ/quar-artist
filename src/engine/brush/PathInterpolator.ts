@@ -1,3 +1,4 @@
+import { evaluatePressureCurve } from './PressureCurve.ts'
 import type { StrokePoint, StampPosition, BrushPreset } from '../../types/brush.ts'
 
 /**
@@ -86,14 +87,20 @@ export class PathInterpolator {
 
   private computeSize(pressure: number, preset: BrushPreset): number {
     if (!preset.pressureSizeEnabled) return preset.size
-    // Map pressure [0, 1] to [minSize, maxSize]
-    const p = Math.max(0, Math.min(1, pressure))
+    // Apply pressure curve mapping, then map to size range
+    const rawP = Math.max(0, Math.min(1, pressure))
+    const p = preset.pressureCurve
+      ? evaluatePressureCurve(rawP, preset.pressureCurve)
+      : rawP
     return preset.size * (0.2 + 0.8 * p)
   }
 
   private computeOpacity(pressure: number, preset: BrushPreset): number {
     if (!preset.pressureOpacityEnabled) return preset.opacity
-    const p = Math.max(0, Math.min(1, pressure))
+    const rawP = Math.max(0, Math.min(1, pressure))
+    const p = preset.pressureCurve
+      ? evaluatePressureCurve(rawP, preset.pressureCurve)
+      : rawP
     return preset.opacity * (0.1 + 0.9 * p)
   }
 }

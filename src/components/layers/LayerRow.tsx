@@ -4,7 +4,7 @@ import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { ContextMenu } from '@components/ui/ContextMenu.tsx'
 import type { LayerInfo, BlendMode } from '../../types/layer.ts'
-import { ALL_BLEND_MODES, BLEND_MODE_LABELS } from '../../types/layer.ts'
+import { BLEND_MODE_GROUPS, BLEND_MODE_LABELS } from '../../types/layer.ts'
 import styles from './LayerRow.module.css'
 
 interface LayerRowProps {
@@ -103,10 +103,14 @@ export function LayerRow({
             onClick={(e) => e.stopPropagation()}
             aria-label="Blend mode"
           >
-            {ALL_BLEND_MODES.map((mode) => (
-              <option key={mode} value={mode}>
-                {BLEND_MODE_LABELS[mode]}
-              </option>
+            {BLEND_MODE_GROUPS.map((group) => (
+              <optgroup key={group.label} label={group.label}>
+                {group.modes.map((mode) => (
+                  <option key={mode} value={mode}>
+                    {BLEND_MODE_LABELS[mode]}
+                  </option>
+                ))}
+              </optgroup>
             ))}
           </select>
           <input

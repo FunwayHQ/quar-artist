@@ -5,6 +5,7 @@ import { TileManager } from '../layers/TileManager.ts'
 import { UndoManager } from '../undo/UndoManager.ts'
 import { PerfMonitor } from '../perf/PerfMonitor.ts'
 import type { LayerSnapshot } from '../undo/UndoManager.ts'
+import { evaluatePressureCurve, LINEAR_CURVE } from './PressureCurve.ts'
 import type { StrokePoint, StampPosition, BrushPreset } from '../../types/brush.ts'
 import type { RGBAColor } from '../../types/color.ts'
 

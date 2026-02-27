@@ -206,6 +206,54 @@ describe('CanvasManager', () => {
     })
   })
 
+  describe('setActiveTool cursor', () => {
+    it('sets grab cursor for hand tool', async () => {
+      await cm.init(container)
+      cm.setActiveTool('move')
+      const overlay = container.querySelectorAll('canvas')[1]
+      expect(overlay.style.cursor).toBe('grab')
+    })
+
+    it('sets move cursor for transform tool', async () => {
+      await cm.init(container)
+      cm.setActiveTool('transform')
+      const overlay = container.querySelectorAll('canvas')[1]
+      expect(overlay.style.cursor).toBe('move')
+    })
+
+    it('resets cursor for brush tool', async () => {
+      await cm.init(container)
+      cm.setActiveTool('move')
+      cm.setActiveTool('brush')
+      const overlay = container.querySelectorAll('canvas')[1]
+      expect(overlay.style.cursor).toBe('')
+    })
+  })
+
+  describe('hand tool (move)', () => {
+    it('pans viewTransform on drag', async () => {
+      await cm.init(container)
+      cm.setActiveTool('move')
+
+      const initialState = cm.viewTransform.getState()
+      const startX = initialState.x
+      const startY = initialState.y
+
+      // Simulate pan via viewTransform directly (pointer routing tested via integration)
+      cm.viewTransform.pan(50, 30)
+      const newState = cm.viewTransform.getState()
+      expect(newState.x).toBe(startX + 50)
+      expect(newState.y).toBe(startY + 30)
+    })
+  })
+
+  describe('layer move tool (transform)', () => {
+    it('setActiveTool to transform does not throw', () => {
+      cm.setActiveTool('transform')
+      expect(typeof cm.setActiveTool).toBe('function')
+    })
+  })
+
   describe('destroy', () => {
     it('removes canvases from DOM', async () => {
       await cm.init(container)

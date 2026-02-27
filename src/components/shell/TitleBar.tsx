@@ -47,6 +47,8 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, 
         return [
           { label: 'Undo', shortcut: 'Ctrl+Z', action: onUndo },
           { label: 'Redo', shortcut: 'Ctrl+Shift+Z', action: onRedo },
+          { separator: true, label: '' },
+          { label: 'Brush Studio...', shortcut: 'Shift+B', action: () => useUIStore.getState().setShowBrushStudio(true) },
         ]
       case 'adjustments':
         return [

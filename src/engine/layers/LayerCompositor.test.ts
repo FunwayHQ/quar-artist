@@ -42,6 +42,7 @@ vi.mock('pixi.js', () => {
 
 import { RenderTexture, Sprite } from 'pixi.js'
 import { LayerCompositor } from './LayerCompositor.ts'
+import { ALL_BLEND_MODES } from '../../types/layer.ts'
 import type { Layer } from './LayerManager.ts'
 import type { LayerInfo } from '../../types/layer.ts'
 import { TileManager } from './TileManager.ts'
@@ -151,9 +152,8 @@ describe('LayerCompositor', () => {
       expect(mockApp.renderer.render).toHaveBeenCalled()
     })
 
-    it('handles all supported blend modes without error', () => {
-      const modes = ['normal', 'multiply', 'screen', 'overlay', 'softLight', 'add', 'color', 'luminosity'] as const
-      for (const mode of modes) {
+    it('handles all 26 blend modes without error', () => {
+      for (const mode of ALL_BLEND_MODES) {
         expect(() => {
           comp.composite([makeLayer({ id: `layer-${mode}`, blendMode: mode })])
         }).not.toThrow()

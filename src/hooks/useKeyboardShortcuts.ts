@@ -96,6 +96,9 @@ export function useKeyboardShortcuts({ manager, undo, redo, onOpenFilter }: UseK
             manager.syncBrushToActiveLayer()
           }
           break
+        case 'brush-studio':
+          useUIStore.getState().setShowBrushStudio(true)
+          break
       }
     },
     [manager, undo, redo, onOpenFilter],

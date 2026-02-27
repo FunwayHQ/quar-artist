@@ -57,6 +57,8 @@ export interface BrushPreset {
   shapeTextureId?: ShapeTextureId
   /** Optional grain texture ID for surface texture modulation */
   grainTextureId?: GrainTextureId
+  /** Pressure curve control points [cp1x, cp1y, cp2x, cp2y]. Default linear: [0.25, 0.25, 0.75, 0.75] */
+  pressureCurve?: [number, number, number, number]
 }
 
 export interface BrushState {

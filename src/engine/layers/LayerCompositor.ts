@@ -11,16 +11,44 @@ import { PerfMonitor } from '../perf/PerfMonitor.ts'
  * so that during painting fewer draws are needed (1 + active + foreground vs N).
  */
 
-/** Map our BlendMode type to PixiJS blend mode strings. */
+/** Map our BlendMode type to PixiJS blend mode strings.
+ *  Modes with native PixiJS support map directly.
+ *  Custom shader modes (vividLight, linearLight, etc.) fall back to 'normal'
+ *  here — the compositor detects them and uses the filter pipeline instead.
+ */
 const PIXI_BLEND_MAP: Record<BlendMode, string> = {
   normal: 'normal',
+  // Darken group
+  darken: 'darken',
   multiply: 'multiply',
+  colorBurn: 'color-burn',
+  // Lighten group
+  lighten: 'lighten',
   screen: 'screen',
+  colorDodge: 'color-dodge',
+  add: 'add',
+  // Contrast group
   overlay: 'overlay',
   softLight: 'soft-light',
-  add: 'add',
+  hardLight: 'hard-light',
+  vividLight: 'normal',    // custom shader
+  linearLight: 'normal',   // custom shader
+  pinLight: 'normal',      // custom shader
+  hardMix: 'normal',       // custom shader
+  // Comparative group
+  difference: 'difference',
+  exclusion: 'exclusion',
+  subtract: 'normal',      // custom shader
+  divide: 'normal',        // custom shader
+  // Component group
+  hue: 'hue',
+  saturation: 'saturation',
   color: 'color',
   luminosity: 'luminosity',
+  // Special
+  darkerColor: 'normal',   // custom shader
+  lighterColor: 'normal',  // custom shader
+  dissolve: 'normal',      // custom shader
 }
 export class LayerCompositor {
   private app: Application | null = null

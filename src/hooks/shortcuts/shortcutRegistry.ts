@@ -56,6 +56,9 @@ export const DEFAULT_SHORTCUTS: ShortcutDef[] = [
 
   // ── Layers ──
   { id: 'new-layer',        label: 'New layer',        category: 'layers', keys: 'ctrl+shift+n', action: 'new-layer' },
+
+  // ── Brush ──
+  { id: 'brush-studio',     label: 'Brush Studio',     category: 'tools', keys: 'shift+b',       action: 'brush-studio' },
 ]
 
 /** Shortcut category display labels */
