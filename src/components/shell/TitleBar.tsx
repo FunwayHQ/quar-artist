@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from 'react'
 import { DropdownMenu, type MenuItem } from './DropdownMenu.tsx'
 import { useUIStore } from '@stores/uiStore.ts'
 import { useProjectStore } from '@stores/projectStore.ts'
+import { useGuideStore } from '@stores/guideStore.ts'
 import type { CanvasManager } from '@engine/canvas/CanvasManager.ts'
 import type { FilterType } from '@app-types/filter.ts'
 import styles from './TitleBar.module.css'
@@ -15,7 +16,7 @@ interface TitleBarProps {
   manager?: CanvasManager | null
 }
 
-type MenuName = 'file' | 'edit' | 'adjustments' | 'selection' | 'help'
+type MenuName = 'file' | 'edit' | 'view' | 'adjustments' | 'selection' | 'help'
 
 export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, manager }: TitleBarProps) {
   const [openMenu, setOpenMenu] = useState<MenuName | null>(null)
@@ -50,6 +51,17 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, 
           { separator: true, label: '' },
           { label: 'Brush Studio...', shortcut: 'Shift+B', action: () => useUIStore.getState().setShowBrushStudio(true) },
         ]
+      case 'view': {
+        const gs = useGuideStore.getState()
+        return [
+          { label: gs.gridEnabled ? 'Hide Grid' : 'Show Grid', action: () => useGuideStore.getState().setGridEnabled(!gs.gridEnabled) },
+          { label: gs.isometricEnabled ? 'Hide Isometric Grid' : 'Show Isometric Grid', action: () => useGuideStore.getState().setIsometricEnabled(!gs.isometricEnabled) },
+          { label: gs.perspectiveEnabled ? 'Hide Perspective Guides' : 'Show Perspective Guides', action: () => useGuideStore.getState().setPerspectiveEnabled(!gs.perspectiveEnabled) },
+          { label: gs.symmetryEnabled ? 'Hide Symmetry' : 'Show Symmetry', action: () => useGuideStore.getState().setSymmetryEnabled(!gs.symmetryEnabled) },
+          { separator: true, label: '' },
+          { label: 'Drawing Guides...', shortcut: 'Shift+G', action: () => useUIStore.getState().setShowDrawingGuidesDialog(true) },
+        ]
+      }
       case 'adjustments':
         return [
           { label: 'Gaussian Blur...', action: () => onOpenFilter?.('gaussianBlur') },
@@ -76,6 +88,7 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, 
   const menus: { name: MenuName; label: string }[] = [
     { name: 'file', label: 'File' },
     { name: 'edit', label: 'Edit' },
+    { name: 'view', label: 'View' },
     { name: 'adjustments', label: 'Adjustments' },
     { name: 'selection', label: 'Selection' },
     { name: 'help', label: 'Help' },

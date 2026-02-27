@@ -76,25 +76,6 @@
   min-width: 0;
 }
 
-.blendSelect {
-  background: none;
-  border: none;
-  color: var(--color-text-tertiary);
-  font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
-  cursor: pointer;
-  padding: 0 2px;
-  outline: none;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.blendSelect option {
-  background: var(--color-bg-secondary);
-  color: var(--color-text-primary);
-}
 
 .opacityValue {
   font-family: var(--font-mono);

@@ -3,8 +3,8 @@ import { Eye, EyeOff, Lock, LockOpen, GripVertical, Paperclip } from 'lucide-rea
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { ContextMenu } from '@components/ui/ContextMenu.tsx'
+import { BlendModeDropdown } from './BlendModeDropdown.tsx'
 import type { LayerInfo, BlendMode } from '../../types/layer.ts'
-import { BLEND_MODE_GROUPS, BLEND_MODE_LABELS } from '../../types/layer.ts'
 import styles from './LayerRow.module.css'
 
 interface LayerRowProps {
@@ -96,23 +96,10 @@ export function LayerRow({
           aria-label={`Layer name: ${layer.name}`}
         />
         <div className={styles.meta}>
-          <select
-            className={styles.blendSelect}
+          <BlendModeDropdown
             value={layer.blendMode}
-            onChange={(e) => onBlendModeChange(e.target.value as BlendMode)}
-            onClick={(e) => e.stopPropagation()}
-            aria-label="Blend mode"
-          >
-            {BLEND_MODE_GROUPS.map((group) => (
-              <optgroup key={group.label} label={group.label}>
-                {group.modes.map((mode) => (
-                  <option key={mode} value={mode}>
-                    {BLEND_MODE_LABELS[mode]}
-                  </option>
-                ))}
-              </optgroup>
-            ))}
-          </select>
+            onChange={onBlendModeChange}
+          />
           <input
             type="range"
             className={styles.opacitySlider}

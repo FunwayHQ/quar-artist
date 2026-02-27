@@ -99,6 +99,9 @@ export function useKeyboardShortcuts({ manager, undo, redo, onOpenFilter }: UseK
         case 'brush-studio':
           useUIStore.getState().setShowBrushStudio(true)
           break
+        case 'toggle-guides':
+          useUIStore.getState().setShowDrawingGuidesDialog(true)
+          break
       }
     },
     [manager, undo, redo, onOpenFilter],

@@ -4,6 +4,7 @@ import { PathInterpolator } from './PathInterpolator.ts'
 import { TileManager } from '../layers/TileManager.ts'
 import { UndoManager } from '../undo/UndoManager.ts'
 import { PerfMonitor } from '../perf/PerfMonitor.ts'
+import type { SymmetryEngine } from '../guides/SymmetryEngine.ts'
 import type { LayerSnapshot } from '../undo/UndoManager.ts'
 import { evaluatePressureCurve, LINEAR_CURVE } from './PressureCurve.ts'
 import type { StrokePoint, StampPosition, BrushPreset } from '../../types/brush.ts'
@@ -30,6 +31,9 @@ export class BrushEngine {
 
   /** Cached post-stroke snapshot per layer — avoids redundant GPU readbacks. */
   private lastSnapshot = new Map<string, LayerSnapshot>()
+
+  /** Symmetry engine — when set, stamps are mirrored across symmetry axes. */
+  symmetryEngine: SymmetryEngine | null = null
 
   /** Reusable stamp graphics to minimize object allocation */
   private stampGraphics = new Graphics()
@@ -166,9 +170,17 @@ export class BrushEngine {
     }
   }
 
+  /** Get accumulated points from the current stroke (for QuickShape). */
+  getLastStrokePoints(): StrokePoint[] {
+    return this.interpolator.getAccumulatedPoints()
+  }
+
   /** Render stamp positions to the active layer texture. */
   private renderStamps(stamps: StampPosition[]) {
     if (!this.app || !this.activeLayerTexture || !this.activePreset) return
+
+    // Apply symmetry mirroring if enabled
+    const allStamps = this.symmetryEngine?.getMirroredStamps(stamps) ?? stamps
 
     const g = this.stampGraphics
     g.clear()
@@ -178,7 +190,7 @@ export class BrushEngine {
     const b = Math.round(this.color.b * 255)
     const hexColor = (r << 16) | (gVal << 8) | b
 
-    for (const stamp of stamps) {
+    for (const stamp of allStamps) {
       const halfSize = stamp.size / 2
 
       if (this.activePreset.hardness >= 0.9) {

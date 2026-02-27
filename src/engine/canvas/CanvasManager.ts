@@ -9,6 +9,9 @@ import { TransformManager } from '../transform/TransformManager.ts'
 import { FilterManager } from '../filters/FilterManager.ts'
 import { FloodFillTool } from '../tools/FloodFillTool.ts'
 import { EyedropperTool } from '../tools/EyedropperTool.ts'
+import { GuideManager } from '../guides/GuideManager.ts'
+import { SymmetryEngine } from '../guides/SymmetryEngine.ts'
+import { QuickShape, type DetectedShape } from '../tools/QuickShape.ts'
 import { createRenderer } from '../renderer.ts'
 import type { ViewState, PointerState, ToolType } from '../../types/engine.ts'
 import type { StrokePoint } from '../../types/brush.ts'
@@ -39,6 +42,13 @@ export class CanvasManager {
   private compositeScheduled = false
   private compositeRafId: number | null = null
 
+  /** VP dragging state for perspective guides */
+  private draggingVP: number | null = null
+
+  /** QuickShape hold timer state */
+  private quickShapeHoldTimer: ReturnType<typeof setTimeout> | null = null
+  private quickShapeHoldDetected = false
+
   /** Hand tool (pan) state */
   private handPanState: { lastX: number; lastY: number } | null = null
 
@@ -62,6 +72,9 @@ export class CanvasManager {
   readonly filterManager = new FilterManager()
   readonly floodFillTool = new FloodFillTool()
   readonly eyedropperTool = new EyedropperTool()
+  readonly guideManager = new GuideManager()
+  readonly symmetryEngine = new SymmetryEngine()
+  readonly quickShape = new QuickShape()
 
   private onColorSampled: ((color: RGBAColor) => void) | null = null
   private onViewChange: ((state: ViewState) => void) | null = null
@@ -74,6 +87,8 @@ export class CanvasManager {
   constructor() {
     // Initialize SelectionController with a default canvas size (resized later)
     this.selectionController = new SelectionController(1024, 768)
+    // Wire symmetry engine to brush engine
+    this.brushEngine.symmetryEngine = this.symmetryEngine
   }
 
   /**
@@ -304,6 +319,12 @@ export class CanvasManager {
   setDocumentSize(width: number, height: number) {
     this.documentWidth = width
     this.documentHeight = height
+
+    // Update symmetry center to document center by default
+    this.symmetryEngine.centerX = width / 2
+    this.symmetryEngine.centerY = height / 2
+    this.guideManager.symmetryCenterX = width / 2
+    this.guideManager.symmetryCenterY = height / 2
 
     // Resize layer textures and compositor to document dimensions
     if (this.app) {
@@ -651,6 +672,15 @@ export class CanvasManager {
   private handlePointerDown(ps: PointerState) {
     const canvasPoint = this.viewTransform.screenToCanvas(ps.x, ps.y)
 
+    // VP handle dragging (before tool routing)
+    if (this.guideManager.perspectiveEnabled) {
+      const vpIdx = this.guideManager.hitTestVP(canvasPoint.x, canvasPoint.y, this.viewTransform.getState().zoom)
+      if (vpIdx >= 0) {
+        this.draggingVP = vpIdx
+        return
+      }
+    }
+
     if (this.activeTool === 'move') {
       this.handPanState = { lastX: ps.x, lastY: ps.y }
       if (this.overlayCanvas) this.overlayCanvas.style.cursor = 'grabbing'
@@ -685,12 +715,22 @@ export class CanvasManager {
     }
 
     if (this.activeTool === 'brush' || this.activeTool === 'eraser') {
+      this.quickShapeHoldDetected = false
       this.handleStrokeStart(ps)
       return
     }
   }
 
   private handlePointerMove(ps: PointerState, coalesced: PointerState[]) {
+    // VP handle dragging
+    if (this.draggingVP !== null) {
+      const canvasPoint = this.viewTransform.screenToCanvas(ps.x, ps.y)
+      const points = [...this.guideManager.vanishingPoints]
+      points[this.draggingVP] = { x: canvasPoint.x, y: canvasPoint.y }
+      this.guideManager.vanishingPoints = points
+      return
+    }
+
     if (this.activeTool === 'move' && this.handPanState) {
       const dx = ps.x - this.handPanState.lastX
       const dy = ps.y - this.handPanState.lastY
@@ -713,11 +753,25 @@ export class CanvasManager {
 
     if (this.activeTool === 'brush' || this.activeTool === 'eraser') {
       this.handleStrokeMove(ps, coalesced)
+      // Reset QuickShape hold timer on each move
+      if (this.quickShapeEnabled) {
+        if (this.quickShapeHoldTimer) clearTimeout(this.quickShapeHoldTimer)
+        this.quickShapeHoldDetected = false
+        this.quickShapeHoldTimer = setTimeout(() => {
+          this.quickShapeHoldDetected = true
+        }, 300)
+      }
       return
     }
   }
 
   private handlePointerUp(ps: PointerState) {
+    // VP handle dragging finish
+    if (this.draggingVP !== null) {
+      this.draggingVP = null
+      return
+    }
+
     if (this.activeTool === 'move' && this.handPanState) {
       this.handPanState = null
       if (this.overlayCanvas) this.overlayCanvas.style.cursor = 'grab'
@@ -899,11 +953,14 @@ export class CanvasManager {
 
     ctx.restore()
 
-    // ── Canvas-space drawing (selection, etc.) ──
+    // ── Canvas-space drawing (guides, selection, etc.) ──
     ctx.save()
     ctx.translate(view.x, view.y)
     ctx.scale(view.zoom, view.zoom)
     ctx.rotate(view.rotation)
+
+    // Draw guides overlay (grid, perspective, symmetry) BEFORE selection
+    this.guideManager.drawOverlay(ctx, view.zoom, this.documentWidth, this.documentHeight)
 
     // Draw selection overlay (marching ants + tool preview)
     this.selectionController.drawOverlay(ctx, view.zoom)
@@ -956,13 +1013,72 @@ export class CanvasManager {
   }
 
   private handleStrokeEnd() {
+    // Clear QuickShape hold timer
+    if (this.quickShapeHoldTimer) {
+      clearTimeout(this.quickShapeHoldTimer)
+      this.quickShapeHoldTimer = null
+    }
+
     // Flush any pending RAF composite before stroke end snapshot
     this.flushComposite()
+
+    // QuickShape detection: if hold detected and feature enabled
+    if (this.quickShapeHoldDetected && this.quickShapeEnabled) {
+      const strokePoints = this.brushEngine.getLastStrokePoints()
+      if (strokePoints.length >= 3) {
+        const shape = this.quickShape.detect(strokePoints.map(p => ({ x: p.x, y: p.y })))
+        if (shape) {
+          this.applyQuickShape(shape)
+          return
+        }
+      }
+    }
+
     this.brushEngine.endStroke()
     // Recomposite after stroke completion
     this.recomposite()
     // Update layer thumbnails for the panel
     this.layerManager.updateThumbnails()
+  }
+
+  /** Whether QuickShape is enabled (set from React via guideStore sync). */
+  quickShapeEnabled = false
+
+  /** Apply a detected QuickShape: undo freehand stroke, render clean shape. */
+  private applyQuickShape(shape: DetectedShape) {
+    const preset = this.brushEngine['activePreset']
+    if (!preset) {
+      this.brushEngine.endStroke()
+      this.recomposite()
+      return
+    }
+
+    // End the freehand stroke
+    this.brushEngine.endStroke()
+
+    // Undo the freehand stroke
+    this.performUndo().then(() => {
+      // Generate shape stamps
+      const stamps = this.quickShape.generateShapeStamps(shape, preset.size, preset.spacing)
+      if (stamps.length === 0) return
+
+      // Begin a fresh stroke, render shape stamps, and end
+      const firstPt: StrokePoint = {
+        x: stamps[0].x,
+        y: stamps[0].y,
+        pressure: 0.5,
+        tiltX: 0,
+        tiltY: 0,
+        timestamp: performance.now(),
+      }
+      this.brushEngine.beginStroke(firstPt)
+      // Directly render all shape stamps via the brush engine
+      ;(this.brushEngine as any).renderStamps(stamps)
+      this.brushEngine.endStroke()
+
+      this.recomposite()
+      this.layerManager.updateThumbnails()
+    })
   }
 
   private applyViewTransform = (state: ViewState) => {

@@ -59,6 +59,9 @@ export const DEFAULT_SHORTCUTS: ShortcutDef[] = [
 
   // ── Brush ──
   { id: 'brush-studio',     label: 'Brush Studio',     category: 'tools', keys: 'shift+b',       action: 'brush-studio' },
+
+  // ── Guides ──
+  { id: 'drawing-guides',   label: 'Drawing Guides',   category: 'view', keys: 'shift+g',       action: 'toggle-guides' },
 ]
 
 /** Shortcut category display labels */

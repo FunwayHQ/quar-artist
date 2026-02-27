@@ -18,6 +18,7 @@ const CanvasSizeDialog = lazy(() => import('@components/dialogs/CanvasSizeDialog
 const ShortcutsModal = lazy(() => import('@components/dialogs/ShortcutsModal.tsx').then(m => ({ default: m.ShortcutsModal })))
 const AboutModal = lazy(() => import('@components/dialogs/AboutModal.tsx').then(m => ({ default: m.AboutModal })))
 const BrushStudio = lazy(() => import('@components/dialogs/BrushStudio.tsx').then(m => ({ default: m.BrushStudio })))
+const DrawingGuidesDialog = lazy(() => import('@components/dialogs/DrawingGuidesDialog.tsx').then(m => ({ default: m.DrawingGuidesDialog })))
 import { useEngine } from '@hooks/useEngine.ts'
 import { useKeyboardShortcuts } from '@hooks/useKeyboardShortcuts.ts'
 import { useBrushStore } from '@stores/brushStore.ts'
@@ -27,6 +28,7 @@ import { useSelectionStore } from '@stores/selectionStore.ts'
 import { useUIStore } from '@stores/uiStore.ts'
 import { useFilterStore } from '@stores/filterStore.ts'
 import { useProjectStore } from '@stores/projectStore.ts'
+import { useGuideStore } from '@stores/guideStore.ts'
 import { exportImage, downloadBlob } from './io/formats/image/ImageExporter.ts'
 import { getImageFromClipboard, getImageFromDrop, decodeImageBlob, pickImageFile } from './io/importImage.ts'
 import { hsbToRgba, rgbaToHsb } from '@app-types/color.ts'
@@ -44,6 +46,7 @@ export default function App() {
   const showAboutModal = useUIStore((s) => s.showAboutModal)
   const showCanvasSizeDialog = useUIStore((s) => s.showCanvasSizeDialog)
   const showBrushStudio = useUIStore((s) => s.showBrushStudio)
+  const showDrawingGuidesDialog = useUIStore((s) => s.showDrawingGuidesDialog)
   const fullscreen = useUIStore((s) => s.fullscreen)
   const panelsHidden = useUIStore((s) => s.panelsHidden)
   const leftPanelOpen = useUIStore((s) => s.leftPanelOpen)
@@ -153,6 +156,47 @@ export default function App() {
         manager.updateFilterPreview(state.params)
       }
     })
+    return unsub
+  }, [manager])
+
+  // Sync guide store to engine
+  useEffect(() => {
+    if (!manager) return
+    const syncGuides = () => {
+      const s = useGuideStore.getState()
+      const gm = manager.guideManager
+      const se = manager.symmetryEngine
+
+      gm.gridEnabled = s.gridEnabled
+      gm.gridSpacing = s.gridSpacing
+      gm.gridColor = s.gridColor
+      gm.gridOpacity = s.gridOpacity
+      gm.isometricEnabled = s.isometricEnabled
+      gm.isometricSpacing = s.isometricSpacing
+      gm.perspectiveEnabled = s.perspectiveEnabled
+      gm.perspectiveType = s.perspectiveType
+      gm.vanishingPoints = s.vanishingPoints
+      gm.horizonY = s.horizonY
+      gm.perspectiveLineCount = s.perspectiveLineCount
+      gm.symmetryEnabled = s.symmetryEnabled
+      gm.symmetryType = s.symmetryType
+      gm.symmetryAxes = s.symmetryAxes
+      gm.symmetryRotation = s.symmetryRotation
+      gm.symmetryCenterX = s.symmetryCenterX
+      gm.symmetryCenterY = s.symmetryCenterY
+      gm.symmetryColor = s.symmetryColor
+
+      se.enabled = s.symmetryEnabled
+      se.type = s.symmetryType
+      se.axes = s.symmetryAxes
+      se.rotation = s.symmetryRotation
+      se.centerX = s.symmetryCenterX
+      se.centerY = s.symmetryCenterY
+
+      manager.quickShapeEnabled = s.quickShapeEnabled
+    }
+    syncGuides()
+    const unsub = useGuideStore.subscribe(syncGuides)
     return unsub
   }, [manager])
 
@@ -474,6 +518,12 @@ export default function App() {
           <BrushStudio
             open={showBrushStudio}
             onClose={() => useUIStore.getState().setShowBrushStudio(false)}
+          />
+        )}
+        {showDrawingGuidesDialog && (
+          <DrawingGuidesDialog
+            open={showDrawingGuidesDialog}
+            onClose={() => useUIStore.getState().setShowDrawingGuidesDialog(false)}
           />
         )}
       </Suspense>

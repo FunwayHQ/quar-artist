@@ -14,6 +14,11 @@ export class PathInterpolator {
     this.distanceAccum = 0
   }
 
+  /** Get a copy of accumulated stroke points (for QuickShape detection). */
+  getAccumulatedPoints(): StrokePoint[] {
+    return [...this.points]
+  }
+
   /**
    * Add a new smoothed point and return any new stamp positions
    * that should be rendered based on the brush spacing.
