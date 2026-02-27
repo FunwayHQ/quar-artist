@@ -14,6 +14,7 @@ import {
 import { Plus, Merge, Lock, Scissors, Trash2 } from 'lucide-react'
 import { useLayerStore } from '@stores/layerStore.ts'
 import { LayerRow } from './LayerRow.tsx'
+import { Tooltip } from '@components/ui/Tooltip.tsx'
 import type { BlendMode } from '../../types/layer.ts'
 import type { CanvasManager } from '@engine/canvas/CanvasManager.ts'
 import styles from './LayersPanel.module.css'
@@ -141,40 +142,73 @@ export function LayersPanel({ manager }: LayersPanelProps) {
     [manager],
   )
 
+  const handleDuplicateLayer = useCallback(
+    (id: string) => {
+      if (!manager) return
+      manager.layerManager.duplicateLayer(id)
+      manager.syncBrushToActiveLayer()
+      manager.recomposite()
+    },
+    [manager],
+  )
+
+  const handleDeleteLayerById = useCallback(
+    (id: string) => {
+      if (!manager) return
+      manager.layerManager.deleteLayer(id)
+      manager.syncBrushToActiveLayer()
+      manager.recomposite()
+    },
+    [manager],
+  )
+
+  const handleMergeDownById = useCallback(
+    (id: string) => {
+      if (!manager) return
+      manager.layerManager.mergeDown(id)
+      manager.syncBrushToActiveLayer()
+      manager.recomposite()
+    },
+    [manager],
+  )
+
   return (
     <div className={`glass ${styles.panel}`} role="tree" aria-label="Layers">
       <div className={styles.header}>
         <span className={styles.title}>Layers</span>
         <div className={styles.headerActions}>
-          <button
-            className={styles.headerBtn}
-            onClick={handleAddLayer}
-            aria-label="Add layer"
-            title="Add layer"
-          >
-            <Plus size={16} />
-          </button>
-          <button
-            className={styles.headerBtn}
-            onClick={handleMergeDown}
-            aria-label="Merge down"
-            title="Merge down"
-            disabled={
-              !activeLayerId ||
-              layers.findIndex((l) => l.id === activeLayerId) === 0
-            }
-          >
-            <Merge size={16} />
-          </button>
-          <button
-            className={styles.headerBtn}
-            onClick={handleDeleteLayer}
-            aria-label="Delete layer"
-            title="Delete layer"
-            disabled={layers.length <= 1}
-          >
-            <Trash2 size={16} />
-          </button>
+          <Tooltip content="Add layer" shortcut="Ctrl+Shift+N" position="bottom">
+            <button
+              className={styles.headerBtn}
+              onClick={handleAddLayer}
+              aria-label="Add layer"
+            >
+              <Plus size={16} />
+            </button>
+          </Tooltip>
+          <Tooltip content="Merge down" position="bottom">
+            <button
+              className={styles.headerBtn}
+              onClick={handleMergeDown}
+              aria-label="Merge down"
+              disabled={
+                !activeLayerId ||
+                layers.findIndex((l) => l.id === activeLayerId) === 0
+              }
+            >
+              <Merge size={16} />
+            </button>
+          </Tooltip>
+          <Tooltip content="Delete layer" position="bottom">
+            <button
+              className={styles.headerBtn}
+              onClick={handleDeleteLayer}
+              aria-label="Delete layer"
+              disabled={layers.length <= 1}
+            >
+              <Trash2 size={16} />
+            </button>
+          </Tooltip>
         </div>
       </div>
 
@@ -188,24 +222,32 @@ export function LayersPanel({ manager }: LayersPanelProps) {
             items={displayLayers.map((l) => l.id)}
             strategy={verticalListSortingStrategy}
           >
-            {displayLayers.map((layer) => (
-              <LayerRow
-                key={layer.id}
-                layer={layer}
-                isActive={layer.id === activeLayerId}
-                onSelect={() => handleSelectLayer(layer.id)}
-                onToggleVisibility={() => handleToggleVisibility(layer.id)}
-                onOpacityChange={(op) => handleOpacityChange(layer.id, op)}
-                onBlendModeChange={(mode) =>
-                  handleBlendModeChange(layer.id, mode)
-                }
-                onRename={(name) => handleRename(layer.id, name)}
-                onToggleAlphaLock={() => handleToggleAlphaLock(layer.id)}
-                onToggleClippingMask={() =>
-                  handleToggleClippingMask(layer.id)
-                }
-              />
-            ))}
+            {displayLayers.map((layer) => {
+              const engineIdx = layers.findIndex((l) => l.id === layer.id)
+              return (
+                <LayerRow
+                  key={layer.id}
+                  layer={layer}
+                  isActive={layer.id === activeLayerId}
+                  canDelete={layers.length > 1}
+                  canMergeDown={engineIdx > 0}
+                  onSelect={() => handleSelectLayer(layer.id)}
+                  onToggleVisibility={() => handleToggleVisibility(layer.id)}
+                  onOpacityChange={(op) => handleOpacityChange(layer.id, op)}
+                  onBlendModeChange={(mode) =>
+                    handleBlendModeChange(layer.id, mode)
+                  }
+                  onRename={(name) => handleRename(layer.id, name)}
+                  onToggleAlphaLock={() => handleToggleAlphaLock(layer.id)}
+                  onToggleClippingMask={() =>
+                    handleToggleClippingMask(layer.id)
+                  }
+                  onDuplicate={() => handleDuplicateLayer(layer.id)}
+                  onDelete={() => handleDeleteLayerById(layer.id)}
+                  onMergeDown={() => handleMergeDownById(layer.id)}
+                />
+              )
+            })}
           </SortableContext>
         </DndContext>
       </div>

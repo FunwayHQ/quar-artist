@@ -74,6 +74,18 @@ export class ViewTransform {
     this.notify()
   }
 
+  /** Fit the document into the viewport with padding, centered */
+  fitToDocument(docW: number, docH: number, viewportW: number, viewportH: number) {
+    const padding = 40
+    const availW = viewportW - padding * 2
+    const availH = viewportH - padding * 2
+    const zoom = Math.min(availW / docW, availH / docH, 1)
+    const x = (viewportW - docW * zoom) / 2
+    const y = (viewportH - docH * zoom) / 2
+    this.state = { x, y, zoom, rotation: 0 }
+    this.notify()
+  }
+
   /** Convert screen point to canvas coordinates */
   screenToCanvas(screenX: number, screenY: number): { x: number; y: number } {
     const cos = Math.cos(-this.state.rotation)

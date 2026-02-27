@@ -60,9 +60,9 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, manager }: Titl
         ]
       case 'help':
         return [
-          { label: 'Keyboard Shortcuts', action: () => {} },
+          { label: 'Keyboard Shortcuts', shortcut: '?', action: () => useUIStore.getState().setShowShortcutsModal(true) },
           { separator: true, label: '' },
-          { label: 'About QUAR Artist', action: () => {} },
+          { label: 'About QUAR Artist', action: () => useUIStore.getState().setShowAboutModal(true) },
         ]
     }
   }

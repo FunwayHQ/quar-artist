@@ -14,6 +14,8 @@
 
 .leftPanel {
   flex-shrink: 0;
+  transition: width var(--duration-normal) var(--easing-default),
+    opacity var(--duration-normal) var(--easing-default);
 }
 
 .centerArea {
@@ -33,6 +35,8 @@
   -webkit-backdrop-filter: blur(12px) saturate(150%);
   flex-shrink: 0;
   overflow: hidden;
+  transition: width var(--duration-normal) var(--easing-default),
+    opacity var(--duration-normal) var(--easing-default);
 }
 
 .rightPanelHeader {
@@ -75,4 +79,19 @@
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
+}
+
+/* ── Responsive: medium screens ── */
+@media (max-width: 1024px) {
+  .rightPanel {
+    width: 220px;
+  }
+}
+
+/* ── Responsive: small screens ── */
+@media (max-width: 768px) {
+  .leftPanel,
+  .rightPanel {
+    display: none;
+  }
 }

@@ -1,6 +1,8 @@
+import { useState, useCallback } from 'react'
 import { Eye, EyeOff, Lock, LockOpen, GripVertical, Paperclip } from 'lucide-react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
+import { ContextMenu } from '@components/ui/ContextMenu.tsx'
 import type { LayerInfo, BlendMode } from '../../types/layer.ts'
 import { ALL_BLEND_MODES, BLEND_MODE_LABELS } from '../../types/layer.ts'
 import styles from './LayerRow.module.css'
@@ -8,6 +10,8 @@ import styles from './LayerRow.module.css'
 interface LayerRowProps {
   layer: LayerInfo
   isActive: boolean
+  canDelete: boolean
+  canMergeDown: boolean
   onSelect: () => void
   onToggleVisibility: () => void
   onOpacityChange: (opacity: number) => void
@@ -15,11 +19,16 @@ interface LayerRowProps {
   onRename: (name: string) => void
   onToggleAlphaLock: () => void
   onToggleClippingMask: () => void
+  onDuplicate: () => void
+  onDelete: () => void
+  onMergeDown: () => void
 }
 
 export function LayerRow({
   layer,
   isActive,
+  canDelete,
+  canMergeDown,
   onSelect,
   onToggleVisibility,
   onOpacityChange,
@@ -27,6 +36,9 @@ export function LayerRow({
   onRename,
   onToggleAlphaLock,
   onToggleClippingMask,
+  onDuplicate,
+  onDelete,
+  onMergeDown,
 }: LayerRowProps) {
   const {
     attributes,
@@ -36,6 +48,14 @@ export function LayerRow({
     transition,
     isDragging,
   } = useSortable({ id: layer.id })
+
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
+
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    setCtxMenu({ x: e.clientX, y: e.clientY })
+  }, [])
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -50,6 +70,7 @@ export function LayerRow({
       className={`${styles.row} ${isActive ? styles.active : ''}`}
       data-active={isActive}
       onClick={onSelect}
+      onContextMenu={handleContextMenu}
       role="treeitem"
       aria-selected={isActive}
     >
@@ -131,6 +152,23 @@ export function LayerRow({
           <Paperclip size={12} />
         </button>
       </div>
+
+      {ctxMenu && (
+        <ContextMenu
+          items={[
+            { label: 'Duplicate', action: onDuplicate },
+            { label: 'Delete', action: onDelete, disabled: !canDelete },
+            { label: '', separator: true },
+            { label: 'Merge Down', action: onMergeDown, disabled: !canMergeDown },
+            { label: '', separator: true },
+            { label: layer.alphaLock ? 'Unlock Alpha' : 'Lock Alpha', action: onToggleAlphaLock },
+            { label: layer.clippingMask ? 'Remove Clipping Mask' : 'Add Clipping Mask', action: onToggleClippingMask },
+          ]}
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          onClose={() => setCtxMenu(null)}
+        />
+      )}
     </div>
   )
 }

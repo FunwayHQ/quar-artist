@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from 'react'
+import { useRef, useState, useEffect, useCallback } from 'react'
 import { TitleBar } from '@components/shell/TitleBar.tsx'
 import { BrushControls } from '@components/shell/BrushControls.tsx'
 import { CanvasViewport } from '@components/shell/CanvasViewport.tsx'
@@ -8,7 +8,14 @@ import { FilterDialogRouter } from '@components/filters/FilterDialogRouter.tsx'
 import { ExportDialog } from '@components/dialogs/ExportDialog.tsx'
 import { NewProjectDialog } from '@components/dialogs/NewProjectDialog.tsx'
 import { GalleryView } from '@components/gallery/GalleryView.tsx'
+import { FullscreenHud } from '@components/shell/FullscreenHud.tsx'
+import { ToastContainer } from '@components/ui/ToastContainer.tsx'
+import { ShortcutsModal } from '@components/dialogs/ShortcutsModal.tsx'
+import { AboutModal } from '@components/dialogs/AboutModal.tsx'
+import { ContextMenu, type ContextMenuItem } from '@components/ui/ContextMenu.tsx'
+import { LoadingOverlay } from '@components/ui/LoadingOverlay.tsx'
 import { useEngine } from '@hooks/useEngine.ts'
+import { useKeyboardShortcuts } from '@hooks/useKeyboardShortcuts.ts'
 import { useBrushStore } from '@stores/brushStore.ts'
 import { useColorStore } from '@stores/colorStore.ts'
 import { useToolStore } from '@stores/toolStore.ts'
@@ -24,10 +31,16 @@ import styles from './App.module.css'
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null)
-  const { manager, undo, redo } = useEngine(containerRef)
+  const { manager, ready, undo, redo } = useEngine(containerRef)
   const rightPanelTab = useUIStore((s) => s.rightPanelTab)
   const showExportDialog = useUIStore((s) => s.showExportDialog)
   const showNewProjectDialog = useUIStore((s) => s.showNewProjectDialog)
+  const showShortcutsModal = useUIStore((s) => s.showShortcutsModal)
+  const showAboutModal = useUIStore((s) => s.showAboutModal)
+  const fullscreen = useUIStore((s) => s.fullscreen)
+  const panelsHidden = useUIStore((s) => s.panelsHidden)
+  const leftPanelOpen = useUIStore((s) => s.leftPanelOpen)
+  const rightPanelOpen = useUIStore((s) => s.rightPanelOpen)
   const appView = useProjectStore((s) => s.view)
   const canvasWidth = useProjectStore((s) => s.canvasWidth)
   const canvasHeight = useProjectStore((s) => s.canvasHeight)
@@ -106,6 +119,13 @@ export default function App() {
     })
   }, [manager])
 
+  // Sync document size to engine
+  useEffect(() => {
+    if (!manager) return
+    manager.setDocumentSize(canvasWidth, canvasHeight)
+    manager.fitToDocument()
+  }, [manager, canvasWidth, canvasHeight])
+
   // Wire filter store to engine: begin/update/apply/cancel
   useEffect(() => {
     if (!manager) return
@@ -182,10 +202,12 @@ export default function App() {
         })
         const ext = options.format === 'jpeg' ? 'jpg' : 'png'
         downloadBlob(blob, `${projectName}.${ext}`)
+        useUIStore.getState().addToast(`Exported ${projectName}.${ext}`, 'success')
       }
       // PSD and QART exports can be added here when needed
     } catch (err) {
       console.error('Export failed:', err)
+      useUIStore.getState().addToast('Export failed', 'error')
     }
     useUIStore.getState().setShowExportDialog(false)
   }, [manager, canvasWidth, canvasHeight, projectName])
@@ -206,107 +228,26 @@ export default function App() {
     useUIStore.getState().setShowNewProjectDialog(true)
   }, [])
 
-  // Keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Skip if typing in an input
-      const tag = (e.target as HTMLElement).tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+  // Keyboard shortcuts (declarative registry-based system)
+  useKeyboardShortcuts({ manager, undo, redo, onOpenFilter: handleOpenFilter })
 
-      const mod = e.ctrlKey || e.metaKey
+  // Canvas context menu
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
 
-      if (mod && e.key === 'z' && !e.shiftKey) {
-        e.preventDefault()
-        undo()
-      }
-      if (mod && e.key === 'z' && e.shiftKey) {
-        e.preventDefault()
-        redo()
-      }
-      if (mod && e.key === 'y') {
-        e.preventDefault()
-        redo()
-      }
-      // Select All — Ctrl+A
-      if (mod && e.key === 'a') {
-        e.preventDefault()
-        manager?.selectAll()
-      }
-      // Deselect — Ctrl+D
-      if (mod && e.key === 'd') {
-        e.preventDefault()
-        manager?.deselectAll()
-      }
-      // Invert Selection — Ctrl+Shift+I
-      if (mod && e.key === 'I' && e.shiftKey) {
-        e.preventDefault()
-        manager?.invertSelection()
-      }
-      // Curves — Ctrl+M
-      if (mod && e.key === 'm') {
-        e.preventDefault()
-        handleOpenFilter('curves')
-      }
-      // Export — Ctrl+E
-      if (mod && e.key === 'e' && !e.shiftKey) {
-        e.preventDefault()
-        useUIStore.getState().setShowExportDialog(true)
-      }
-      // New — Ctrl+N
-      if (mod && e.key === 'n') {
-        e.preventDefault()
-        useUIStore.getState().setShowNewProjectDialog(true)
-      }
-      // Save — Ctrl+S
-      if (mod && e.key === 's') {
-        e.preventDefault()
-        // Auto-save is already active; this is a manual trigger
-      }
-      // Swap colors — X
-      if (e.key === 'x' && !mod) {
-        useColorStore.getState().swapColors()
-      }
-      // Tool shortcuts (single key, no modifier)
-      if (!mod && !e.shiftKey && !e.altKey) {
-        switch (e.key) {
-          case 'b': useToolStore.getState().setTool('brush'); break
-          case 'e': useToolStore.getState().setTool('eraser'); break
-          case 'g': useToolStore.getState().setTool('fill'); break
-          case 'i': useToolStore.getState().setTool('eyedropper'); break
-          case 'v': useToolStore.getState().setTool('move'); break
-          case 'm': useToolStore.getState().setTool('selection'); break
-          case 't': useToolStore.getState().setTool('transform'); break
-        }
-      }
-    }
+  const handleCanvasContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    setCtxMenu({ x: e.clientX, y: e.clientY })
+  }, [])
 
-    const handleKeyDown2 = (e: KeyboardEvent) => {
-      // Alt hold → temporary eyedropper
-      if (e.key === 'Alt' && !e.repeat) {
-        const currentTool = useToolStore.getState().activeTool
-        if (currentTool !== 'eyedropper') {
-          useToolStore.getState().pushTool('eyedropper')
-        }
-      }
-    }
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'Alt') {
-        if (useToolStore.getState().activeTool === 'eyedropper') {
-          useToolStore.getState().popTool()
-        }
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown)
-    document.addEventListener('keydown', handleKeyDown2)
-    document.addEventListener('keyup', handleKeyUp)
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown)
-      document.removeEventListener('keydown', handleKeyDown2)
-      document.removeEventListener('keyup', handleKeyUp)
-    }
-  }, [undo, redo, manager, handleOpenFilter])
+  const canvasContextItems: ContextMenuItem[] = [
+    { label: 'Undo', shortcut: 'Ctrl+Z', action: undo },
+    { label: 'Redo', shortcut: 'Ctrl+Shift+Z', action: redo },
+    { label: '', separator: true },
+    { label: 'Select All', shortcut: 'Ctrl+A', action: () => manager?.selectAll() },
+    { label: 'Deselect', shortcut: 'Ctrl+D', action: () => manager?.deselectAll() },
+    { label: '', separator: true },
+    { label: 'Fit to Document', shortcut: 'Ctrl+0', action: () => manager?.fitToDocument() },
+  ]
 
   // Gallery view
   if (appView === 'gallery') {
@@ -328,48 +269,66 @@ export default function App() {
     )
   }
 
+  const showPanels = !fullscreen && !panelsHidden
+
   // Canvas view
   return (
-    <div className={styles.app}>
-      <TitleBar
-        onOpenFilter={handleOpenFilter}
-        onUndo={undo}
-        onRedo={redo}
-        manager={manager}
-      />
-      <BrushControls />
+    <>
+    {!ready && <LoadingOverlay />}
+    <div
+      className={styles.app}
+      data-fullscreen={fullscreen || undefined}
+      data-panels-hidden={panelsHidden || undefined}
+    >
+      {!fullscreen && (
+        <>
+          <TitleBar
+            onOpenFilter={handleOpenFilter}
+            onUndo={undo}
+            onRedo={redo}
+            manager={manager}
+          />
+          <BrushControls />
+        </>
+      )}
       <div className={styles.workspace}>
-        {/* Left: Layers panel */}
-        <div className={styles.leftPanel}>
-          <LayersPanel manager={manager} />
-        </div>
+        {showPanels && leftPanelOpen && (
+          <div className={styles.leftPanel}>
+            <LayersPanel manager={manager} />
+          </div>
+        )}
 
         {/* Center: Canvas */}
-        <CanvasViewport ref={containerRef} />
-
-        {/* Right: Properties panel (Color / Brush) */}
-        <div className={styles.rightPanel}>
-          <div className={styles.rightPanelHeader}>
-            <button
-              className={styles.rightPanelTab}
-              data-active={rightPanelTab === 'color'}
-              onClick={() => useUIStore.getState().setRightPanelTab('color')}
-            >
-              Color
-            </button>
-            <button
-              className={styles.rightPanelTab}
-              data-active={rightPanelTab === 'brush'}
-              onClick={() => useUIStore.getState().setRightPanelTab('brush')}
-            >
-              Brush
-            </button>
-          </div>
-          <div className={styles.rightPanelContent}>
-            {rightPanelTab === 'color' && <ColorPanel />}
-          </div>
+        {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
+        <div onContextMenu={handleCanvasContextMenu} style={{ flex: 1, minWidth: 0 }}>
+          <CanvasViewport ref={containerRef} />
         </div>
+
+        {showPanels && rightPanelOpen && (
+          <div className={styles.rightPanel}>
+            <div className={styles.rightPanelHeader}>
+              <button
+                className={styles.rightPanelTab}
+                data-active={rightPanelTab === 'color'}
+                onClick={() => useUIStore.getState().setRightPanelTab('color')}
+              >
+                Color
+              </button>
+              <button
+                className={styles.rightPanelTab}
+                data-active={rightPanelTab === 'brush'}
+                onClick={() => useUIStore.getState().setRightPanelTab('brush')}
+              >
+                Brush
+              </button>
+            </div>
+            <div className={styles.rightPanelContent}>
+              {rightPanelTab === 'color' && <ColorPanel />}
+            </div>
+          </div>
+        )}
       </div>
+      {fullscreen && <FullscreenHud manager={manager} />}
       <FilterDialogRouter onApply={handleFilterApply} onCancel={handleFilterCancel} />
       <ExportDialog
         open={showExportDialog}
@@ -385,6 +344,24 @@ export default function App() {
         onClose={() => useUIStore.getState().setShowNewProjectDialog(false)}
         onCreate={handleNewProject}
       />
+      <ShortcutsModal
+        open={showShortcutsModal}
+        onClose={() => useUIStore.getState().setShowShortcutsModal(false)}
+      />
+      <AboutModal
+        open={showAboutModal}
+        onClose={() => useUIStore.getState().setShowAboutModal(false)}
+      />
+      {ctxMenu && (
+        <ContextMenu
+          items={canvasContextItems}
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          onClose={() => setCtxMenu(null)}
+        />
+      )}
+      <ToastContainer />
     </div>
+    </>
   )
 }

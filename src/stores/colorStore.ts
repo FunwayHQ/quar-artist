@@ -14,6 +14,7 @@ interface ColorStore {
   setPrimary: (color: HSBColor) => void
   setSecondary: (color: HSBColor) => void
   swapColors: () => void
+  resetColors: () => void
   setHarmonyMode: (mode: HarmonyMode) => void
   addRecentColor: (color: HSBColor) => void
 
@@ -94,6 +95,11 @@ export const useColorStore = create<ColorStore>((set, get) => ({
     const { primary, secondary } = get()
     set({ primary: secondary, secondary: primary })
   },
+
+  resetColors: () => set({
+    primary: { h: 0, s: 0, b: 0 },    // Black
+    secondary: { h: 0, s: 0, b: 1 },  // White
+  }),
 
   setHarmonyMode: (mode) => set({ harmonyMode: mode }),
 

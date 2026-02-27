@@ -9,6 +9,9 @@ import {
   Hand,
 } from 'lucide-react'
 import { useToolStore } from '@stores/toolStore.ts'
+import { Tooltip } from '@components/ui/Tooltip.tsx'
+import { getToolShortcutKeys } from '@hooks/shortcuts/shortcutRegistry.ts'
+import { formatShortcutDisplay } from '@hooks/shortcuts/keyMatcher.ts'
 import type { ToolType } from '@app-types/engine.ts'
 import styles from './ToolBar.module.css'
 
@@ -28,20 +31,25 @@ export function ToolBar() {
 
   return (
     <nav className={styles.toolBar} role="toolbar" aria-label="Drawing tools">
-      {tools.map((tool, i) => (
-        <React.Fragment key={tool.id}>
-          {i === 4 && <div className={styles.divider} />}
-          <button
-            className={styles.tool}
-            data-active={activeTool === tool.id}
-            onClick={() => setTool(tool.id)}
-            aria-label={tool.label}
-            title={tool.label}
-          >
-            <tool.icon size={20} />
-          </button>
-        </React.Fragment>
-      ))}
+      {tools.map((tool, i) => {
+        const shortcutKeys = getToolShortcutKeys(tool.id)
+        const shortcutDisplay = shortcutKeys ? formatShortcutDisplay(shortcutKeys) : undefined
+        return (
+          <React.Fragment key={tool.id}>
+            {i === 4 && <div className={styles.divider} />}
+            <Tooltip content={tool.label} shortcut={shortcutDisplay} position="right">
+              <button
+                className={styles.tool}
+                data-active={activeTool === tool.id}
+                onClick={() => setTool(tool.id)}
+                aria-label={tool.label}
+              >
+                <tool.icon size={20} />
+              </button>
+            </Tooltip>
+          </React.Fragment>
+        )
+      })}
     </nav>
   )
 }

@@ -53,6 +53,9 @@ export class CanvasManager {
   private resizeObserver: ResizeObserver | null = null
   private container: HTMLElement | null = null
 
+  private documentWidth = 1024
+  private documentHeight = 768
+
   constructor() {
     // Initialize SelectionController with a default canvas size (resized later)
     this.selectionController = new SelectionController(1024, 768)
@@ -134,6 +137,9 @@ export class CanvasManager {
     this.resizeObserver = new ResizeObserver(this.handleResize)
     this.resizeObserver.observe(container)
     this.syncSize()
+
+    // Fit document into viewport on init
+    this.fitToDocument()
 
     // Initial composite
     this.recomposite()
@@ -241,6 +247,19 @@ export class CanvasManager {
       clear: true,
     })
     tex.destroy(true)
+  }
+
+  /** Set the document dimensions (for pasteboard boundary rendering). */
+  setDocumentSize(width: number, height: number) {
+    this.documentWidth = width
+    this.documentHeight = height
+  }
+
+  /** Fit document into the viewport, centering with padding. */
+  fitToDocument() {
+    if (!this.container) return
+    const { clientWidth: vw, clientHeight: vh } = this.container
+    this.viewTransform.fitToDocument(this.documentWidth, this.documentHeight, vw, vh)
   }
 
   // ── Tool state management ─────────────────────────────────────────
@@ -566,13 +585,41 @@ export class CanvasManager {
   private renderOverlay() {
     if (!this.overlayCtx || !this.overlayCanvas) return
     const ctx = this.overlayCtx
-    const w = this.overlayCanvas.width
-    const h = this.overlayCanvas.height
+    const dpr = window.devicePixelRatio || 1
+    const w = this.overlayCanvas.width / dpr
+    const h = this.overlayCanvas.height / dpr
 
-    ctx.clearRect(0, 0, w, h)
+    ctx.clearRect(0, 0, w * dpr, h * dpr)
 
-    // Apply view transform to overlay context for canvas-space drawing
+    // ── Draw pasteboard dimming using evenodd fill rule ──
     const view = this.viewTransform.getState()
+    ctx.save()
+
+    // Document rect in screen space
+    const dx = view.x
+    const dy = view.y
+    const dw = this.documentWidth * view.zoom
+    const dh = this.documentHeight * view.zoom
+
+    // Full viewport rect (clockwise) + document cutout rect (counter-clockwise)
+    ctx.beginPath()
+    ctx.rect(0, 0, w, h)
+    ctx.moveTo(dx + dw, dy)
+    ctx.lineTo(dx, dy)
+    ctx.lineTo(dx, dy + dh)
+    ctx.lineTo(dx + dw, dy + dh)
+    ctx.closePath()
+    ctx.fillStyle = 'rgba(0,0,0,0.35)'
+    ctx.fill('evenodd')
+
+    // Document border (1px screen-space)
+    ctx.strokeStyle = 'rgba(255,255,255,0.12)'
+    ctx.lineWidth = 1
+    ctx.strokeRect(dx, dy, dw, dh)
+
+    ctx.restore()
+
+    // ── Canvas-space drawing (selection, etc.) ──
     ctx.save()
     ctx.translate(view.x, view.y)
     ctx.scale(view.zoom, view.zoom)
