@@ -1021,54 +1021,437 @@ VERIFY:
 
 **Goal:** Grid, isometric, perspective, symmetry guides and QuickShape snapping.
 
-**LLM Prompt:**
+**Deliverables:**
+- GuideManager engine class rendering on the interactive overlay canvas
+- 2D Grid, Isometric Grid, 1-point and 2-point Perspective guides
+- Symmetry system (vertical, horizontal, quadrant, radial) that duplicates brush stamps in real-time
+- QuickShape: post-stroke shape detection and snapping with edit nodes
+- Drawing Guides dialog for configuring all guide types
+- Zustand guideStore for state management
+- Unit tests for all new engine classes
 
+**Key constraint:** Guides render on the overlay canvas (HTML Canvas 2D) — they never touch artwork pixels. Symmetry is the exception: it hooks into BrushEngine's stamp pipeline to duplicate stamps onto the artwork layer. QuickShape replaces the last stroke with perfect geometry (creates undo entry).
+
+## Execution Order Rationale
+
+Batch 1 (GuideManager + Grid) establishes the overlay rendering pipeline and store wiring. Batch 2 (Symmetry) is the most valuable drawing-assist feature and modifies BrushEngine. Batch 3 (Perspective) adds draggable handle interaction. Batch 4 (QuickShape) is independent post-stroke processing. Batch 5 (UI + tests) wires everything to React.
+
+---
+
+## Batch 1: GuideManager, Grid Guides & guideStore
+
+**Low risk, establishes foundation.** Grid is the simplest guide to render — just parallel lines.
+
+### New files:
+
+**`src/stores/guideStore.ts`** — Zustand store for all guide settings:
+```typescript
+import { create } from 'zustand'
+
+export type SymmetryType = 'vertical' | 'horizontal' | 'quadrant' | 'radial'
+export type PerspectiveType = '1-point' | '2-point'
+
+export interface GuideState {
+  // Grid
+  gridEnabled: boolean
+  gridSpacing: number         // pixels (default 32)
+  gridSnap: boolean           // snap brush strokes to grid intersections
+  gridColor: string           // default 'rgba(245, 158, 11, 0.3)'
+  gridOpacity: number         // 0-1 (default 0.3)
+
+  // Isometric
+  isometricEnabled: boolean
+  isometricSpacing: number    // pixels (default 32)
+  isometricColor: string
+
+  // Perspective
+  perspectiveEnabled: boolean
+  perspectiveType: PerspectiveType
+  vanishingPoints: { x: number; y: number }[]  // 1 or 2 points in canvas coords
+  horizonY: number            // Y position of horizon line (canvas coords)
+  perspectiveColor: string
+  perspectiveLineCount: number // radial lines per VP (default 12)
+
+  // Symmetry
+  symmetryEnabled: boolean
+  symmetryType: SymmetryType
+  symmetryAxes: number        // for radial mode (default 4)
+  symmetryRotation: number    // axis rotation in degrees (default 0)
+  symmetryCenterX: number     // center point X (canvas coords, default docW/2)
+  symmetryCenterY: number     // center point Y (canvas coords, default docH/2)
+  symmetryColor: string
+
+  // Actions
+  setGridEnabled: (v: boolean) => void
+  setGridSpacing: (v: number) => void
+  setGridSnap: (v: boolean) => void
+  setGridColor: (v: string) => void
+  setIsometricEnabled: (v: boolean) => void
+  setIsometricSpacing: (v: number) => void
+  setPerspectiveEnabled: (v: boolean) => void
+  setPerspectiveType: (v: PerspectiveType) => void
+  setVanishingPoint: (index: number, x: number, y: number) => void
+  setHorizonY: (v: number) => void
+  setPerspectiveLineCount: (v: number) => void
+  setSymmetryEnabled: (v: boolean) => void
+  setSymmetryType: (v: SymmetryType) => void
+  setSymmetryAxes: (v: number) => void
+  setSymmetryRotation: (v: number) => void
+  setSymmetryCenter: (x: number, y: number) => void
+  resetGuides: () => void
+}
 ```
-You are building QUAR Artist Sprint 11: drawing guides and QuickShape.
+Initial VP defaults: 1-point `[{x: docW/2, y: docH/3}]`, 2-point `[{x: docW*0.2, y: docH/2}, {x: docW*0.8, y: docH/2}]`.
 
-CONTEXT:
-- Phase 2, building on complete MVP
-- PRD section 4.6 (Drawing Assists & Shape Tools)
+**`src/engine/guides/GuideManager.ts`** — Orchestrates all guide rendering on the overlay canvas:
+```typescript
+export class GuideManager {
+  private gridEnabled = false
+  private gridSpacing = 32
+  private gridColor = 'rgba(245, 158, 11, 0.3)'
+  // ... other settings, set via setters called from React
 
-TASKS:
-1. Drawing guide system (src/engine/guides/):
-   - Guides render on the interactive canvas overlay (not on artwork)
-   - GuideManager.ts: manages active guide, renders on overlay canvas
-   - When a guide is active, brush stroke points are "snapped" or "assisted" toward guide geometry
-
-2. Implement guides:
-   - 2D Grid: configurable spacing (px), visible grid lines on overlay, optional snap-to-grid
-   - Isometric Grid: 30°/60° angled grid lines, snap brush to nearest grid line
-   - Perspective (1-point): single vanishing point, radial guide lines from VP, strokes gravitate toward VP lines
-   - Perspective (2-point): two VPs on horizon line, guides radiate from both
-   - Symmetry: vertical axis (mirror strokes left↔right), horizontal, quadrant (4-way), radial (N-fold)
-     - Symmetry works by duplicating each brush stamp mirrored across the axis/axes
-
-3. Guide rendering:
-   - Semi-transparent colored lines on interactive canvas
-   - Vanishing points as draggable handles
-   - Symmetry axis as draggable line
-   - Grid opacity and color configurable
-
-4. QuickShape (src/engine/tools/QuickShape.ts):
-   - Detect drawn shape after stroke completes (hold at end to trigger)
-   - Recognized shapes: line, rectangle, ellipse, triangle, arc, polygon
-   - Snap to perfect geometry (straight line, perfect circle, etc.)
-   - Show edit nodes on snapped shape for adjustment
-   - Filled or stroked, using current brush and color
-
-5. Guide settings UI:
-   - Drawing Guides panel/modal accessible from menu or toolbar
-   - Toggle each guide type on/off
-   - Configure parameters (grid spacing, VP positions, symmetry axis count)
-
-VERIFY:
-- 2D grid visible on canvas, strokes snap to grid when enabled
-- Perspective 1-pt: vanishing point draggable, strokes follow radial lines
-- Symmetry vertical: drawing on left half mirrors to right in real-time
-- Radial symmetry with 6 axes creates mandala-like patterns
-- QuickShape: draw rough circle → hold → snaps to perfect ellipse with edit handles
+  /**
+   * Called once per frame from CanvasManager.renderOverlay().
+   * ctx is already transformed to canvas-space (translated + scaled + rotated).
+   */
+  drawOverlay(ctx: CanvasRenderingContext2D, zoom: number, docW: number, docH: number): void {
+    if (this.gridEnabled) this.drawGrid(ctx, zoom, docW, docH)
+    if (this.isometricEnabled) this.drawIsometricGrid(ctx, zoom, docW, docH)
+    if (this.perspectiveEnabled) this.drawPerspective(ctx, zoom, docW, docH)
+    if (this.symmetryEnabled) this.drawSymmetryAxis(ctx, zoom, docW, docH)
+  }
+}
 ```
+
+**Grid rendering** — `drawGrid()`:
+- Vertical lines from x=0 to x=docW at `gridSpacing` intervals
+- Horizontal lines from y=0 to y=docH at `gridSpacing` intervals
+- Line width: `1 / zoom` (constant 1px screen width regardless of zoom level)
+- Color from `gridColor` setting
+- Skip lines outside the visible viewport (performance optimization: compute visible range from ctx transform)
+
+**Isometric grid** — `drawIsometricGrid()`:
+- 30° and 150° angled lines through the document
+- Same spacing control as 2D grid
+- Horizontal baseline rows at `spacing * sin(30°)` intervals
+
+### Files to modify:
+
+**`src/engine/canvas/CanvasManager.ts`**:
+- Add `readonly guideManager = new GuideManager()` field
+- In `renderOverlay()`, call `this.guideManager.drawOverlay(ctx, view.zoom, this.documentWidth, this.documentHeight)` inside the canvas-space save/restore block, after document border, before selection overlay
+- Add setter methods: `setGridEnabled()`, `setGridSpacing()`, etc. that delegate to `guideManager`
+
+**`src/hooks/useKeyboardShortcuts.ts`** — Add `Shift+G` shortcut to toggle guide dialog.
+
+**`src/hooks/shortcuts/shortcutRegistry.ts`** — Register `{ id: 'toggle-guides', label: 'Drawing Guides', category: 'view', keys: 'shift+g', action: 'toggle-guides' }`.
+
+### Tests:
+- `guideStore.test.ts` — Store actions and default values
+- `GuideManager.test.ts` — `drawOverlay()` calls sub-methods only when enabled; grid line calculation logic
+
+---
+
+## Batch 2: Symmetry System
+
+**High value.** Real-time brush stamp mirroring — the most impactful drawing assist feature.
+
+### How symmetry works:
+
+Symmetry does NOT render mirrored strokes post-hoc. It hooks into the brush stamp pipeline to **duplicate each stamp** across the symmetry axes before rendering. This means the mirrored content is painted directly onto the layer (it's real artwork, not a visual overlay).
+
+### New files:
+
+**`src/engine/guides/SymmetryEngine.ts`** — Pure math, computes mirrored stamp positions:
+```typescript
+import type { StampPosition } from '../brush/PathInterpolator.ts'
+
+export type SymmetryType = 'vertical' | 'horizontal' | 'quadrant' | 'radial'
+
+export class SymmetryEngine {
+  private enabled = false
+  private type: SymmetryType = 'vertical'
+  private axes = 4           // for radial
+  private rotation = 0       // degrees
+  private centerX = 512
+  private centerY = 384
+
+  /** Given a set of stamps, return the full set including all mirrored copies. */
+  getMirroredStamps(stamps: StampPosition[]): StampPosition[] {
+    if (!this.enabled) return stamps
+
+    switch (this.type) {
+      case 'vertical':
+        return this.mirrorVertical(stamps)
+      case 'horizontal':
+        return this.mirrorHorizontal(stamps)
+      case 'quadrant':
+        return this.mirrorQuadrant(stamps)
+      case 'radial':
+        return this.mirrorRadial(stamps)
+    }
+  }
+}
+```
+
+**Symmetry math:**
+
+- **Vertical**: Mirror each stamp across x = centerX → `mirroredX = 2 * centerX - stamp.x`, `rotation = -stamp.rotation`
+- **Horizontal**: Mirror across y = centerY → `mirroredY = 2 * centerY - stamp.y`
+- **Quadrant**: Apply both vertical and horizontal → 4 copies total (original + 3 mirrors)
+- **Radial (N-fold)**: For N axes, rotate each stamp by `360°/N * k` for k=1..N-1 around (centerX, centerY):
+  ```
+  angle = 2π * k / N + rotationRad
+  dx = stamp.x - centerX
+  dy = stamp.y - centerY
+  mirroredX = centerX + dx * cos(angle) - dy * sin(angle)
+  mirroredY = centerY + dx * sin(angle) + dy * cos(angle)
+  ```
+  Plus optional reflection across each axis for true kaleidoscope effect.
+
+### Files to modify:
+
+**`src/engine/brush/BrushEngine.ts`** — Hook symmetry into stamp rendering:
+- Add `symmetryEngine: SymmetryEngine` property (public, set from CanvasManager)
+- In `renderStamps(stamps)`, before the rendering loop:
+  ```typescript
+  const allStamps = this.symmetryEngine.getMirroredStamps(stamps)
+  // render allStamps instead of stamps
+  ```
+- Symmetry engine returns original stamps + mirrored copies, so original strokes are unaffected.
+
+**`src/engine/canvas/CanvasManager.ts`**:
+- Create `SymmetryEngine` instance, set on `brushEngine`
+- Wire symmetry settings from guideStore to SymmetryEngine setters
+
+**`src/engine/guides/GuideManager.ts`** — `drawSymmetryAxis()`:
+- Render the symmetry axis line(s) on the overlay canvas
+- Vertical: single vertical line at centerX
+- Horizontal: single horizontal line at centerY
+- Quadrant: cross at center
+- Radial: N lines from center at `360°/N` intervals, rotated by `symmetryRotation`
+- Axis styling: dashed line, semi-transparent accent color, `1/zoom` width
+
+### Tests:
+- `SymmetryEngine.test.ts`:
+  - Vertical: stamp at (100, 200) with center 512 → mirrored at (924, 200)
+  - Horizontal: stamp at (100, 200) with center 384 → mirrored at (100, 568)
+  - Quadrant: 1 stamp → 4 stamps (original + 3 mirrors)
+  - Radial (6-fold): 1 stamp → 6 stamps
+  - Disabled: returns original stamps unchanged
+
+---
+
+## Batch 3: Perspective Guides
+
+**Medium complexity.** Renders radial guide lines from vanishing points. Optional: stroke snapping to nearest perspective line.
+
+### Files to modify:
+
+**`src/engine/guides/GuideManager.ts`** — Add `drawPerspective()`:
+
+**1-point perspective:**
+- Single VP at `vanishingPoints[0]`
+- Draw `perspectiveLineCount` radial lines from VP through the document bounds
+- Lines evenly distributed around the VP (angles computed to fill visible area)
+- Horizon line at `horizonY`
+- VP rendered as a draggable circle handle
+
+**2-point perspective:**
+- Two VPs on the horizon line
+- Radial lines from each VP, distributed to cover the document
+- Lines from VP1 angle left-to-right, lines from VP2 angle right-to-left
+- Horizon line connecting both VPs
+
+**Perspective rendering math:**
+```typescript
+// For each VP, cast N radial lines to the document edges
+for (let i = 0; i < lineCount; i++) {
+  const angle = (i / lineCount) * Math.PI  // spread across 180° facing canvas
+  const dx = Math.cos(angle)
+  const dy = Math.sin(angle)
+  // Find intersection with document edges (top, bottom, left, right)
+  // Draw line from VP to intersection point
+}
+```
+
+**VP handles:**
+- Circle at VP position (radius 8/zoom for constant screen size)
+- White fill with amber border
+- Interaction: handled by a new method `handleGuidePointerDown/Move/Up` in CanvasManager
+- Only active when perspective is enabled — check if click is within VP handle radius
+
+### Files to modify:
+
+**`src/engine/canvas/CanvasManager.ts`**:
+- In `handlePointerDown()`: Before tool routing, check if perspective is enabled and click is on a VP handle → start VP drag (take priority over tool actions)
+- Track `draggingVP: number | null` state (index of VP being dragged, or null)
+- In `handlePointerMove()`: if dragging VP, update its position in canvas coords
+- In `handlePointerUp()`: stop VP drag, sync position to guideStore
+
+### Tests:
+- `GuideManager.test.ts` — Perspective line intersection with document bounds
+- VP hit-testing: point within handle radius → detected
+
+---
+
+## Batch 4: QuickShape
+
+**Shape detection and snapping** — activates when the user holds their pen/mouse still at the end of a stroke.
+
+### New files:
+
+**`src/engine/tools/QuickShape.ts`** — Shape detection engine:
+```typescript
+export interface DetectedShape {
+  type: 'line' | 'rectangle' | 'ellipse' | 'triangle' | 'polygon'
+  points: { x: number; y: number }[]  // key points (corners, center+radii, etc.)
+  confidence: number                   // 0-1, how well the drawn stroke matches
+}
+
+export class QuickShape {
+  /**
+   * Analyze a completed stroke path and detect if it matches a geometric shape.
+   * Returns the best match above the confidence threshold, or null.
+   */
+  detect(points: { x: number; y: number }[]): DetectedShape | null
+
+  /**
+   * Generate the stamp positions to render the detected shape.
+   * Uses the current brush settings (size, opacity) to render perfect geometry.
+   */
+  generateShapeStamps(shape: DetectedShape, brushSize: number, spacing: number): StampPosition[]
+}
+```
+
+**Shape detection algorithms:**
+
+1. **Line detection**: Compute perpendicular distance of all points from the line connecting first→last point. If max distance < threshold (e.g., 15px), it's a line. Confidence = 1 - (avgDist / maxAllowedDist).
+
+2. **Ellipse detection**: Fit axis-aligned bounding box. Compute distance of each point from the ideal ellipse perimeter. If RMS error < threshold, it's an ellipse. If aspect ratio ≈ 1, snap to circle.
+
+3. **Rectangle detection**: Find 4 corner candidates (points of maximum curvature). Check: 4 roughly-right angles, roughly-equal opposite sides. Snap to perfect rectangle.
+
+4. **Triangle detection**: Find 3 corner candidates. Check: 3 sides roughly straight between corners.
+
+5. **Polygon detection**: Detect N corners via Douglas-Peucker simplification. If simplified path has 3-8 vertices with roughly straight segments between them, snap to regular or irregular polygon.
+
+**Detection priority:** Line > Triangle > Rectangle > Ellipse > Polygon (most specific wins).
+
+**Trigger mechanism:**
+- After `BrushEngine.endStroke()`, check if the pointer was stationary for >300ms at the end (compare last few points' timestamps)
+- If hold detected → run shape detection on the stroke path
+- If shape detected with confidence > 0.6 → show shape preview on overlay
+- User can tap to confirm or continue drawing to dismiss
+
+### Files to modify:
+
+**`src/engine/canvas/CanvasManager.ts`**:
+- After `handleStrokeEnd()`, if QuickShape is enabled:
+  1. Retrieve the stroke points from PathInterpolator (need to expose them)
+  2. Check hold-at-end condition
+  3. Run `quickShape.detect(points)`
+  4. If shape detected, enter "shape edit" mode:
+     - Undo the freehand stroke
+     - Render the snapped shape as a new stroke
+     - Push new undo entry
+- Add `quickShapeEnabled: boolean` flag, settable from React
+
+**`src/engine/brush/PathInterpolator.ts`**:
+- Expose `getStrokePoints(): { x: number; y: number }[]` — returns the raw smoothed points of the current stroke for shape detection.
+
+**`src/engine/brush/BrushEngine.ts`**:
+- Expose `getLastStrokePoints()` that delegates to PathInterpolator.
+
+### Tests:
+- `QuickShape.test.ts`:
+  - Line: nearly-collinear points → detected as line
+  - Circle: points arranged in rough circle → detected as ellipse with aspect ≈ 1
+  - Rectangle: 4-corner path → detected as rectangle
+  - Noisy scribble → returns null (no match)
+  - Confidence thresholds work correctly
+
+---
+
+## Batch 5: Drawing Guides Dialog & Integration
+
+### New files:
+
+**`src/components/dialogs/DrawingGuidesDialog.tsx`** — Modal dialog (lazy-loaded):
+- Follows BrushStudio/FilterDialog pattern: overlay + glass panel dialog
+- Left sidebar: list of guide types (Grid, Isometric, Perspective, Symmetry)
+- Right content: settings panel for selected guide type
+- Each guide has an enable/disable toggle at the top
+- Settings:
+  - **Grid**: Spacing slider (8-256px), snap toggle, color picker, opacity slider
+  - **Isometric**: Spacing slider, color picker
+  - **Perspective**: Type toggle (1-pt / 2-pt), line count slider (4-24), color picker. VP positions not editable here — drag on canvas instead.
+  - **Symmetry**: Type selector (vertical/horizontal/quadrant/radial), axes count (2-16 for radial), rotation slider (0-360°), center position display
+- QuickShape section at bottom: enable/disable toggle
+- Footer: Close button
+
+**`src/components/dialogs/DrawingGuidesDialog.module.css`** — Glass panel styling matching BrushStudio pattern.
+
+### Files to modify:
+
+**`src/stores/uiStore.ts`** — Add `showDrawingGuides: boolean` + `setShowDrawingGuides()`.
+
+**`src/App.tsx`** — Lazy-load and render `<DrawingGuidesDialog>` from `uiStore.showDrawingGuides`.
+
+**`src/components/shell/TitleBar.tsx`** — Add "Drawing Guides" to Edit menu or new "View" menu item. Also add `Shift+G` hint text.
+
+**`src/hooks/useKeyboardShortcuts.ts`** — Wire `toggle-guides` action to `uiStore.setShowDrawingGuides(toggle)`.
+
+**`src/components/shell/BrushControls.tsx`** — When symmetry is enabled, show a small indicator badge on the options bar (e.g., "SYM 4x" text).
+
+### Tests:
+- `DrawingGuidesDialog.test.tsx`:
+  - Renders nothing when closed
+  - Shows dialog when open
+  - Grid toggle enables/disables grid
+  - Symmetry type selector changes type
+  - Close button calls onClose
+- `guideStore.test.ts`:
+  - All setters update state
+  - `resetGuides()` returns to defaults
+
+---
+
+## Key Files Reference
+
+| File | Role |
+|------|------|
+| `src/stores/guideStore.ts` | Zustand store for all guide settings |
+| `src/engine/guides/GuideManager.ts` | Orchestrates overlay rendering for all guide types |
+| `src/engine/guides/SymmetryEngine.ts` | Pure math for stamp mirroring (vertical/horizontal/quadrant/radial) |
+| `src/engine/tools/QuickShape.ts` | Post-stroke shape detection and snapping |
+| `src/engine/canvas/CanvasManager.ts` | Wires guides to overlay loop, VP dragging, QuickShape trigger |
+| `src/engine/brush/BrushEngine.ts` | Symmetry stamp duplication hook in renderStamps() |
+| `src/engine/brush/PathInterpolator.ts` | Expose stroke points for QuickShape detection |
+| `src/components/dialogs/DrawingGuidesDialog.tsx` | UI for configuring all guide types |
+| `src/hooks/shortcuts/shortcutRegistry.ts` | Shift+G shortcut |
+
+---
+
+## Verification
+
+1. `npx vitest run` — All existing 951+ tests pass + new tests pass
+2. `npx tsc --noEmit` — No TypeScript errors
+3. Browser manual testing:
+   - Toggle 2D grid on → grid lines visible on canvas overlay, follow zoom/pan
+   - Toggle isometric grid → 30°/60° lines visible
+   - Enable 1-point perspective → radial lines from VP, drag VP to reposition
+   - Enable 2-point perspective → two VPs with radiating lines, horizon line
+   - Enable vertical symmetry → draw on left side, stroke mirrors to right in real-time
+   - Enable radial symmetry (6-fold) → draw anywhere, 6 rotated copies appear
+   - QuickShape: draw rough circle and hold → snaps to perfect ellipse
+   - QuickShape: draw rough line and hold → snaps to straight line
+   - Drawing Guides dialog: all toggles and sliders update guides in real-time
+   - Guides disappear when disabled, reappear when re-enabled
+   - Symmetry strokes are undoable (undo removes both original and mirrored content)
+   - VP handles scale correctly at different zoom levels
+4. `npx vite build` — Production build succeeds
 
 ---
 

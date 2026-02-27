@@ -39,17 +39,17 @@ export function ColorDisc({ color, harmonyMode, onChange }: ColorDiscProps) {
     const outerR = size / 2 - 1
     const innerR = outerR - RING_WIDTH
 
-    // Draw hue ring
-    for (let angle = 0; angle < 360; angle += 1) {
-      const rad = (angle - 90) * (Math.PI / 180)
-      const nextRad = (angle - 89) * (Math.PI / 180)
-      ctx.beginPath()
-      ctx.arc(cx, cy, outerR, rad, nextRad)
-      ctx.arc(cx, cy, innerR, nextRad, rad, true)
-      ctx.closePath()
-      ctx.fillStyle = `hsl(${angle}, 100%, 50%)`
-      ctx.fill()
+    // Draw hue ring using conic gradient for smooth color transitions
+    const conicGrad = ctx.createConicGradient(-Math.PI / 2, cx, cy)
+    for (let i = 0; i <= 12; i++) {
+      conicGrad.addColorStop(i / 12, `hsl(${i * 30}, 100%, 50%)`)
     }
+    ctx.beginPath()
+    ctx.arc(cx, cy, outerR, 0, Math.PI * 2)
+    ctx.arc(cx, cy, innerR, Math.PI * 2, 0, true)
+    ctx.closePath()
+    ctx.fillStyle = conicGrad
+    ctx.fill()
 
     // Draw hue indicator
     const hueRad = (color.h - 90) * (Math.PI / 180)
