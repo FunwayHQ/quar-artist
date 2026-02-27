@@ -44,6 +44,10 @@ export class BrushEngine {
     this.color = color
   }
 
+  getColor(): RGBAColor {
+    return this.color
+  }
+
   setActiveLayerTexture(texture: RenderTexture) {
     this.activeLayerTexture = texture
   }

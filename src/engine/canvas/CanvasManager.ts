@@ -6,12 +6,17 @@ import { LayerManager, type LayerChangeCallback } from '../layers/LayerManager.t
 import { LayerCompositor } from '../layers/LayerCompositor.ts'
 import { SelectionController } from '../selection/SelectionController.ts'
 import { TransformManager } from '../transform/TransformManager.ts'
+import { FilterManager } from '../filters/FilterManager.ts'
+import { FloodFillTool } from '../tools/FloodFillTool.ts'
+import { EyedropperTool } from '../tools/EyedropperTool.ts'
 import { createRenderer } from '../renderer.ts'
 import type { ViewState, PointerState, ToolType } from '../../types/engine.ts'
 import type { StrokePoint } from '../../types/brush.ts'
-import type { LayerSnapshot } from '../undo/UndoManager.ts'
+import type { FilterParams } from '../../types/filter.ts'
+import type { LayerSnapshot, LayerUndoEntry } from '../undo/UndoManager.ts'
 import type { SelectionToolType, SelectionMode, BoundingBox } from '../../types/selection.ts'
 import type { SelectionUndoEntry } from '../undo/UndoManager.ts'
+import type { RGBAColor } from '../../types/color.ts'
 
 /**
  * Manages the two-canvas architecture:
@@ -39,7 +44,11 @@ export class CanvasManager {
   readonly compositor = new LayerCompositor()
   readonly selectionController: SelectionController
   readonly transformManager = new TransformManager()
+  readonly filterManager = new FilterManager()
+  readonly floodFillTool = new FloodFillTool()
+  readonly eyedropperTool = new EyedropperTool()
 
+  private onColorSampled: ((color: RGBAColor) => void) | null = null
   private resizeObserver: ResizeObserver | null = null
   private container: HTMLElement | null = null
 
@@ -97,6 +106,9 @@ export class CanvasManager {
     // Wire brush engine
     this.brushEngine.setApp(this.app)
     this.syncBrushToActiveLayer()
+
+    // Wire filter manager
+    this.filterManager.setApp(this.app)
 
     // Wire selection controller to overlay
     if (this.overlayCtx) {
@@ -277,6 +289,155 @@ export class CanvasManager {
     this.commitSelectionUndo()
   }
 
+  // ── Filter preview system ────────────────────────────────────────
+
+  /** Begin a non-destructive filter preview on the active layer. */
+  beginFilterPreview(): void {
+    if (!this.app) return
+    const layer = this.layerManager.getActiveLayer()
+    if (!layer) return
+
+    const extracted = this.app.renderer.extract.pixels({ target: layer.texture })
+    const snapshot: LayerSnapshot = {
+      width: extracted.width,
+      height: extracted.height,
+      data: new Uint8Array(extracted.pixels.buffer, extracted.pixels.byteOffset, extracted.pixels.byteLength),
+    }
+
+    const mask = this.selectionController.manager.hasSelection()
+      ? this.selectionController.manager.getMask()
+      : null
+
+    const w = this.container?.clientWidth || 1024
+    const h = this.container?.clientHeight || 768
+
+    this.filterManager.beginPreview(layer.texture, layer.info.id, snapshot, mask, w, h)
+  }
+
+  /** Update the filter preview with new parameters. */
+  updateFilterPreview(params: FilterParams): void {
+    this.filterManager.updatePreview(params)
+    this.recomposite()
+  }
+
+  /** Apply the current filter and push undo entry. */
+  applyFilter(): void {
+    const result = this.filterManager.apply()
+    if (result) {
+      const entry: LayerUndoEntry = {
+        type: 'layer',
+        layerId: result.layerId,
+        before: result.before,
+        after: result.after,
+      }
+      this.brushEngine.undoManager.pushEntry(entry)
+      this.recomposite()
+      this.layerManager.updateThumbnails()
+    }
+  }
+
+  /** Cancel the current filter and restore the original layer. */
+  cancelFilter(): void {
+    this.filterManager.cancel()
+    this.recomposite()
+  }
+
+  // ── Flood fill & Eyedropper ─────────────────────────────────────
+
+  /** Set callback for color sampling (eyedropper). */
+  setColorSampledCallback(cb: (color: RGBAColor) => void): void {
+    this.onColorSampled = cb
+  }
+
+  private handleFloodFill(canvasPoint: { x: number; y: number }): void {
+    if (!this.app) return
+    const layer = this.layerManager.getActiveLayer()
+    if (!layer) return
+
+    // Extract current pixel data
+    const extracted = this.app.renderer.extract.pixels({ target: layer.texture })
+    const pixels = new Uint8Array(extracted.pixels.buffer, extracted.pixels.byteOffset, extracted.pixels.byteLength)
+
+    // Snapshot before
+    const before: LayerSnapshot = {
+      width: extracted.width,
+      height: extracted.height,
+      data: new Uint8Array(pixels),
+    }
+
+    // Get fill color from brush engine
+    const fillColor = this.brushEngine.getColor()
+    const tolerance = this.fillTolerance
+
+    // Get selection mask if any
+    const mask = this.selectionController.manager.hasSelection()
+      ? this.selectionController.manager.getMask()
+      : null
+
+    const modified = this.floodFillTool.fill(
+      canvasPoint.x,
+      canvasPoint.y,
+      pixels,
+      extracted.width,
+      extracted.height,
+      fillColor,
+      tolerance,
+      mask,
+    )
+
+    if (!modified) return
+
+    // Write pixels back to texture
+    const after: LayerSnapshot = {
+      width: extracted.width,
+      height: extracted.height,
+      data: new Uint8Array(pixels),
+    }
+    this.restoreLayerSnapshot(layer.texture, after)
+
+    // Push undo
+    const entry: LayerUndoEntry = {
+      type: 'layer',
+      layerId: layer.info.id,
+      before,
+      after,
+    }
+    this.brushEngine.undoManager.pushEntry(entry)
+
+    this.recomposite()
+    this.layerManager.updateThumbnails()
+  }
+
+  private handleEyedropper(canvasPoint: { x: number; y: number }): void {
+    if (!this.app) return
+
+    // Sample from composited output (all layers)
+    const outputTexture = this.compositor.getOutputTexture()
+    if (!outputTexture) return
+
+    const extracted = this.app.renderer.extract.pixels({ target: outputTexture })
+    const pixels = new Uint8Array(extracted.pixels.buffer, extracted.pixels.byteOffset, extracted.pixels.byteLength)
+
+    const color = this.eyedropperTool.sample(
+      canvasPoint.x,
+      canvasPoint.y,
+      pixels,
+      extracted.width,
+      extracted.height,
+    )
+
+    if (color && this.onColorSampled) {
+      this.onColorSampled(color)
+    }
+  }
+
+  /** Fill tolerance (0-255), set from React via toolStore. */
+  private fillTolerance = 32
+
+  setFillTolerance(tolerance: number): void {
+    this.fillTolerance = Math.max(0, Math.min(255, tolerance))
+  }
+
   // ── Pointer event routing ─────────────────────────────────────────
 
   /** Snapshot selection mask before a selection operation, for undo. */
@@ -299,6 +460,16 @@ export class CanvasManager {
 
   private handlePointerDown(ps: PointerState) {
     const canvasPoint = this.viewTransform.screenToCanvas(ps.x, ps.y)
+
+    if (this.activeTool === 'fill') {
+      this.handleFloodFill(canvasPoint)
+      return
+    }
+
+    if (this.activeTool === 'eyedropper') {
+      this.handleEyedropper(canvasPoint)
+      return
+    }
 
     if (this.activeTool === 'selection') {
       this.snapshotSelectionBefore()
@@ -479,6 +650,7 @@ export class CanvasManager {
     }
 
     this.selectionController.destroy()
+    this.filterManager.destroy()
     this.layerManager.destroy()
     this.compositor.destroy()
 

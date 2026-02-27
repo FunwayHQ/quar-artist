@@ -1,16 +1,19 @@
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect, useCallback } from 'react'
 import { TitleBar } from '@components/shell/TitleBar.tsx'
 import { BrushControls } from '@components/shell/BrushControls.tsx'
 import { CanvasViewport } from '@components/shell/CanvasViewport.tsx'
 import { LayersPanel } from '@components/layers/LayersPanel.tsx'
 import { ColorPanel } from '@components/color/ColorPanel.tsx'
+import { FilterDialogRouter } from '@components/filters/FilterDialogRouter.tsx'
 import { useEngine } from '@hooks/useEngine.ts'
 import { useBrushStore } from '@stores/brushStore.ts'
 import { useColorStore } from '@stores/colorStore.ts'
 import { useToolStore } from '@stores/toolStore.ts'
 import { useSelectionStore } from '@stores/selectionStore.ts'
 import { useUIStore } from '@stores/uiStore.ts'
-import { hsbToRgba } from '@app-types/color.ts'
+import { useFilterStore } from '@stores/filterStore.ts'
+import { hsbToRgba, rgbaToHsb } from '@app-types/color.ts'
+import type { FilterType } from '@app-types/filter.ts'
 import styles from './App.module.css'
 
 export default function App() {
@@ -47,8 +50,10 @@ export default function App() {
     if (!manager) return
     const unsub = useToolStore.subscribe((state) => {
       manager.setActiveTool(state.activeTool)
+      manager.setFillTolerance(state.fillTolerance)
     })
     manager.setActiveTool(useToolStore.getState().activeTool)
+    manager.setFillTolerance(useToolStore.getState().fillTolerance)
     return unsub
   }, [manager])
 
@@ -69,6 +74,30 @@ export default function App() {
     // Wire selection state back to store
     manager.setSelectionChangeCallback((hasSelection, bounds) => {
       useSelectionStore.getState().setHasSelection(hasSelection, bounds)
+    })
+    return unsub
+  }, [manager])
+
+  // Wire eyedropper callback
+  useEffect(() => {
+    if (!manager) return
+    manager.setColorSampledCallback((rgba) => {
+      useColorStore.getState().setPrimary(rgbaToHsb(rgba))
+    })
+  }, [manager])
+
+  // Wire filter store to engine: begin/update/apply/cancel
+  useEffect(() => {
+    if (!manager) return
+    const unsub = useFilterStore.subscribe((state, prev) => {
+      // Filter opened
+      if (state.activeFilter && !prev.activeFilter) {
+        manager.beginFilterPreview()
+      }
+      // Params changed while filter is active
+      if (state.params && state.activeFilter) {
+        manager.updateFilterPreview(state.params)
+      }
     })
     return unsub
   }, [manager])
@@ -104,7 +133,23 @@ export default function App() {
     }
   }, [manager])
 
-  // Keyboard shortcuts: Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y / X / Ctrl+A / Ctrl+D / Ctrl+Shift+I
+  // Open filter callback for TitleBar menu
+  const handleOpenFilter = useCallback((filterType: FilterType) => {
+    useFilterStore.getState().openFilter(filterType)
+  }, [])
+
+  // Filter dialog apply/cancel
+  const handleFilterApply = useCallback(() => {
+    manager?.applyFilter()
+    useFilterStore.getState().closeFilter()
+  }, [manager])
+
+  const handleFilterCancel = useCallback(() => {
+    manager?.cancelFilter()
+    useFilterStore.getState().closeFilter()
+  }, [manager])
+
+  // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Skip if typing in an input
@@ -140,17 +185,61 @@ export default function App() {
         e.preventDefault()
         manager?.invertSelection()
       }
+      // Curves — Ctrl+M
+      if (mod && e.key === 'm') {
+        e.preventDefault()
+        handleOpenFilter('curves')
+      }
+      // Swap colors — X
       if (e.key === 'x' && !mod) {
         useColorStore.getState().swapColors()
       }
+      // Fill tool — G
+      if (e.key === 'g' && !mod) {
+        useToolStore.getState().setTool('fill')
+      }
+      // Eyedropper tool — I
+      if (e.key === 'i' && !mod && !e.shiftKey) {
+        useToolStore.getState().setTool('eyedropper')
+      }
     }
+
+    const handleKeyDown2 = (e: KeyboardEvent) => {
+      // Alt hold → temporary eyedropper
+      if (e.key === 'Alt' && !e.repeat) {
+        const currentTool = useToolStore.getState().activeTool
+        if (currentTool !== 'eyedropper') {
+          useToolStore.getState().pushTool('eyedropper')
+        }
+      }
+    }
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Alt') {
+        if (useToolStore.getState().activeTool === 'eyedropper') {
+          useToolStore.getState().popTool()
+        }
+      }
+    }
+
     document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [undo, redo, manager])
+    document.addEventListener('keydown', handleKeyDown2)
+    document.addEventListener('keyup', handleKeyUp)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      document.removeEventListener('keydown', handleKeyDown2)
+      document.removeEventListener('keyup', handleKeyUp)
+    }
+  }, [undo, redo, manager, handleOpenFilter])
 
   return (
     <div className={styles.app}>
-      <TitleBar />
+      <TitleBar
+        onOpenFilter={handleOpenFilter}
+        onUndo={undo}
+        onRedo={redo}
+        manager={manager}
+      />
       <BrushControls />
       <div className={styles.workspace}>
         {/* Left: Layers panel */}
@@ -184,6 +273,7 @@ export default function App() {
           </div>
         </div>
       </div>
+      <FilterDialogRouter onApply={handleFilterApply} onCancel={handleFilterCancel} />
     </div>
   )
 }

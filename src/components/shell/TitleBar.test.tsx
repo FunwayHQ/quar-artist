@@ -20,7 +20,7 @@ describe('TitleBar', () => {
     render(<TitleBar />)
     expect(screen.getByText('File')).toBeInTheDocument()
     expect(screen.getByText('Edit')).toBeInTheDocument()
-    expect(screen.getByText('View')).toBeInTheDocument()
+    expect(screen.getByText('Adjustments')).toBeInTheDocument()
     expect(screen.getByText('Selection')).toBeInTheDocument()
     expect(screen.getByText('Help')).toBeInTheDocument()
   })

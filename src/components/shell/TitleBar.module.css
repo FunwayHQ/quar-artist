@@ -44,7 +44,8 @@
   white-space: nowrap;
 }
 
-.menuItem:hover {
+.menuItem:hover,
+.menuItem[data-active='true'] {
   color: var(--color-text-primary);
   background: var(--color-bg-hover);
 }
