@@ -126,7 +126,7 @@ export default function App() {
 
   // Sync document size to engine and fit to viewport
   useEffect(() => {
-    if (!manager) return
+    if (!manager || !ready) return
     manager.setDocumentSize(canvasWidth, canvasHeight)
     // Use double-RAF to ensure the browser has fully laid out the container
     // before we measure its dimensions for fit-to-document calculation
@@ -136,7 +136,7 @@ export default function App() {
       })
     })
     return () => cancelAnimationFrame(rafId)
-  }, [manager, canvasWidth, canvasHeight])
+  }, [manager, ready, canvasWidth, canvasHeight])
 
   // Wire filter store to engine: begin/update/apply/cancel
   useEffect(() => {

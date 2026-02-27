@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { CanvasManager } from '@engine/canvas/CanvasManager.ts'
 import { useLayerStore } from '@stores/layerStore.ts'
+import { useProjectStore } from '@stores/projectStore.ts'
 
 /**
  * React hook that initializes the CanvasManager (PixiJS + overlay + input + brush engine + layers)
@@ -22,8 +23,11 @@ export function useEngine(containerRef: React.RefObject<HTMLElement | null>) {
       useLayerStore.getState().syncFromEngine(layers, activeId)
     })
 
+    // Pass document dimensions so textures are created at the correct size
+    const { canvasWidth, canvasHeight } = useProjectStore.getState()
+
     manager
-      .init(container)
+      .init(container, canvasWidth, canvasHeight)
       .then(() => {
         setReady(true)
       })

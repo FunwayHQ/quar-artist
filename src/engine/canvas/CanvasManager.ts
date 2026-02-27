@@ -66,8 +66,9 @@ export class CanvasManager {
   /**
    * Initialize PixiJS on the static canvas and set up the overlay.
    * The container should be a positioned element that holds both canvases.
+   * docWidth/docHeight set the artwork resolution (layer & compositor textures).
    */
-  async init(container: HTMLElement): Promise<void> {
+  async init(container: HTMLElement, docWidth?: number, docHeight?: number): Promise<void> {
     this.container = container
 
     // Create static canvas (PixiJS)
@@ -91,17 +92,20 @@ export class CanvasManager {
     // Attach input to overlay (captures all pointer events)
     this.inputManager.attach(this.overlayCanvas)
 
-    const w = container.clientWidth || 1024
-    const h = container.clientHeight || 768
+    // Use document dimensions for artwork textures, viewport for renderer
+    const artW = docWidth || container.clientWidth || 1024
+    const artH = docHeight || container.clientHeight || 768
+    this.documentWidth = artW
+    this.documentHeight = artH
 
     // Initialize LayerManager
     this.layerManager.setApp(this.app)
-    this.layerManager.setSize(w, h)
+    this.layerManager.setSize(artW, artH)
     this.layerManager.init()
 
     // Initialize LayerCompositor
     this.compositor.setApp(this.app)
-    this.compositor.setSize(w, h)
+    this.compositor.setSize(artW, artH)
 
     // Invalidate compositor cache on any structural layer change
     this.layerManager.setStructuralChangeCallback(() => {
@@ -125,7 +129,7 @@ export class CanvasManager {
     if (this.overlayCtx) {
       this.selectionController.setOverlayCtx(this.overlayCtx)
     }
-    this.selectionController.resize(w, h)
+    this.selectionController.resize(artW, artH)
 
     // Wire input to tool routing
     this.inputManager.setStrokeCallbacks({
