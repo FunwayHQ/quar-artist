@@ -64,18 +64,55 @@ export class TransformController {
   }
 
   /**
+   * Hit-test the rotation zone: just outside a corner of the bounding box.
+   * Returns true if the pointer is within rotationRadius of any corner
+   * but NOT on a scale handle and NOT inside the bounds.
+   */
+  hitTestRotationZone(canvasPoint: Point): boolean {
+    if (!this.manager.isActive()) return false
+
+    const zoom = this.currentZoom
+    const handleRadius = 8 / zoom
+    const rotationRadius = 18 / zoom
+
+    // Must not be on a handle
+    if (this.manager.hitTestHandle(canvasPoint, handleRadius, zoom)) return false
+    // Must not be inside bounds
+    if (this.manager.isInsideBounds(canvasPoint)) return false
+
+    const handles = this.manager.getHandlePositions(zoom)
+    if (!handles) return false
+
+    const corners: Point[] = [handles.topLeft, handles.topRight, handles.bottomLeft, handles.bottomRight]
+    for (const c of corners) {
+      const dx = canvasPoint.x - c.x
+      const dy = canvasPoint.y - c.y
+      if (dx * dx + dy * dy <= rotationRadius * rotationRadius) return true
+    }
+    return false
+  }
+
+  /**
    * Handle pointer down in transform mode.
-   * Returns true if the event was consumed (hit a handle or inside bounds).
+   * Returns true if the event was consumed (hit a handle, rotation zone, or inside bounds).
    */
   handlePointerDown(canvasPoint: Point): boolean {
     if (!this.manager.isActive()) return false
 
-    // Check if pointer hit a handle (zoom-aware radius)
+    // Check if pointer hit a scale handle (zoom-aware radius)
     const handleRadius = 8 / this.currentZoom
     const handle = this.manager.hitTestHandle(canvasPoint, handleRadius, this.currentZoom)
-    if (handle) {
+    if (handle && handle !== 'rotation') {
       this.isDragging = true
       this.dragHandle = handle
+      this.dragStart = { ...canvasPoint }
+      return true
+    }
+
+    // Check rotation zone (just outside corners)
+    if (this.hitTestRotationZone(canvasPoint)) {
+      this.isDragging = true
+      this.dragHandle = 'rotation'
       this.dragStart = { ...canvasPoint }
       return true
     }
@@ -159,22 +196,6 @@ export class TransformController {
       ctx.fillRect(pos.x - handleSize / 2, pos.y - handleSize / 2, handleSize, handleSize)
       ctx.strokeRect(pos.x - handleSize / 2, pos.y - handleSize / 2, handleSize, handleSize)
     }
-
-    // Draw rotation handle
-    const rot = handles.rotation
-    ctx.beginPath()
-    ctx.moveTo(handles.topCenter.x, handles.topCenter.y)
-    ctx.lineTo(rot.x, rot.y)
-    ctx.strokeStyle = 'rgba(245, 158, 11, 0.6)'
-    ctx.stroke()
-
-    // Draw rotation handle circle
-    ctx.beginPath()
-    ctx.arc(rot.x, rot.y, handleSize / 2, 0, Math.PI * 2)
-    ctx.fillStyle = 'white'
-    ctx.fill()
-    ctx.strokeStyle = 'rgba(245, 158, 11, 0.8)'
-    ctx.stroke()
 
     ctx.restore()
   }

@@ -1238,7 +1238,7 @@ export class CanvasManager {
     const handleRadius = 8 / zoom
     const handle = this.transformController.manager.hitTestHandle(canvasPoint, handleRadius, zoom)
 
-    if (handle) {
+    if (handle && handle !== 'rotation') {
       const cursorMap: Record<string, string> = {
         topLeft: 'nwse-resize',
         topRight: 'nesw-resize',
@@ -1248,9 +1248,11 @@ export class CanvasManager {
         bottomCenter: 'ns-resize',
         middleLeft: 'ew-resize',
         middleRight: 'ew-resize',
-        rotation: 'crosshair',
       }
       this.overlayCanvas.style.cursor = cursorMap[handle] || 'default'
+    } else if (this.transformController.hitTestRotationZone(canvasPoint)) {
+      // Near a corner but outside bounds — rotate cursor
+      this.overlayCanvas.style.cursor = 'crosshair'
     } else if (this.transformController.manager.isInsideBounds(canvasPoint)) {
       this.overlayCanvas.style.cursor = 'move'
     } else {

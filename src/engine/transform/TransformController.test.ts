@@ -140,6 +140,46 @@ describe('TransformController', () => {
     })
   })
 
+  describe('hitTestRotationZone', () => {
+    it('returns false when not active', () => {
+      expect(ctrl.hitTestRotationZone({ x: 105, y: 105 })).toBe(false)
+    })
+
+    it('returns true just outside a corner', () => {
+      ctrl.begin({ x: 0, y: 0, width: 100, height: 100 })
+      ctrl.setZoom(1)
+      // Just outside the bottom-right corner (100, 100), e.g. (110, 110)
+      expect(ctrl.hitTestRotationZone({ x: 110, y: 110 })).toBe(true)
+    })
+
+    it('returns false on the handle itself', () => {
+      ctrl.begin({ x: 0, y: 0, width: 100, height: 100 })
+      ctrl.setZoom(1)
+      // Exactly on the bottom-right handle
+      expect(ctrl.hitTestRotationZone({ x: 100, y: 100 })).toBe(false)
+    })
+
+    it('returns false inside the bounds', () => {
+      ctrl.begin({ x: 0, y: 0, width: 100, height: 100 })
+      ctrl.setZoom(1)
+      expect(ctrl.hitTestRotationZone({ x: 50, y: 50 })).toBe(false)
+    })
+
+    it('returns false far from any corner', () => {
+      ctrl.begin({ x: 0, y: 0, width: 100, height: 100 })
+      ctrl.setZoom(1)
+      expect(ctrl.hitTestRotationZone({ x: 200, y: 200 })).toBe(false)
+    })
+
+    it('handlePointerDown consumes rotation zone click', () => {
+      ctrl.begin({ x: 0, y: 0, width: 100, height: 100 })
+      ctrl.setZoom(1)
+      const result = ctrl.handlePointerDown({ x: 110, y: 110 })
+      expect(result).toBe(true)
+      expect(ctrl.getActiveHandle()).toBe('rotation')
+    })
+  })
+
   describe('drawOverlay', () => {
     it('does nothing when not active', () => {
       const ctx = {
@@ -150,7 +190,7 @@ describe('TransformController', () => {
       expect(ctx.save).not.toHaveBeenCalled()
     })
 
-    it('draws with amber color scheme when active', () => {
+    it('draws with amber color scheme and no rotation handle', () => {
       ctrl.begin({ x: 0, y: 0, width: 100, height: 100 })
       const strokeStyles: string[] = []
       const ctx = {
@@ -176,6 +216,8 @@ describe('TransformController', () => {
       expect(ctx.restore).toHaveBeenCalled()
       expect(ctx.stroke).toHaveBeenCalled()
       expect(ctx.fillRect).toHaveBeenCalled()
+      // No rotation handle circle should be drawn
+      expect(ctx.arc).not.toHaveBeenCalled()
       // Verify amber colors are used (not blue)
       const amberStrokes = strokeStyles.filter(s => s.includes('245, 158, 11'))
       expect(amberStrokes.length).toBeGreaterThan(0)
