@@ -1,6 +1,18 @@
 import { TransformManager } from './TransformManager.ts'
 import type { BoundingBox, HandlePosition, Point, TransformState } from '../../types/selection.ts'
 
+/** Distance from point p to the line segment a→b. */
+function distToSegment(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const lenSq = dx * dx + dy * dy
+  if (lenSq === 0) return Math.sqrt((p.x - a.x) ** 2 + (p.y - a.y) ** 2)
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lenSq))
+  const projX = a.x + t * dx
+  const projY = a.y + t * dy
+  return Math.sqrt((p.x - projX) ** 2 + (p.y - projY) ** 2)
+}
+
 /**
  * Orchestrates the transform tool interactions.
  * Renders transform handles on the overlay canvas and processes drag operations.
@@ -93,8 +105,35 @@ export class TransformController {
   }
 
   /**
+   * Hit-test the bounding box edges (lines between corners).
+   * Returns the corresponding center handle for the closest edge, or null.
+   */
+  hitTestEdge(canvasPoint: Point): HandlePosition | null {
+    if (!this.manager.isActive()) return null
+
+    const zoom = this.currentZoom
+    const threshold = 6 / zoom
+    const handles = this.manager.getHandlePositions(zoom)
+    if (!handles) return null
+
+    const edges: { from: Point; to: Point; handle: HandlePosition }[] = [
+      { from: handles.topLeft, to: handles.topRight, handle: 'topCenter' },
+      { from: handles.topRight, to: handles.bottomRight, handle: 'middleRight' },
+      { from: handles.bottomRight, to: handles.bottomLeft, handle: 'bottomCenter' },
+      { from: handles.bottomLeft, to: handles.topLeft, handle: 'middleLeft' },
+    ]
+
+    for (const edge of edges) {
+      if (distToSegment(canvasPoint, edge.from, edge.to) <= threshold) {
+        return edge.handle
+      }
+    }
+    return null
+  }
+
+  /**
    * Handle pointer down in transform mode.
-   * Returns true if the event was consumed (hit a handle, rotation zone, or inside bounds).
+   * Returns true if the event was consumed (hit a handle, edge, rotation zone, or inside bounds).
    */
   handlePointerDown(canvasPoint: Point): boolean {
     if (!this.manager.isActive()) return false
@@ -113,6 +152,15 @@ export class TransformController {
     if (this.hitTestRotationZone(canvasPoint)) {
       this.isDragging = true
       this.dragHandle = 'rotation'
+      this.dragStart = { ...canvasPoint }
+      return true
+    }
+
+    // Check edge proximity (click on bounding box line to scale)
+    const edgeHandle = this.hitTestEdge(canvasPoint)
+    if (edgeHandle) {
+      this.isDragging = true
+      this.dragHandle = edgeHandle
       this.dragStart = { ...canvasPoint }
       return true
     }

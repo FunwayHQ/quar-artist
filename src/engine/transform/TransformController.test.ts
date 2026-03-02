@@ -180,6 +180,51 @@ describe('TransformController', () => {
     })
   })
 
+  describe('hitTestEdge', () => {
+    it('returns null when not active', () => {
+      expect(ctrl.hitTestEdge({ x: 50, y: 0 })).toBeNull()
+    })
+
+    it('returns topCenter when near the top edge', () => {
+      ctrl.begin({ x: 0, y: 0, width: 100, height: 100 })
+      ctrl.setZoom(1)
+      // Top edge goes from (0,0) to (100,0), point at (50, 2) is close
+      expect(ctrl.hitTestEdge({ x: 50, y: 2 })).toBe('topCenter')
+    })
+
+    it('returns bottomCenter when near the bottom edge', () => {
+      ctrl.begin({ x: 0, y: 0, width: 100, height: 100 })
+      ctrl.setZoom(1)
+      expect(ctrl.hitTestEdge({ x: 50, y: 98 })).toBe('bottomCenter')
+    })
+
+    it('returns middleLeft when near the left edge', () => {
+      ctrl.begin({ x: 0, y: 0, width: 100, height: 100 })
+      ctrl.setZoom(1)
+      expect(ctrl.hitTestEdge({ x: 2, y: 50 })).toBe('middleLeft')
+    })
+
+    it('returns middleRight when near the right edge', () => {
+      ctrl.begin({ x: 0, y: 0, width: 100, height: 100 })
+      ctrl.setZoom(1)
+      expect(ctrl.hitTestEdge({ x: 98, y: 50 })).toBe('middleRight')
+    })
+
+    it('returns null when far from any edge', () => {
+      ctrl.begin({ x: 0, y: 0, width: 100, height: 100 })
+      ctrl.setZoom(1)
+      expect(ctrl.hitTestEdge({ x: 50, y: 50 })).toBeNull()
+    })
+
+    it('handlePointerDown consumes edge click', () => {
+      ctrl.begin({ x: 0, y: 0, width: 100, height: 100 })
+      ctrl.setZoom(1)
+      const result = ctrl.handlePointerDown({ x: 50, y: 2 })
+      expect(result).toBe(true)
+      expect(ctrl.getActiveHandle()).toBe('topCenter')
+    })
+  })
+
   describe('drawOverlay', () => {
     it('does nothing when not active', () => {
       const ctx = {

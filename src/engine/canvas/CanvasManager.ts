@@ -1238,25 +1238,32 @@ export class CanvasManager {
     const handleRadius = 8 / zoom
     const handle = this.transformController.manager.hitTestHandle(canvasPoint, handleRadius, zoom)
 
+    const cursorMap: Record<string, string> = {
+      topLeft: 'nwse-resize',
+      topRight: 'nesw-resize',
+      bottomLeft: 'nesw-resize',
+      bottomRight: 'nwse-resize',
+      topCenter: 'ns-resize',
+      bottomCenter: 'ns-resize',
+      middleLeft: 'ew-resize',
+      middleRight: 'ew-resize',
+    }
+
     if (handle && handle !== 'rotation') {
-      const cursorMap: Record<string, string> = {
-        topLeft: 'nwse-resize',
-        topRight: 'nesw-resize',
-        bottomLeft: 'nesw-resize',
-        bottomRight: 'nwse-resize',
-        topCenter: 'ns-resize',
-        bottomCenter: 'ns-resize',
-        middleLeft: 'ew-resize',
-        middleRight: 'ew-resize',
-      }
       this.overlayCanvas.style.cursor = cursorMap[handle] || 'default'
     } else if (this.transformController.hitTestRotationZone(canvasPoint)) {
       // Near a corner but outside bounds — rotate cursor
       this.overlayCanvas.style.cursor = 'crosshair'
-    } else if (this.transformController.manager.isInsideBounds(canvasPoint)) {
-      this.overlayCanvas.style.cursor = 'move'
     } else {
-      this.overlayCanvas.style.cursor = 'default'
+      // Check edge proximity (hovering on bounding box line)
+      const edgeHandle = this.transformController.hitTestEdge(canvasPoint)
+      if (edgeHandle) {
+        this.overlayCanvas.style.cursor = cursorMap[edgeHandle] || 'default'
+      } else if (this.transformController.manager.isInsideBounds(canvasPoint)) {
+        this.overlayCanvas.style.cursor = 'move'
+      } else {
+        this.overlayCanvas.style.cursor = 'default'
+      }
     }
   }
 
