@@ -209,9 +209,12 @@ export class LayerCompositor {
       clear: true,
     })
 
-    // Rebuild background cache if active layer has layers below it
-    if (activeIdx > 0) {
+    // Always rebuild background cache to prevent stale content in fast path
+    // (e.g. after merge-down leaves a single layer, old cache must be cleared)
+    if (activeIdx >= 0) {
       this.rebuildCache(layers, activeIdx)
+    } else {
+      this.destroyCacheTextures()
     }
 
     this.cacheDirty = false
@@ -236,6 +239,7 @@ export class LayerCompositor {
     // Background: layers 0..activeIdx-1
     this.cachedBackground = RenderTexture.create({ width: w, height: h })
     const bgContainer = new Container()
+    let hasBgLayers = false
     for (let i = 0; i < activeIdx; i++) {
       const layer = layers[i]
       if (!layer.info.visible) continue
@@ -251,8 +255,9 @@ export class LayerCompositor {
         }
       }
       bgContainer.addChild(s)
+      hasBgLayers = true
     }
-    if (bgContainer.children.length > 0) {
+    if (hasBgLayers) {
       this.app.renderer.render({ container: bgContainer, target: this.cachedBackground, clear: true })
     } else {
       this.app.renderer.render({ container: emptyContainer, target: this.cachedBackground, clear: true })
