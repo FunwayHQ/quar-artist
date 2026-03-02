@@ -1229,40 +1229,139 @@ export class CanvasManager {
 
   // ── Custom cursors for transform tool ───────────────────────────
 
-  private static readonly ROTATE_CURSOR = (() => {
-    // Curved double-arrow rotation indicator (32x32, amber with dark outline for contrast)
-    const svg = [
-      `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">`,
-      // Arc path (3/4 circle)
-      `<path d="M16 6 A10 10 0 1 1 6 16" fill="none" stroke="%23000" stroke-width="3" stroke-linecap="round"/>`,
-      `<path d="M16 6 A10 10 0 1 1 6 16" fill="none" stroke="%23F59E0B" stroke-width="2" stroke-linecap="round"/>`,
-      // Arrowhead at start (top center, pointing right)
-      `<polygon points="16,2 22,6 16,10" fill="%23000" stroke="none"/>`,
-      `<polygon points="16.5,3 21,6 16.5,9" fill="%23F59E0B" stroke="none"/>`,
-      // Arrowhead at end (left center, pointing down)
-      `<polygon points="2,16 6,22 10,16" fill="%23000" stroke="none"/>`,
-      `<polygon points="3,16.5 6,21 9,16.5" fill="%23F59E0B" stroke="none"/>`,
-      `</svg>`,
-    ].join('')
-    return `url("data:image/svg+xml,${svg}") 16 16, crosshair`
-  })()
+  private static cursorCache: { rotate: string; scale: Record<string, string> } | null = null
 
-  private static readonly SCALE_CURSORS: Record<string, string> = (() => {
-    const arrow = (angle: number) => {
-      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="%23F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><g transform="rotate(${angle} 12 12)"><line x1="12" y1="3" x2="12" y2="21"/><polyline points="8 7 12 3 16 7"/><polyline points="8 17 12 21 16 17"/></g></svg>`
-      return `url("data:image/svg+xml,${svg}") 12 12`
+  private static buildCursors() {
+    if (CanvasManager.cursorCache) return CanvasManager.cursorCache
+
+    const render = (size: number, draw: (ctx: CanvasRenderingContext2D) => void): string => {
+      const c = document.createElement('canvas')
+      c.width = size
+      c.height = size
+      const ctx = c.getContext('2d')!
+      draw(ctx)
+      return c.toDataURL('image/png')
     }
-    return {
-      topLeft: `${arrow(-45)}, nwse-resize`,
-      topRight: `${arrow(45)}, nesw-resize`,
-      bottomLeft: `${arrow(45)}, nesw-resize`,
-      bottomRight: `${arrow(-45)}, nwse-resize`,
-      topCenter: `${arrow(0)}, ns-resize`,
-      bottomCenter: `${arrow(0)}, ns-resize`,
-      middleLeft: `${arrow(90)}, ew-resize`,
-      middleRight: `${arrow(90)}, ew-resize`,
+
+    // Rotation cursor: curved arrow (3/4 circle with arrowheads)
+    const rotatePng = render(32, (ctx) => {
+      const cx = 16, cy = 16, r = 10
+      // Dark outline arc
+      ctx.strokeStyle = '#000'
+      ctx.lineWidth = 3
+      ctx.lineCap = 'round'
+      ctx.beginPath()
+      ctx.arc(cx, cy, r, -Math.PI / 2, Math.PI)
+      ctx.stroke()
+      // Amber arc
+      ctx.strokeStyle = '#F59E0B'
+      ctx.lineWidth = 2
+      ctx.beginPath()
+      ctx.arc(cx, cy, r, -Math.PI / 2, Math.PI)
+      ctx.stroke()
+      // Arrowhead at top (start of arc, pointing right)
+      ctx.fillStyle = '#000'
+      ctx.beginPath()
+      ctx.moveTo(16, 2)
+      ctx.lineTo(22, 6)
+      ctx.lineTo(16, 10)
+      ctx.closePath()
+      ctx.fill()
+      ctx.fillStyle = '#F59E0B'
+      ctx.beginPath()
+      ctx.moveTo(16.5, 3)
+      ctx.lineTo(21, 6)
+      ctx.lineTo(16.5, 9)
+      ctx.closePath()
+      ctx.fill()
+      // Arrowhead at left (end of arc, pointing down)
+      ctx.fillStyle = '#000'
+      ctx.beginPath()
+      ctx.moveTo(2, 16)
+      ctx.lineTo(6, 22)
+      ctx.lineTo(10, 16)
+      ctx.closePath()
+      ctx.fill()
+      ctx.fillStyle = '#F59E0B'
+      ctx.beginPath()
+      ctx.moveTo(3, 16.5)
+      ctx.lineTo(6, 21)
+      ctx.lineTo(9, 16.5)
+      ctx.closePath()
+      ctx.fill()
+    })
+
+    // Scale cursors: double-arrow at different angles
+    const makeScale = (angle: number) => {
+      return render(24, (ctx) => {
+        ctx.translate(12, 12)
+        ctx.rotate((angle * Math.PI) / 180)
+        ctx.translate(-12, -12)
+        // Dark outline
+        ctx.strokeStyle = '#000'
+        ctx.lineWidth = 3
+        ctx.lineCap = 'round'
+        ctx.beginPath()
+        ctx.moveTo(12, 4)
+        ctx.lineTo(12, 20)
+        ctx.stroke()
+        // Amber line
+        ctx.strokeStyle = '#F59E0B'
+        ctx.lineWidth = 2
+        ctx.beginPath()
+        ctx.moveTo(12, 4)
+        ctx.lineTo(12, 20)
+        ctx.stroke()
+        // Top arrowhead
+        ctx.fillStyle = '#000'
+        ctx.beginPath()
+        ctx.moveTo(12, 1)
+        ctx.lineTo(17, 7)
+        ctx.lineTo(7, 7)
+        ctx.closePath()
+        ctx.fill()
+        ctx.fillStyle = '#F59E0B'
+        ctx.beginPath()
+        ctx.moveTo(12, 2.5)
+        ctx.lineTo(16, 7)
+        ctx.lineTo(8, 7)
+        ctx.closePath()
+        ctx.fill()
+        // Bottom arrowhead
+        ctx.fillStyle = '#000'
+        ctx.beginPath()
+        ctx.moveTo(12, 23)
+        ctx.lineTo(17, 17)
+        ctx.lineTo(7, 17)
+        ctx.closePath()
+        ctx.fill()
+        ctx.fillStyle = '#F59E0B'
+        ctx.beginPath()
+        ctx.moveTo(12, 21.5)
+        ctx.lineTo(16, 17)
+        ctx.lineTo(8, 17)
+        ctx.closePath()
+        ctx.fill()
+      })
     }
-  })()
+
+    const scale: Record<string, string> = {
+      topLeft: `url(${makeScale(-45)}) 12 12, nwse-resize`,
+      topRight: `url(${makeScale(45)}) 12 12, nesw-resize`,
+      bottomLeft: `url(${makeScale(45)}) 12 12, nesw-resize`,
+      bottomRight: `url(${makeScale(-45)}) 12 12, nwse-resize`,
+      topCenter: `url(${makeScale(0)}) 12 12, ns-resize`,
+      bottomCenter: `url(${makeScale(0)}) 12 12, ns-resize`,
+      middleLeft: `url(${makeScale(90)}) 12 12, ew-resize`,
+      middleRight: `url(${makeScale(90)}) 12 12, ew-resize`,
+    }
+
+    CanvasManager.cursorCache = {
+      rotate: `url(${rotatePng}) 16 16, crosshair`,
+      scale,
+    }
+    return CanvasManager.cursorCache
+  }
 
   /** Update cursor based on transform handle hover. */
   private updateTransformCursor(canvasPoint: { x: number; y: number }) {
@@ -1279,15 +1378,17 @@ export class CanvasManager {
     const handleRadius = 8 / zoom
     const handle = this.transformController.manager.hitTestHandle(canvasPoint, handleRadius, zoom)
 
+    const cursors = CanvasManager.buildCursors()
+
     if (handle && handle !== 'rotation') {
-      this.overlayCanvas.style.cursor = CanvasManager.SCALE_CURSORS[handle] || 'nwse-resize'
+      this.overlayCanvas.style.cursor = cursors.scale[handle] || 'nwse-resize'
     } else if (this.transformController.hitTestRotationZone(canvasPoint)) {
-      this.overlayCanvas.style.cursor = CanvasManager.ROTATE_CURSOR
+      this.overlayCanvas.style.cursor = cursors.rotate
     } else {
       // Check edge proximity (hovering on bounding box line)
       const edgeHandle = this.transformController.hitTestEdge(canvasPoint)
       if (edgeHandle) {
-        this.overlayCanvas.style.cursor = CanvasManager.SCALE_CURSORS[edgeHandle] || 'ns-resize'
+        this.overlayCanvas.style.cursor = cursors.scale[edgeHandle] || 'ns-resize'
       } else if (this.transformController.manager.isInsideBounds(canvasPoint)) {
         this.overlayCanvas.style.cursor = 'move'
       } else {
