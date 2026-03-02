@@ -972,6 +972,7 @@ export class CanvasManager {
 
   private handleStrokeStart(ps: PointerState) {
     this.syncBrushToActiveLayer()
+    this.brushEngine.setEraserMode(this.activeTool === 'eraser')
     const canvasPoint = this.viewTransform.screenToCanvas(ps.x, ps.y)
     const strokePoint: StrokePoint = {
       x: canvasPoint.x,

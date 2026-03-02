@@ -26,6 +26,7 @@ export class BrushEngine {
   private activeLayerTexture: RenderTexture | null = null
   private activeLayerId: string = ''
   private alphaLock: boolean = false
+  private eraserMode: boolean = false
   private strokeActive = false
   private color: RGBAColor = { r: 1, g: 1, b: 1, a: 1 }
 
@@ -77,6 +78,11 @@ export class BrushEngine {
   /** Set whether the active layer has alpha lock enabled. */
   setAlphaLock(locked: boolean) {
     this.alphaLock = locked
+  }
+
+  /** Set eraser mode (based on active tool, independent of preset). */
+  setEraserMode(enabled: boolean) {
+    this.eraserMode = enabled
   }
 
   /** Called on pointerdown — begin a new stroke. */
@@ -227,13 +233,14 @@ export class BrushEngine {
     }
 
     // For eraser, use destination-out to remove pixels
-    if (this.activePreset.isEraser) {
+    const isErasing = this.eraserMode || this.activePreset.isEraser
+    if (isErasing) {
       this.stampContainer.blendMode = 'erase'
     } else {
       this.stampContainer.blendMode = 'normal'
     }
 
-    if (this.alphaLock && !this.activePreset.isEraser) {
+    if (this.alphaLock && !isErasing) {
       // Alpha lock: paint only where existing layer alpha > 0.
       // 1. Copy current layer to a temp texture (preserves the alpha mask)
       const w = this.activeLayerTexture.width
