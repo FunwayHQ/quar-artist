@@ -178,6 +178,7 @@ export class CanvasManager {
       onPointerDown: (ps) => this.handlePointerDown(ps),
       onPointerMove: (ps, coalesced, _predicted) => this.handlePointerMove(ps, coalesced),
       onPointerUp: (ps) => this.handlePointerUp(ps),
+      onHover: (ps) => this.handleHover(ps),
     })
 
     // Start overlay render loop (marching ants, tool previews)
@@ -1279,6 +1280,14 @@ export class CanvasManager {
       } else {
         this.overlayCanvas.style.cursor = 'default'
       }
+    }
+  }
+
+  /** Handle hover (pointer move with no button pressed) — cursor updates. */
+  private handleHover(ps: PointerState) {
+    if (this.activeTool === 'transform') {
+      const canvasPoint = this.viewTransform.screenToCanvas(ps.x, ps.y)
+      this.updateTransformCursor(canvasPoint)
     }
   }
 

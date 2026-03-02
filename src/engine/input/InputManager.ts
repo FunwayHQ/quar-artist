@@ -36,6 +36,7 @@ export class InputManager {
     | ((state: PointerState, coalesced: PointerState[], predicted: PointerState[]) => void)
     | null = null
   private onPointerUp: ((state: PointerState) => void) | null = null
+  private onHover: ((state: PointerState) => void) | null = null
 
   constructor(viewTransform: ViewTransform) {
     this.viewTransform = viewTransform
@@ -45,10 +46,12 @@ export class InputManager {
     onPointerDown?: (state: PointerState) => void
     onPointerMove?: (state: PointerState, coalesced: PointerState[], predicted: PointerState[]) => void
     onPointerUp?: (state: PointerState) => void
+    onHover?: (state: PointerState) => void
   }) {
     this.onPointerDown = callbacks.onPointerDown ?? null
     this.onPointerMove = callbacks.onPointerMove ?? null
     this.onPointerUp = callbacks.onPointerUp ?? null
+    this.onHover = callbacks.onHover ?? null
   }
 
   attach(element: HTMLElement) {
@@ -101,7 +104,11 @@ export class InputManager {
 
   private handlePointerMove = (e: PointerEvent) => {
     const existing = this.activePointers.get(e.pointerId)
-    if (!existing) return
+    if (!existing) {
+      // No active pointer — fire hover callback for cursor updates
+      if (this.onHover) this.onHover(this.toPointerState(e))
+      return
+    }
 
     const local = this.toLocalCoords(e.clientX, e.clientY)
     existing.x = local.x
