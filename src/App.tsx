@@ -37,6 +37,7 @@ import { useGuideStore } from '@stores/guideStore.ts'
 import { useTimelapseStore } from '@stores/timelapseStore.ts'
 import { useTextStore } from '@stores/textStore.ts'
 import { useQuickMenuStore } from '@stores/quickMenuStore.ts'
+import { useTransformStore } from '@stores/transformStore.ts'
 import { exportImage, downloadBlob } from './io/formats/image/ImageExporter.ts'
 import { getImageFromClipboard, getImageFromDrop, decodeImageBlob, pickImageFile } from './io/importImage.ts'
 import { hsbToRgba, rgbaToHsb } from '@app-types/color.ts'
@@ -49,7 +50,12 @@ import styles from './App.module.css'
 
 export default function App() {
   const containerRef = useRef<HTMLDivElement>(null)
-  const { manager, ready, undo, redo } = useEngine(containerRef)
+  const {
+    manager, ready, undo, redo,
+    commitTransform, cancelTransform,
+    flipLayerHorizontal, flipLayerVertical,
+    rotateLayer90CW, rotateLayer90CCW,
+  } = useEngine(containerRef)
   const rightPanelTab = useUIStore((s) => s.rightPanelTab)
   const showExportDialog = useUIStore((s) => s.showExportDialog)
   const showNewProjectDialog = useUIStore((s) => s.showNewProjectDialog)
@@ -233,7 +239,10 @@ export default function App() {
   useEffect(() => {
     if (!manager) return
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Shift') manager.setSelectionConstrained(true)
+      if (e.key === 'Shift') {
+        manager.setSelectionConstrained(true)
+        manager.transformController.setConstrained(true)
+      }
       // Modifier-based selection mode switching
       if (useToolStore.getState().activeTool === 'selection') {
         if (e.shiftKey && e.altKey) {
@@ -246,7 +255,10 @@ export default function App() {
       }
     }
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key === 'Shift') manager.setSelectionConstrained(false)
+      if (e.key === 'Shift') {
+        manager.setSelectionConstrained(false)
+        manager.transformController.setConstrained(false)
+      }
       // Reset selection mode when modifiers released
       if (!e.shiftKey && !e.altKey) {
         manager.setSelectionMode(useSelectionStore.getState().selectionMode)
@@ -465,6 +477,31 @@ export default function App() {
     })
   }, [manager])
 
+  // ── Transform tool actions ──
+  useEffect(() => {
+    useTransformStore.getState().setActions({
+      commitTransform,
+      cancelTransform,
+      flipHorizontal: flipLayerHorizontal,
+      flipVertical: flipLayerVertical,
+      rotateCW: rotateLayer90CW,
+      rotateCCW: rotateLayer90CCW,
+    })
+  }, [commitTransform, cancelTransform, flipLayerHorizontal, flipLayerVertical, rotateLayer90CW, rotateLayer90CCW])
+
+  // Sync transform active state to store
+  useEffect(() => {
+    if (!manager) return
+    const interval = setInterval(() => {
+      const isActive = manager.transformController.isActive()
+      const storeActive = useTransformStore.getState().isActive
+      if (isActive !== storeActive) {
+        useTransformStore.getState().setIsActive(isActive)
+      }
+    }, 100)
+    return () => clearInterval(interval)
+  }, [manager])
+
   // ── Text tool ──
   useEffect(() => {
     if (!manager) return
@@ -544,6 +581,12 @@ export default function App() {
     onToggleRecording: handleToggleRecording,
     onQuickMenu: handleShowQuickMenu,
     onClearLayer: handleClearLayer,
+    onCommitTransform: commitTransform,
+    onCancelTransform: cancelTransform,
+    onFlipHorizontal: flipLayerHorizontal,
+    onFlipVertical: flipLayerVertical,
+    onRotateCW: rotateLayer90CW,
+    onRotateCCW: rotateLayer90CCW,
   })
 
   // Canvas context menu

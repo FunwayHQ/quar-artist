@@ -43,7 +43,25 @@ export class TransformController {
     return this.manager.isActive()
   }
 
+  /** Whether a drag operation is in progress. */
+  getDragging(): boolean {
+    return this.isDragging
+  }
+
+  /** Get the active drag handle (null = move drag, undefined = not dragging). */
+  getActiveHandle(): HandlePosition | null | undefined {
+    if (!this.isDragging) return undefined
+    return this.dragHandle
+  }
+
   // ── Pointer event routing ─────────────────────────────────────────
+
+  private currentZoom = 1
+
+  /** Update the current zoom level (used for zoom-aware hit testing). */
+  setZoom(zoom: number) {
+    this.currentZoom = zoom
+  }
 
   /**
    * Handle pointer down in transform mode.
@@ -52,8 +70,9 @@ export class TransformController {
   handlePointerDown(canvasPoint: Point): boolean {
     if (!this.manager.isActive()) return false
 
-    // Check if pointer hit a handle
-    const handle = this.manager.hitTestHandle(canvasPoint)
+    // Check if pointer hit a handle (zoom-aware radius)
+    const handleRadius = 8 / this.currentZoom
+    const handle = this.manager.hitTestHandle(canvasPoint, handleRadius, this.currentZoom)
     if (handle) {
       this.isDragging = true
       this.dragHandle = handle
@@ -101,7 +120,7 @@ export class TransformController {
   drawOverlay(ctx: CanvasRenderingContext2D, zoom: number) {
     if (!this.manager.isActive()) return
 
-    const handles = this.manager.getHandlePositions()
+    const handles = this.manager.getHandlePositions(zoom)
     if (!handles) return
 
     const handleSize = 6 / zoom
@@ -110,7 +129,7 @@ export class TransformController {
     ctx.save()
 
     // Draw bounding box
-    ctx.strokeStyle = 'rgba(59, 130, 246, 0.8)' // blue
+    ctx.strokeStyle = 'rgba(245, 158, 11, 0.8)' // amber
     ctx.lineWidth = lineWidth
     ctx.setLineDash([])
     ctx.beginPath()
@@ -135,7 +154,7 @@ export class TransformController {
 
     for (const { pos } of allHandles) {
       ctx.fillStyle = 'white'
-      ctx.strokeStyle = 'rgba(59, 130, 246, 0.8)'
+      ctx.strokeStyle = 'rgba(245, 158, 11, 0.8)'
       ctx.lineWidth = lineWidth
       ctx.fillRect(pos.x - handleSize / 2, pos.y - handleSize / 2, handleSize, handleSize)
       ctx.strokeRect(pos.x - handleSize / 2, pos.y - handleSize / 2, handleSize, handleSize)
@@ -146,7 +165,7 @@ export class TransformController {
     ctx.beginPath()
     ctx.moveTo(handles.topCenter.x, handles.topCenter.y)
     ctx.lineTo(rot.x, rot.y)
-    ctx.strokeStyle = 'rgba(59, 130, 246, 0.6)'
+    ctx.strokeStyle = 'rgba(245, 158, 11, 0.6)'
     ctx.stroke()
 
     // Draw rotation handle circle
@@ -154,7 +173,7 @@ export class TransformController {
     ctx.arc(rot.x, rot.y, handleSize / 2, 0, Math.PI * 2)
     ctx.fillStyle = 'white'
     ctx.fill()
-    ctx.strokeStyle = 'rgba(59, 130, 246, 0.8)'
+    ctx.strokeStyle = 'rgba(245, 158, 11, 0.8)'
     ctx.stroke()
 
     ctx.restore()

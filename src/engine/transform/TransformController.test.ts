@@ -98,6 +98,48 @@ describe('TransformController', () => {
     })
   })
 
+  describe('getDragging', () => {
+    it('returns false when not dragging', () => {
+      expect(ctrl.getDragging()).toBe(false)
+    })
+
+    it('returns true during drag', () => {
+      ctrl.begin({ x: 0, y: 0, width: 100, height: 100 })
+      ctrl.handlePointerDown({ x: 50, y: 50 })
+      expect(ctrl.getDragging()).toBe(true)
+    })
+
+    it('returns false after pointer up', () => {
+      ctrl.begin({ x: 0, y: 0, width: 100, height: 100 })
+      ctrl.handlePointerDown({ x: 50, y: 50 })
+      ctrl.handlePointerUp()
+      expect(ctrl.getDragging()).toBe(false)
+    })
+  })
+
+  describe('getActiveHandle', () => {
+    it('returns undefined when not dragging', () => {
+      expect(ctrl.getActiveHandle()).toBeUndefined()
+    })
+
+    it('returns null for move drag (inside bounds)', () => {
+      ctrl.begin({ x: 0, y: 0, width: 100, height: 100 })
+      ctrl.handlePointerDown({ x: 50, y: 50 })
+      expect(ctrl.getActiveHandle()).toBeNull()
+    })
+  })
+
+  describe('setConstrained', () => {
+    it('enables uniform scaling', () => {
+      ctrl.begin({ x: 0, y: 0, width: 100, height: 100 })
+      ctrl.setConstrained(true)
+      ctrl.handlePointerDown({ x: 100, y: 100 }) // bottomRight handle
+      ctrl.handlePointerMove({ x: 150, y: 130 })
+      const state = ctrl.manager.getState()!
+      expect(state.scaleX).toBe(state.scaleY)
+    })
+  })
+
   describe('drawOverlay', () => {
     it('does nothing when not active', () => {
       const ctx = {
@@ -108,8 +150,9 @@ describe('TransformController', () => {
       expect(ctx.save).not.toHaveBeenCalled()
     })
 
-    it('draws when active', () => {
+    it('draws with amber color scheme when active', () => {
       ctrl.begin({ x: 0, y: 0, width: 100, height: 100 })
+      const strokeStyles: string[] = []
       const ctx = {
         save: vi.fn(),
         restore: vi.fn(),
@@ -123,16 +166,21 @@ describe('TransformController', () => {
         strokeRect: vi.fn(),
         arc: vi.fn(),
         setLineDash: vi.fn(),
-        strokeStyle: '',
+        set strokeStyle(v: string) { strokeStyles.push(v) },
+        get strokeStyle() { return strokeStyles[strokeStyles.length - 1] || '' },
         fillStyle: '',
         lineWidth: 1,
       } as unknown as CanvasRenderingContext2D
       ctrl.drawOverlay(ctx, 1)
       expect(ctx.save).toHaveBeenCalled()
       expect(ctx.restore).toHaveBeenCalled()
-      // Should draw bounding box and handles
       expect(ctx.stroke).toHaveBeenCalled()
       expect(ctx.fillRect).toHaveBeenCalled()
+      // Verify amber colors are used (not blue)
+      const amberStrokes = strokeStyles.filter(s => s.includes('245, 158, 11'))
+      expect(amberStrokes.length).toBeGreaterThan(0)
+      const blueStrokes = strokeStyles.filter(s => s.includes('59, 130, 246'))
+      expect(blueStrokes.length).toBe(0)
     })
   })
 })

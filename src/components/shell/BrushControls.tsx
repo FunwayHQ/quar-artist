@@ -1,10 +1,11 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import { Settings2, ChevronDown, X, Download, Upload, Bold, Italic, AlignLeft, AlignCenter, AlignRight } from 'lucide-react'
+import { Settings2, ChevronDown, X, Download, Upload, Bold, Italic, AlignLeft, AlignCenter, AlignRight, FlipHorizontal2, FlipVertical2, RotateCw, RotateCcw, Check } from 'lucide-react'
 import { useBrushStore } from '@stores/brushStore.ts'
 import { useToolStore } from '@stores/toolStore.ts'
 import { useSelectionStore } from '@stores/selectionStore.ts'
 import { useTextStore } from '@stores/textStore.ts'
+import { useTransformStore } from '@stores/transformStore.ts'
 import { useUIStore } from '@stores/uiStore.ts'
 import { exportBrushPreset, importBrushPreset } from '../../io/brushPresets.ts'
 import { loadGoogleFont, isGoogleFontsConsented, GOOGLE_FONTS_POPULAR } from '../../utils/googleFonts.ts'
@@ -118,9 +119,18 @@ export function BrushControls() {
     setCustomDropdownOpen(false)
   }, [])
 
+  const transformIsActive = useTransformStore((s) => s.isActive)
+  const commitTransform = useTransformStore((s) => s.commitTransform)
+  const cancelTransformAction = useTransformStore((s) => s.cancelTransform)
+  const flipH = useTransformStore((s) => s.flipHorizontal)
+  const flipV = useTransformStore((s) => s.flipVertical)
+  const rotateCW = useTransformStore((s) => s.rotateCW)
+  const rotateCCW = useTransformStore((s) => s.rotateCCW)
+
   const showBrushOptions = activeTool === 'brush' || activeTool === 'eraser'
   const showSelectionOptions = activeTool === 'selection'
   const showTextOptions = activeTool === 'text'
+  const showTransformOptions = activeTool === 'transform'
 
   return (
     <div className={styles.toolStrip}>
@@ -327,6 +337,84 @@ export function BrushControls() {
               </label>
             </>
           )}
+        </div>
+      )}
+
+      {/* Transform options bar */}
+      {showTransformOptions && (
+        <div className={`glass ${styles.optionsRow}`} data-testid="transform-options-bar">
+          <div className={styles.group}>
+            <button
+              className={styles.presetButton}
+              onClick={() => flipH?.()}
+              title="Flip Horizontal (Shift+H)"
+              type="button"
+              aria-label="Flip horizontal"
+            >
+              <FlipHorizontal2 size={14} />
+              <span style={{ marginLeft: 4 }}>Flip H</span>
+            </button>
+            <button
+              className={styles.presetButton}
+              onClick={() => flipV?.()}
+              title="Flip Vertical (Shift+V)"
+              type="button"
+              aria-label="Flip vertical"
+            >
+              <FlipVertical2 size={14} />
+              <span style={{ marginLeft: 4 }}>Flip V</span>
+            </button>
+          </div>
+
+          <div className={styles.divider} />
+
+          <div className={styles.group}>
+            <button
+              className={styles.presetButton}
+              onClick={() => rotateCCW?.()}
+              title="Rotate 90° CCW"
+              type="button"
+              aria-label="Rotate 90 degrees counter-clockwise"
+            >
+              <RotateCcw size={14} />
+            </button>
+            <button
+              className={styles.presetButton}
+              onClick={() => rotateCW?.()}
+              title="Rotate 90° CW"
+              type="button"
+              aria-label="Rotate 90 degrees clockwise"
+            >
+              <RotateCw size={14} />
+            </button>
+          </div>
+
+          <div className={styles.divider} />
+
+          <div className={styles.group}>
+            <button
+              className={styles.presetButton}
+              onClick={() => commitTransform?.()}
+              title="Apply Transform (Enter)"
+              type="button"
+              aria-label="Apply transform"
+              disabled={!transformIsActive}
+            >
+              <Check size={14} />
+              <span style={{ marginLeft: 4 }}>Apply</span>
+            </button>
+            <button
+              className={styles.presetButton}
+              onClick={() => cancelTransformAction?.()}
+              title="Cancel Transform (Escape)"
+              type="button"
+              aria-label="Cancel transform"
+              disabled={!transformIsActive}
+            >
+              <X size={14} />
+              <span style={{ marginLeft: 4 }}>Cancel</span>
+            </button>
+          </div>
         </div>
       )}
 

@@ -6,6 +6,8 @@ import { LayerManager, type LayerChangeCallback } from '../layers/LayerManager.t
 import { LayerCompositor } from '../layers/LayerCompositor.ts'
 import { SelectionController } from '../selection/SelectionController.ts'
 import { TransformManager } from '../transform/TransformManager.ts'
+import { TransformController } from '../transform/TransformController.ts'
+import { getContentBounds } from '../utils/contentBounds.ts'
 import { FilterManager } from '../filters/FilterManager.ts'
 import { FloodFillTool } from '../tools/FloodFillTool.ts'
 import { EyedropperTool } from '../tools/EyedropperTool.ts'
@@ -58,14 +60,15 @@ export class CanvasManager {
   /** Hand tool (pan) state */
   private handPanState: { lastX: number; lastY: number } | null = null
 
-  /** Layer move tool state */
-  private layerMoveState: {
-    startCanvasX: number
-    startCanvasY: number
-    beforeSnapshot: LayerSnapshot
-    tempSprite: Sprite
-    tempTexture: Texture
+  /** Transform tool state */
+  private transformState: {
     layerId: string
+    beforeSnapshot: LayerSnapshot
+    previewSprite: Sprite
+    previewTexture: Texture
+    originalPixels: Uint8Array
+    originalWidth: number
+    originalHeight: number
   } | null = null
 
   readonly viewTransform = new ViewTransform()
@@ -75,6 +78,7 @@ export class CanvasManager {
   readonly compositor = new LayerCompositor()
   readonly selectionController: SelectionController
   readonly transformManager = new TransformManager()
+  readonly transformController = new TransformController()
   readonly filterManager = new FilterManager()
   readonly floodFillTool = new FloodFillTool()
   readonly eyedropperTool = new EyedropperTool()
@@ -245,6 +249,11 @@ export class CanvasManager {
 
   /** Undo the last operation (layer stroke or selection change). */
   async performUndo(): Promise<boolean> {
+    // Cancel active transform before undo
+    if (this.transformState) {
+      this.cancelTransform()
+    }
+
     const entry = await this.brushEngine.undoManager.undo()
     if (!entry) return false
 
@@ -429,13 +438,25 @@ export class CanvasManager {
 
   /** Set the active tool (called from React when toolStore changes). */
   setActiveTool(tool: ToolType) {
+    const prevTool = this.activeTool
     this.activeTool = tool
+
+    // Auto-commit transform when switching away from transform tool
+    if (prevTool === 'transform' && tool !== 'transform' && this.transformState) {
+      this.commitTransform()
+    }
+
+    // Auto-begin transform when switching to transform tool
+    if (tool === 'transform' && prevTool !== 'transform') {
+      this.beginTransform()
+    }
+
     // Update cursor based on tool
     if (this.overlayCanvas) {
       if (tool === 'move') {
         this.overlayCanvas.style.cursor = 'grab'
       } else if (tool === 'transform') {
-        this.overlayCanvas.style.cursor = 'move'
+        this.overlayCanvas.style.cursor = 'default'
       } else if (tool === 'text') {
         this.overlayCanvas.style.cursor = 'text'
       } else {
@@ -773,7 +794,13 @@ export class CanvasManager {
     }
 
     if (this.activeTool === 'transform') {
-      this.startLayerMove(ps)
+      this.transformController.setZoom(this.viewTransform.getState().zoom)
+      const consumed = this.transformController.handlePointerDown(canvasPoint)
+      if (!consumed && this.transformState) {
+        // Clicked outside bounds — commit current, begin new
+        this.commitTransform()
+        this.beginTransform()
+      }
       return
     }
 
@@ -840,8 +867,15 @@ export class CanvasManager {
       return
     }
 
-    if (this.activeTool === 'transform' && this.layerMoveState) {
-      this.updateLayerMove(ps)
+    if (this.activeTool === 'transform') {
+      const canvasPoint = this.viewTransform.screenToCanvas(ps.x, ps.y)
+      if (this.transformController.getDragging()) {
+        this.transformController.handlePointerMove(canvasPoint)
+        this.updateTransformPreview()
+      } else {
+        // Update cursor based on what's under the pointer
+        this.updateTransformCursor(canvasPoint)
+      }
       return
     }
 
@@ -885,8 +919,8 @@ export class CanvasManager {
       return
     }
 
-    if (this.activeTool === 'transform' && this.layerMoveState) {
-      this.finishLayerMove()
+    if (this.activeTool === 'transform') {
+      this.transformController.handlePointerUp()
       return
     }
 
@@ -917,61 +951,89 @@ export class CanvasManager {
     this.selectionController.executeMagicWand(canvasPoint, pixels)
   }
 
-  // ── Layer move tool ──────────────────────────────────────────────
+  // ── Transform tool ──────────────────────────────────────────────
 
-  private startLayerMove(ps: PointerState) {
+  /** Begin a transform operation on the active layer. */
+  beginTransform() {
     if (!this.app) return
+    if (this.transformState) return // already active
+
     const layer = this.layerManager.getActiveLayer()
     if (!layer) return
 
-    const canvasPoint = this.viewTransform.screenToCanvas(ps.x, ps.y)
-
-    // Extract current pixel data for undo
-    const extracted = this.app.renderer.extract.pixels({ target: layer.texture })
+    // Extract current pixel data
+    let extracted: { pixels: Uint8ClampedArray; width: number; height: number }
+    try {
+      extracted = this.app.renderer.extract.pixels({ target: layer.texture })
+    } catch {
+      return // extraction not available (e.g. during tests)
+    }
+    const pixels = new Uint8Array(extracted.pixels.buffer, extracted.pixels.byteOffset, extracted.pixels.byteLength)
     const before: LayerSnapshot = {
       width: extracted.width,
       height: extracted.height,
-      data: new Uint8Array(extracted.pixels.buffer, extracted.pixels.byteOffset, extracted.pixels.byteLength),
+      data: new Uint8Array(pixels),
     }
 
-    // Create a temporary canvas with the layer content
+    // Find content bounds
+    const bounds = getContentBounds(pixels, extracted.width, extracted.height)
+    if (!bounds) {
+      // Empty layer — no handles to show, but allow flip/rotate
+      return
+    }
+
+    // Start the transform controller
+    this.transformController.begin(bounds)
+
+    // Create a temporary canvas with the layer content for preview
     const canvas = document.createElement('canvas')
     canvas.width = before.width
     canvas.height = before.height
     const ctx = canvas.getContext('2d')!
     const imageData = new ImageData(
-      new Uint8ClampedArray(before.data.buffer, before.data.byteOffset, before.width * before.height * 4),
+      new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, extracted.width * extracted.height * 4),
       before.width,
       before.height,
     )
     ctx.putImageData(imageData, 0, 0)
 
-    const tempTexture = Texture.from(canvas)
-    const tempSprite = new Sprite(tempTexture)
+    const previewTexture = Texture.from(canvas)
+    const previewSprite = new Sprite(previewTexture)
 
-    this.layerMoveState = {
-      startCanvasX: canvasPoint.x,
-      startCanvasY: canvasPoint.y,
-      beforeSnapshot: before,
-      tempSprite,
-      tempTexture,
+    this.transformState = {
       layerId: layer.info.id,
+      beforeSnapshot: before,
+      previewSprite,
+      previewTexture,
+      originalPixels: pixels,
+      originalWidth: extracted.width,
+      originalHeight: extracted.height,
     }
   }
 
-  private updateLayerMove(ps: PointerState) {
-    if (!this.app || !this.layerMoveState) return
-    const layer = this.layerManager.getLayerById(this.layerMoveState.layerId)
+  /** Update the preview sprite based on current transform state. */
+  private updateTransformPreview() {
+    if (!this.app || !this.transformState) return
+    const layer = this.layerManager.getLayerById(this.transformState.layerId)
     if (!layer) return
 
-    const canvasPoint = this.viewTransform.screenToCanvas(ps.x, ps.y)
-    const dx = canvasPoint.x - this.layerMoveState.startCanvasX
-    const dy = canvasPoint.y - this.layerMoveState.startCanvasY
+    const state = this.transformController.manager.getState()
+    if (!state) return
 
-    // Position the temp sprite at the offset and render to layer texture
-    this.layerMoveState.tempSprite.position.set(dx, dy)
+    const { previewSprite } = this.transformState
+
+    // Apply transform to the preview sprite
+    previewSprite.position.set(
+      state.pivotX + state.translateX,
+      state.pivotY + state.translateY,
+    )
+    previewSprite.pivot.set(state.pivotX, state.pivotY)
+    previewSprite.scale.set(state.scaleX, state.scaleY)
+    previewSprite.rotation = state.rotation
+
+    // Render the transformed sprite to the layer texture
     this.app.renderer.render({
-      container: this.layerMoveState.tempSprite,
+      container: previewSprite,
       target: layer.texture,
       clear: true,
     })
@@ -979,14 +1041,15 @@ export class CanvasManager {
     this.scheduleComposite()
   }
 
-  private finishLayerMove() {
-    if (!this.app || !this.layerMoveState) return
+  /** Commit the current transform (apply changes and push undo). */
+  commitTransform() {
+    if (!this.app || !this.transformState) return
 
     this.flushComposite()
 
-    const layer = this.layerManager.getLayerById(this.layerMoveState.layerId)
+    const layer = this.layerManager.getLayerById(this.transformState.layerId)
     if (layer) {
-      // Create after snapshot
+      // Extract the after snapshot
       const extracted = this.app.renderer.extract.pixels({ target: layer.texture })
       const after: LayerSnapshot = {
         width: extracted.width,
@@ -997,21 +1060,202 @@ export class CanvasManager {
       // Push undo entry
       const entry: LayerUndoEntry = {
         type: 'layer',
-        layerId: this.layerMoveState.layerId,
-        before: this.layerMoveState.beforeSnapshot,
+        layerId: this.transformState.layerId,
+        before: this.transformState.beforeSnapshot,
         after,
       }
       this.brushEngine.undoManager.pushEntry(entry)
+      this.brushEngine.clearSnapshotCache()
 
       this.recomposite()
       this.layerManager.updateThumbnails()
       this.captureTimelapseFrame()
     }
 
-    // Cleanup
-    this.layerMoveState.tempTexture.destroy(true)
-    this.layerMoveState.tempSprite.destroy()
-    this.layerMoveState = null
+    this.cleanupTransform()
+  }
+
+  /** Cancel the current transform (restore original pixels). */
+  cancelTransform() {
+    if (!this.app || !this.transformState) return
+
+    const layer = this.layerManager.getLayerById(this.transformState.layerId)
+    if (layer) {
+      // Restore original pixels
+      this.restoreLayerSnapshot(layer.texture, this.transformState.beforeSnapshot)
+      this.compositor.invalidateCache()
+      this.recomposite()
+    }
+
+    this.cleanupTransform()
+  }
+
+  /** Cleanup transform state. */
+  private cleanupTransform() {
+    if (this.transformState) {
+      this.transformState.previewTexture.destroy(true)
+      this.transformState.previewSprite.destroy()
+      this.transformState = null
+    }
+    this.transformController.cancel()
+  }
+
+  /** Flip the active layer horizontally. */
+  flipLayerHorizontal() {
+    this.applyPixelTransform((pixels, w, h) => ({
+      pixels: TransformManager.flipHorizontal(pixels, w, h),
+      width: w,
+      height: h,
+    }))
+  }
+
+  /** Flip the active layer vertically. */
+  flipLayerVertical() {
+    this.applyPixelTransform((pixels, w, h) => ({
+      pixels: TransformManager.flipVertical(pixels, w, h),
+      width: w,
+      height: h,
+    }))
+  }
+
+  /** Rotate the active layer 90 degrees clockwise. */
+  rotateLayer90CW() {
+    this.applyPixelTransform((pixels, w, h) =>
+      TransformManager.rotate90CW(pixels, w, h),
+    )
+  }
+
+  /** Rotate the active layer 90 degrees counter-clockwise. */
+  rotateLayer90CCW() {
+    this.applyPixelTransform((pixels, w, h) =>
+      TransformManager.rotate90CCW(pixels, w, h),
+    )
+  }
+
+  /**
+   * Helper: extract pixels from active layer, apply a pixel transform function,
+   * write back, and push undo. If a freeform transform is active, commit it first
+   * then re-begin after.
+   */
+  private applyPixelTransform(
+    fn: (pixels: Uint8Array, w: number, h: number) => { pixels: Uint8Array; width: number; height: number },
+  ) {
+    if (!this.app) return
+
+    // If freeform transform is active, commit first
+    const wasTransforming = this.transformState !== null
+    if (wasTransforming) {
+      this.commitTransform()
+    }
+
+    const layer = this.layerManager.getActiveLayer()
+    if (!layer) return
+
+    // Extract current pixels
+    const extracted = this.app.renderer.extract.pixels({ target: layer.texture })
+    const pixels = new Uint8Array(extracted.pixels.buffer, extracted.pixels.byteOffset, extracted.pixels.byteLength)
+    const before: LayerSnapshot = {
+      width: extracted.width,
+      height: extracted.height,
+      data: new Uint8Array(pixels),
+    }
+
+    // Apply the transform
+    const result = fn(pixels, extracted.width, extracted.height)
+
+    // For rotations that change dimensions, we need to center the result on the document
+    const docW = this.documentWidth
+    const docH = this.documentHeight
+    let afterData: Uint8Array
+    let afterW: number
+    let afterH: number
+
+    if (result.width !== extracted.width || result.height !== extracted.height) {
+      // Dimensions changed (rotation) — create a doc-sized canvas and center the result
+      const canvas = document.createElement('canvas')
+      canvas.width = docW
+      canvas.height = docH
+      const ctx = canvas.getContext('2d')!
+      const srcCanvas = document.createElement('canvas')
+      srcCanvas.width = result.width
+      srcCanvas.height = result.height
+      const srcCtx = srcCanvas.getContext('2d')!
+      srcCtx.putImageData(
+        new ImageData(new Uint8ClampedArray(result.pixels.buffer, result.pixels.byteOffset, result.width * result.height * 4), result.width, result.height),
+        0, 0,
+      )
+      const drawX = Math.round((docW - result.width) / 2)
+      const drawY = Math.round((docH - result.height) / 2)
+      ctx.drawImage(srcCanvas, drawX, drawY)
+      const imgData = ctx.getImageData(0, 0, docW, docH)
+      afterData = new Uint8Array(imgData.data.buffer)
+      afterW = docW
+      afterH = docH
+    } else {
+      afterData = result.pixels
+      afterW = result.width
+      afterH = result.height
+    }
+
+    const after: LayerSnapshot = {
+      width: afterW,
+      height: afterH,
+      data: afterData,
+    }
+
+    // Write back to layer texture
+    this.restoreLayerSnapshot(layer.texture, after)
+
+    // Push undo
+    const entry: LayerUndoEntry = {
+      type: 'layer',
+      layerId: layer.info.id,
+      before,
+      after,
+    }
+    this.brushEngine.undoManager.pushEntry(entry)
+    this.brushEngine.clearSnapshotCache()
+    this.compositor.invalidateCache()
+    this.recomposite()
+    this.layerManager.updateThumbnails()
+    this.captureTimelapseFrame()
+
+    // Re-begin transform if it was active
+    if (wasTransforming && this.activeTool === 'transform') {
+      this.beginTransform()
+    }
+  }
+
+  /** Update cursor based on transform handle hover. */
+  private updateTransformCursor(canvasPoint: { x: number; y: number }) {
+    if (!this.overlayCanvas) return
+    if (!this.transformController.isActive()) {
+      this.overlayCanvas.style.cursor = 'default'
+      return
+    }
+
+    const zoom = this.viewTransform.getState().zoom
+    const handleRadius = 8 / zoom
+    const handle = this.transformController.manager.hitTestHandle(canvasPoint, handleRadius, zoom)
+
+    if (handle) {
+      const cursorMap: Record<string, string> = {
+        topLeft: 'nwse-resize',
+        topRight: 'nesw-resize',
+        bottomLeft: 'nesw-resize',
+        bottomRight: 'nwse-resize',
+        topCenter: 'ns-resize',
+        bottomCenter: 'ns-resize',
+        middleLeft: 'ew-resize',
+        middleRight: 'ew-resize',
+        rotation: 'crosshair',
+      }
+      this.overlayCanvas.style.cursor = cursorMap[handle] || 'default'
+    } else if (this.transformController.manager.isInsideBounds(canvasPoint)) {
+      this.overlayCanvas.style.cursor = 'move'
+    } else {
+      this.overlayCanvas.style.cursor = 'default'
+    }
   }
 
   // ── Overlay render loop ───────────────────────────────────────────
@@ -1072,6 +1316,9 @@ export class CanvasManager {
 
     // Draw selection overlay (marching ants + tool preview)
     this.selectionController.drawOverlay(ctx, view.zoom)
+
+    // Draw transform overlay (bounding box + handles)
+    this.transformController.drawOverlay(ctx, view.zoom)
 
     ctx.restore()
   }

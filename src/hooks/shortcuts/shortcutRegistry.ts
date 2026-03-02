@@ -71,6 +71,14 @@ export const DEFAULT_SHORTCUTS: ShortcutDef[] = [
 
   // ── Quick Menu ──
   { id: 'quick-menu',       label: 'Quick Menu',       category: 'tools', keys: 'q',             action: 'quick-menu' },
+
+  // ── Transform ──
+  { id: 'flip-h',           label: 'Flip Horizontal',  category: 'edit', keys: 'shift+h',        action: 'flip-horizontal' },
+  { id: 'flip-v',           label: 'Flip Vertical',    category: 'edit', keys: 'shift+v',        action: 'flip-vertical' },
+  { id: 'rotate-cw',        label: 'Rotate 90° CW',    category: 'edit', keys: 'shift+bracketright', action: 'rotate-cw' },
+  { id: 'rotate-ccw',       label: 'Rotate 90° CCW',   category: 'edit', keys: 'shift+bracketleft',  action: 'rotate-ccw' },
+  { id: 'commit-transform', label: 'Apply Transform',  category: 'edit', keys: 'enter',          action: 'commit-transform' },
+  { id: 'cancel-transform', label: 'Cancel Transform', category: 'edit', keys: 'escape',         action: 'cancel-transform' },
 ]
 
 /** Shortcut category display labels */

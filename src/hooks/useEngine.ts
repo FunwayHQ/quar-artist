@@ -50,5 +50,40 @@ export function useEngine(containerRef: React.RefObject<HTMLElement | null>) {
     managerRef.current?.performRedo()
   }, [])
 
-  return { manager: managerRef.current, ready, undo, redo }
+  const commitTransform = useCallback(() => {
+    managerRef.current?.commitTransform()
+  }, [])
+
+  const cancelTransform = useCallback(() => {
+    managerRef.current?.cancelTransform()
+  }, [])
+
+  const flipLayerHorizontal = useCallback(() => {
+    managerRef.current?.flipLayerHorizontal()
+  }, [])
+
+  const flipLayerVertical = useCallback(() => {
+    managerRef.current?.flipLayerVertical()
+  }, [])
+
+  const rotateLayer90CW = useCallback(() => {
+    managerRef.current?.rotateLayer90CW()
+  }, [])
+
+  const rotateLayer90CCW = useCallback(() => {
+    managerRef.current?.rotateLayer90CCW()
+  }, [])
+
+  return {
+    manager: managerRef.current,
+    ready,
+    undo,
+    redo,
+    commitTransform,
+    cancelTransform,
+    flipLayerHorizontal,
+    flipLayerVertical,
+    rotateLayer90CW,
+    rotateLayer90CCW,
+  }
 }

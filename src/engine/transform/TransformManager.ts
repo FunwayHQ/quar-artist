@@ -163,7 +163,7 @@ export class TransformManager {
    * Get the 8 handle positions + rotation handle in canvas coordinates.
    * Accounts for current translation, scale, and rotation.
    */
-  getHandlePositions(): Record<HandlePosition, Point> | null {
+  getHandlePositions(zoom = 1): Record<HandlePosition, Point> | null {
     if (!this.state) return null
 
     const { originalBounds: b, translateX: tx, translateY: ty, scaleX: sx, scaleY: sy, rotation, pivotX, pivotY } = this.state
@@ -182,6 +182,8 @@ export class TransformManager {
       }
     }
 
+    const rotDist = 20 / zoom
+
     return {
       topLeft: rotatePoint(-hw, -hh),
       topCenter: rotatePoint(0, -hh),
@@ -191,7 +193,7 @@ export class TransformManager {
       bottomLeft: rotatePoint(-hw, hh),
       bottomCenter: rotatePoint(0, hh),
       bottomRight: rotatePoint(hw, hh),
-      rotation: rotatePoint(0, -hh - 20), // 20px above top center
+      rotation: rotatePoint(0, -hh - rotDist),
     }
   }
 
@@ -199,8 +201,8 @@ export class TransformManager {
    * Hit-test: which handle (if any) is under the given point?
    * Returns the handle name or null.
    */
-  hitTestHandle(point: Point, handleRadius = 6): HandlePosition | null {
-    const handles = this.getHandlePositions()
+  hitTestHandle(point: Point, handleRadius = 6, zoom = 1): HandlePosition | null {
+    const handles = this.getHandlePositions(zoom)
     if (!handles) return null
 
     const entries = Object.entries(handles) as [HandlePosition, Point][]
@@ -354,6 +356,82 @@ export class TransformManager {
     }
 
     return dst
+  }
+
+  /** Flip pixel data horizontally (mirror left-right). */
+  static flipHorizontal(pixels: Uint8Array | Uint8ClampedArray, width: number, height: number): Uint8Array {
+    const result = new Uint8Array(pixels.length)
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const srcIdx = (y * width + x) * 4
+        const dstIdx = (y * width + (width - 1 - x)) * 4
+        result[dstIdx] = pixels[srcIdx]
+        result[dstIdx + 1] = pixels[srcIdx + 1]
+        result[dstIdx + 2] = pixels[srcIdx + 2]
+        result[dstIdx + 3] = pixels[srcIdx + 3]
+      }
+    }
+    return result
+  }
+
+  /** Flip pixel data vertically (mirror top-bottom). */
+  static flipVertical(pixels: Uint8Array | Uint8ClampedArray, width: number, height: number): Uint8Array {
+    const result = new Uint8Array(pixels.length)
+    const rowBytes = width * 4
+    for (let y = 0; y < height; y++) {
+      const srcOffset = y * rowBytes
+      const dstOffset = (height - 1 - y) * rowBytes
+      result.set(pixels.subarray(srcOffset, srcOffset + rowBytes), dstOffset)
+    }
+    return result
+  }
+
+  /** Rotate pixel data 90 degrees clockwise. Returns { pixels, width, height }. */
+  static rotate90CW(
+    pixels: Uint8Array | Uint8ClampedArray,
+    width: number,
+    height: number,
+  ): { pixels: Uint8Array; width: number; height: number } {
+    const newW = height
+    const newH = width
+    const result = new Uint8Array(newW * newH * 4)
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const srcIdx = (y * width + x) * 4
+        const dstX = height - 1 - y
+        const dstY = x
+        const dstIdx = (dstY * newW + dstX) * 4
+        result[dstIdx] = pixels[srcIdx]
+        result[dstIdx + 1] = pixels[srcIdx + 1]
+        result[dstIdx + 2] = pixels[srcIdx + 2]
+        result[dstIdx + 3] = pixels[srcIdx + 3]
+      }
+    }
+    return { pixels: result, width: newW, height: newH }
+  }
+
+  /** Rotate pixel data 90 degrees counter-clockwise. Returns { pixels, width, height }. */
+  static rotate90CCW(
+    pixels: Uint8Array | Uint8ClampedArray,
+    width: number,
+    height: number,
+  ): { pixels: Uint8Array; width: number; height: number } {
+    const newW = height
+    const newH = width
+    const result = new Uint8Array(newW * newH * 4)
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const srcIdx = (y * width + x) * 4
+        const dstX = y
+        const dstY = width - 1 - x
+        const dstIdx = (dstY * newW + dstX) * 4
+        result[dstIdx] = pixels[srcIdx]
+        result[dstIdx + 1] = pixels[srcIdx + 1]
+        result[dstIdx + 2] = pixels[srcIdx + 2]
+        result[dstIdx + 3] = pixels[srcIdx + 3]
+      }
+    }
+    return { pixels: result, width: newW, height: newH }
   }
 
   /**

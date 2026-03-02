@@ -18,9 +18,15 @@ interface UseKeyboardShortcutsOptions {
   onToggleRecording?: () => void
   onQuickMenu?: () => void
   onClearLayer?: () => void
+  onCommitTransform?: () => void
+  onCancelTransform?: () => void
+  onFlipHorizontal?: () => void
+  onFlipVertical?: () => void
+  onRotateCW?: () => void
+  onRotateCCW?: () => void
 }
 
-export function useKeyboardShortcuts({ manager, undo, redo, onOpenFilter, onToggleRecording, onQuickMenu, onClearLayer }: UseKeyboardShortcutsOptions) {
+export function useKeyboardShortcuts({ manager, undo, redo, onOpenFilter, onToggleRecording, onQuickMenu, onClearLayer, onCommitTransform, onCancelTransform, onFlipHorizontal, onFlipVertical, onRotateCW, onRotateCCW }: UseKeyboardShortcutsOptions) {
   const shortcutMap = useMemo(() => buildShortcutMap(DEFAULT_SHORTCUTS), [])
 
   const dispatch = useCallback(
@@ -114,9 +120,31 @@ export function useKeyboardShortcuts({ manager, undo, redo, onOpenFilter, onTogg
         case 'clear-layer':
           onClearLayer?.()
           break
+        case 'commit-transform':
+          if (useToolStore.getState().activeTool === 'transform') {
+            onCommitTransform?.()
+          }
+          break
+        case 'cancel-transform':
+          if (useToolStore.getState().activeTool === 'transform') {
+            onCancelTransform?.()
+          }
+          break
+        case 'flip-horizontal':
+          onFlipHorizontal?.()
+          break
+        case 'flip-vertical':
+          onFlipVertical?.()
+          break
+        case 'rotate-cw':
+          onRotateCW?.()
+          break
+        case 'rotate-ccw':
+          onRotateCCW?.()
+          break
       }
     },
-    [manager, undo, redo, onOpenFilter, onToggleRecording, onQuickMenu, onClearLayer],
+    [manager, undo, redo, onOpenFilter, onToggleRecording, onQuickMenu, onClearLayer, onCommitTransform, onCancelTransform, onFlipHorizontal, onFlipVertical, onRotateCW, onRotateCCW],
   )
 
   useEffect(() => {

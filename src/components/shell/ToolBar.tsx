@@ -2,7 +2,7 @@ import React from 'react'
 import {
   Brush,
   Eraser,
-  Move,
+  Maximize2,
   MousePointer2,
   Pipette,
   PaintBucket,
@@ -23,7 +23,7 @@ const tools: { id: ToolType; icon: typeof Brush; label: string }[] = [
   { id: 'eyedropper', icon: Pipette, label: 'Eyedropper' },
   { id: 'text', icon: Type, label: 'Text' },
   { id: 'selection', icon: MousePointer2, label: 'Selection' },
-  { id: 'transform', icon: Move, label: 'Transform' },
+  { id: 'transform', icon: Maximize2, label: 'Transform' },
   { id: 'move', icon: Hand, label: 'Move' },
 ]
 

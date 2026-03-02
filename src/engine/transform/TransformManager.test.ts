@@ -374,4 +374,63 @@ describe('TransformManager', () => {
       expect(bounds.y).toBeCloseTo(50)
     })
   })
+
+  describe('flipHorizontal', () => {
+    it('mirrors pixels left-to-right', () => {
+      // 2x1 image: pixel 0 is red, pixel 1 is blue
+      const pixels = new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255])
+      const result = TransformManager.flipHorizontal(pixels, 2, 1)
+      // After flip: pixel 0 should be blue, pixel 1 should be red
+      expect(result[0]).toBe(0)   // R
+      expect(result[1]).toBe(0)   // G
+      expect(result[2]).toBe(255) // B
+      expect(result[3]).toBe(255) // A
+      expect(result[4]).toBe(255) // R
+      expect(result[5]).toBe(0)   // G
+      expect(result[6]).toBe(0)   // B
+      expect(result[7]).toBe(255) // A
+    })
+  })
+
+  describe('flipVertical', () => {
+    it('mirrors pixels top-to-bottom', () => {
+      // 1x2 image: row 0 is red, row 1 is blue
+      const pixels = new Uint8Array([255, 0, 0, 255, 0, 0, 255, 255])
+      const result = TransformManager.flipVertical(pixels, 1, 2)
+      // After flip: row 0 should be blue, row 1 should be red
+      expect(result[0]).toBe(0)
+      expect(result[2]).toBe(255)
+      expect(result[4]).toBe(255)
+      expect(result[6]).toBe(0)
+    })
+  })
+
+  describe('rotate90CW', () => {
+    it('rotates 2x3 image to 3x2', () => {
+      // 2x3 image (w=2, h=3)
+      const pixels = new Uint8Array(2 * 3 * 4)
+      // Mark top-left (0,0) as red
+      pixels[0] = 255; pixels[3] = 255
+      const result = TransformManager.rotate90CW(pixels, 2, 3)
+      expect(result.width).toBe(3)
+      expect(result.height).toBe(2)
+      // After CW rotation, top-left (0,0) of original → top-right (2,0) of result
+      const idx = (0 * 3 + 2) * 4
+      expect(result.pixels[idx]).toBe(255)
+    })
+  })
+
+  describe('rotate90CCW', () => {
+    it('rotates 2x3 image to 3x2', () => {
+      const pixels = new Uint8Array(2 * 3 * 4)
+      // Mark top-left (0,0) as red
+      pixels[0] = 255; pixels[3] = 255
+      const result = TransformManager.rotate90CCW(pixels, 2, 3)
+      expect(result.width).toBe(3)
+      expect(result.height).toBe(2)
+      // After CCW rotation, top-left (0,0) of original → bottom-left (0,1) of result
+      const idx = (1 * 3 + 0) * 4
+      expect(result.pixels[idx]).toBe(255)
+    })
+  })
 })

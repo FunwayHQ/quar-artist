@@ -214,11 +214,11 @@ describe('CanvasManager', () => {
       expect(overlay.style.cursor).toBe('grab')
     })
 
-    it('sets move cursor for transform tool', async () => {
+    it('sets default cursor for transform tool', async () => {
       await cm.init(container)
       cm.setActiveTool('transform')
       const overlay = container.querySelectorAll('canvas')[1]
-      expect(overlay.style.cursor).toBe('move')
+      expect(overlay.style.cursor).toBe('default')
     })
 
     it('resets cursor for brush tool', async () => {
