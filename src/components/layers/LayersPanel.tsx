@@ -74,6 +74,7 @@ export function LayersPanel({ manager }: LayersPanelProps) {
   const handleMergeDown = useCallback(() => {
     if (!manager || !activeLayerId) return
     manager.layerManager.mergeDown(activeLayerId)
+    manager.brushEngine.clearSnapshotCache()
     manager.syncBrushToActiveLayer()
     manager.recomposite()
   }, [manager, activeLayerId])
@@ -166,6 +167,7 @@ export function LayersPanel({ manager }: LayersPanelProps) {
     (id: string) => {
       if (!manager) return
       manager.layerManager.mergeDown(id)
+      manager.brushEngine.clearSnapshotCache()
       manager.syncBrushToActiveLayer()
       manager.recomposite()
     },
