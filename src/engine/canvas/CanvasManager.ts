@@ -1230,8 +1230,21 @@ export class CanvasManager {
   // ── Custom cursors for transform tool ───────────────────────────
 
   private static readonly ROTATE_CURSOR = (() => {
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="%23F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9"/><polyline points="21 3 21 9 15 9"/></svg>`
-    return `url("data:image/svg+xml,${svg}") 12 12, crosshair`
+    // Curved double-arrow rotation indicator (32x32, amber with dark outline for contrast)
+    const svg = [
+      `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">`,
+      // Arc path (3/4 circle)
+      `<path d="M16 6 A10 10 0 1 1 6 16" fill="none" stroke="%23000" stroke-width="3" stroke-linecap="round"/>`,
+      `<path d="M16 6 A10 10 0 1 1 6 16" fill="none" stroke="%23F59E0B" stroke-width="2" stroke-linecap="round"/>`,
+      // Arrowhead at start (top center, pointing right)
+      `<polygon points="16,2 22,6 16,10" fill="%23000" stroke="none"/>`,
+      `<polygon points="16.5,3 21,6 16.5,9" fill="%23F59E0B" stroke="none"/>`,
+      // Arrowhead at end (left center, pointing down)
+      `<polygon points="2,16 6,22 10,16" fill="%23000" stroke="none"/>`,
+      `<polygon points="3,16.5 6,21 9,16.5" fill="%23F59E0B" stroke="none"/>`,
+      `</svg>`,
+    ].join('')
+    return `url("data:image/svg+xml,${svg}") 16 16, crosshair`
   })()
 
   private static readonly SCALE_CURSORS: Record<string, string> = (() => {
