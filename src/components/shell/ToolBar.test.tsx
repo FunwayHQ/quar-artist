@@ -9,10 +9,10 @@ describe('ToolBar', () => {
     useToolStore.setState({ activeTool: 'brush', previousTool: 'brush' })
   })
 
-  it('renders all 7 tool buttons', () => {
+  it('renders all 8 tool buttons', () => {
     render(<ToolBar />)
     const buttons = screen.getAllByRole('button')
-    expect(buttons).toHaveLength(7)
+    expect(buttons).toHaveLength(8)
   })
 
   it('renders with toolbar role', () => {
@@ -27,6 +27,7 @@ describe('ToolBar', () => {
     expect(screen.getByRole('button', { name: 'Fill' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Eyedropper' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Selection' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Text' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Transform' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Move' })).toBeInTheDocument()
   })

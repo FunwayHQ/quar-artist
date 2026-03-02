@@ -1,0 +1,113 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.dialog {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  padding: var(--space-xl);
+  width: 420px;
+  max-width: 90vw;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md);
+}
+
+.title {
+  font-family: var(--font-family-ui);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.slotList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-xs);
+}
+
+.slotRow {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  padding: var(--space-xs) var(--space-sm);
+  background: var(--color-bg-tertiary);
+  border-radius: var(--radius-sm);
+}
+
+.slotIndex {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  width: 20px;
+  text-align: center;
+}
+
+.slotLabel {
+  flex: 1;
+  font-family: var(--font-family-ui);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+
+.slotSelect {
+  background: var(--color-bg-primary);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-xs);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-ui);
+  font-size: var(--font-size-xs);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
+.slotSelect:focus {
+  border-color: var(--color-accent-primary);
+  outline: none;
+}
+
+.footer {
+  display: flex;
+  justify-content: space-between;
+  margin-top: var(--space-sm);
+}
+
+.resetBtn {
+  background: transparent;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-family: var(--font-family-ui);
+  font-size: var(--font-size-sm);
+  padding: var(--space-xs) var(--space-lg);
+}
+
+.resetBtn:hover {
+  border-color: var(--color-text-tertiary);
+  color: var(--color-text-primary);
+}
+
+.closeBtn {
+  background: var(--color-accent-primary);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: var(--color-bg-primary);
+  cursor: pointer;
+  font-family: var(--font-family-ui);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+  padding: var(--space-xs) var(--space-lg);
+}
+
+.closeBtn:hover {
+  opacity: 0.9;
+}

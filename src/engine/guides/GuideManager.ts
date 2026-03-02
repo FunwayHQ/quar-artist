@@ -251,6 +251,8 @@ export class GuideManager {
       ctx.moveTo(0, cy)
       ctx.lineTo(docW, cy)
       ctx.stroke()
+      // Draw draggable center handle
+      this.drawSymmetryCenterHandle(ctx, zoom)
     } else if (this.symmetryType === 'radial') {
       const n = this.symmetryAxes
       const maxDist = Math.sqrt(docW * docW + docH * docH)
@@ -265,8 +267,36 @@ export class GuideManager {
         ctx.lineTo(endX, endY)
       }
       ctx.stroke()
+      // Draw draggable center handle
+      this.drawSymmetryCenterHandle(ctx, zoom)
     }
 
     ctx.restore()
+  }
+
+  /** Draw the symmetry center handle (filled circle with amber border). */
+  private drawSymmetryCenterHandle(ctx: CanvasRenderingContext2D, zoom: number): void {
+    const r = 8 / zoom
+    ctx.save()
+    ctx.globalAlpha = 1
+    ctx.setLineDash([])
+    ctx.beginPath()
+    ctx.arc(this.symmetryCenterX, this.symmetryCenterY, r, 0, Math.PI * 2)
+    ctx.fillStyle = '#ffffff'
+    ctx.fill()
+    ctx.strokeStyle = this.symmetryColor
+    ctx.lineWidth = 2 / zoom
+    ctx.stroke()
+    ctx.restore()
+  }
+
+  /** Check if a canvas-space point hits the symmetry center handle. */
+  hitTestSymmetryCenter(canvasX: number, canvasY: number, zoom: number): boolean {
+    if (!this.symmetryEnabled) return false
+    if (this.symmetryType !== 'quadrant' && this.symmetryType !== 'radial') return false
+    const hitRadius = 12 / zoom
+    const dx = canvasX - this.symmetryCenterX
+    const dy = canvasY - this.symmetryCenterY
+    return dx * dx + dy * dy <= hitRadius * hitRadius
   }
 }

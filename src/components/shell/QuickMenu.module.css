@@ -1,0 +1,85 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 950;
+}
+
+.container {
+  position: absolute;
+  width: 0;
+  height: 0;
+}
+
+.slot {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-glass);
+  backdrop-filter: blur(12px) saturate(150%);
+  border: 1px solid var(--color-glass-border);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--easing-spring);
+  transform: translate(-50%, -50%);
+  animation: slotIn var(--duration-normal) var(--easing-spring) both;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.slot:hover,
+.slot[data-active='true'] {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: var(--color-accent-primary);
+  color: var(--color-accent-primary);
+  box-shadow:
+    0 0 16px rgba(245, 158, 11, 0.2),
+    0 4px 12px rgba(0, 0, 0, 0.3);
+  transform: translate(-50%, -50%) scale(1.15);
+}
+
+.slotLabel {
+  position: absolute;
+  bottom: -18px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--font-family-mono);
+  font-size: 8px;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--easing-default);
+}
+
+.slot:hover .slotLabel,
+.slot[data-active='true'] .slotLabel {
+  opacity: 1;
+  color: var(--color-accent-primary);
+}
+
+.center {
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--color-glass);
+  border: 1px solid var(--color-glass-border);
+  transform: translate(-50%, -50%);
+}
+
+@keyframes slotIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.5);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+}

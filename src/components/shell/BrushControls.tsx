@@ -1,11 +1,13 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import { Settings2, ChevronDown, X, Download, Upload } from 'lucide-react'
+import { Settings2, ChevronDown, X, Download, Upload, Bold, Italic, AlignLeft, AlignCenter, AlignRight } from 'lucide-react'
 import { useBrushStore } from '@stores/brushStore.ts'
 import { useToolStore } from '@stores/toolStore.ts'
 import { useSelectionStore } from '@stores/selectionStore.ts'
+import { useTextStore } from '@stores/textStore.ts'
 import { useUIStore } from '@stores/uiStore.ts'
 import { exportBrushPreset, importBrushPreset } from '../../io/brushPresets.ts'
+import { loadGoogleFont, isGoogleFontsConsented, GOOGLE_FONTS_POPULAR } from '../../utils/googleFonts.ts'
 import { ToolBar } from './ToolBar.tsx'
 import styles from './BrushControls.module.css'
 import type { SelectionToolType } from '@app-types/selection.ts'
@@ -37,6 +39,13 @@ export function BrushControls() {
   const setMagicWandTolerance = useSelectionStore((s) => s.setMagicWandTolerance)
   const setMagicWandContiguous = useSelectionStore((s) => s.setMagicWandContiguous)
   const setFeatherRadius = useSelectionStore((s) => s.setFeatherRadius)
+
+  const textFontFamily = useTextStore((s) => s.properties.fontFamily)
+  const textFontSize = useTextStore((s) => s.properties.fontSize)
+  const textFontWeight = useTextStore((s) => s.properties.fontWeight)
+  const textFontStyle = useTextStore((s) => s.properties.fontStyle)
+  const textAlign = useTextStore((s) => s.properties.textAlign)
+  const availableFonts = useTextStore((s) => s.availableFonts)
 
   const [customDropdownOpen, setCustomDropdownOpen] = useState(false)
   const [dropdownPos, setDropdownPos] = useState({ top: 0, left: 0 })
@@ -111,6 +120,7 @@ export function BrushControls() {
 
   const showBrushOptions = activeTool === 'brush' || activeTool === 'eraser'
   const showSelectionOptions = activeTool === 'selection'
+  const showTextOptions = activeTool === 'text'
 
   return (
     <div className={styles.toolStrip}>
@@ -317,6 +327,107 @@ export function BrushControls() {
               </label>
             </>
           )}
+        </div>
+      )}
+
+      {/* Text options bar */}
+      {showTextOptions && (
+        <div className={`glass ${styles.optionsRow}`} data-testid="text-options-bar">
+          <div className={styles.group}>
+            <span className={styles.label}>Font</span>
+            <select
+              className={styles.select}
+              value={textFontFamily}
+              onChange={(e) => {
+                const family = e.target.value
+                useTextStore.getState().setFontFamily(family)
+                // Pre-load Google Font when selected so it's ready for the textarea and rasterizer
+                if (isGoogleFontsConsented() && GOOGLE_FONTS_POPULAR.includes(family as any)) {
+                  loadGoogleFont(family)
+                }
+              }}
+              aria-label="Font family"
+            >
+              {availableFonts.map((f) => (
+                <option key={f} value={f}>{f}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className={styles.divider} />
+
+          <div className={styles.group}>
+            <span className={styles.label}>Size</span>
+            <input
+              type="number"
+              className={styles.numberInput}
+              min={1}
+              max={500}
+              value={textFontSize}
+              onChange={(e) => useTextStore.getState().setFontSize(Number(e.target.value))}
+              aria-label="Font size"
+            />
+          </div>
+
+          <div className={styles.divider} />
+
+          <div className={styles.group}>
+            <button
+              className={styles.iconToggle}
+              data-active={textFontWeight === 'bold'}
+              onClick={() => useTextStore.getState().setFontWeight(textFontWeight === 'bold' ? 'normal' : 'bold')}
+              title="Bold"
+              type="button"
+              aria-label="Bold"
+            >
+              <Bold size={14} />
+            </button>
+            <button
+              className={styles.iconToggle}
+              data-active={textFontStyle === 'italic'}
+              onClick={() => useTextStore.getState().setFontStyle(textFontStyle === 'italic' ? 'normal' : 'italic')}
+              title="Italic"
+              type="button"
+              aria-label="Italic"
+            >
+              <Italic size={14} />
+            </button>
+          </div>
+
+          <div className={styles.divider} />
+
+          <div className={styles.group}>
+            <button
+              className={styles.iconToggle}
+              data-active={textAlign === 'left'}
+              onClick={() => useTextStore.getState().setTextAlign('left')}
+              title="Align left"
+              type="button"
+              aria-label="Align left"
+            >
+              <AlignLeft size={14} />
+            </button>
+            <button
+              className={styles.iconToggle}
+              data-active={textAlign === 'center'}
+              onClick={() => useTextStore.getState().setTextAlign('center')}
+              title="Align center"
+              type="button"
+              aria-label="Align center"
+            >
+              <AlignCenter size={14} />
+            </button>
+            <button
+              className={styles.iconToggle}
+              data-active={textAlign === 'right'}
+              onClick={() => useTextStore.getState().setTextAlign('right')}
+              title="Align right"
+              type="button"
+              aria-label="Align right"
+            >
+              <AlignRight size={14} />
+            </button>
+          </div>
         </div>
       )}
     </div>

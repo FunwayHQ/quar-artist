@@ -62,6 +62,15 @@ export const DEFAULT_SHORTCUTS: ShortcutDef[] = [
 
   // ── Guides ──
   { id: 'drawing-guides',   label: 'Drawing Guides',   category: 'view', keys: 'shift+g',       action: 'toggle-guides' },
+
+  // ── Text ──
+  { id: 'tool-text',        label: 'Text',             category: 'tools', keys: 'shift+t',       action: 'tool:text' },
+
+  // ── Timelapse ──
+  { id: 'toggle-recording', label: 'Toggle Recording', category: 'file', keys: 'ctrl+shift+r',   action: 'toggle-recording' },
+
+  // ── Quick Menu ──
+  { id: 'quick-menu',       label: 'Quick Menu',       category: 'tools', keys: 'q',             action: 'quick-menu' },
 ]
 
 /** Shortcut category display labels */

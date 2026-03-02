@@ -21,6 +21,7 @@ export type ToolType =
   | 'fill'
   | 'eyedropper'
   | 'move'
+  | 'text'
 
 export interface PointerState {
   x: number

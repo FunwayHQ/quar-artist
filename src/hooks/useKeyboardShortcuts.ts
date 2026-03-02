@@ -15,9 +15,12 @@ interface UseKeyboardShortcutsOptions {
   undo: () => void
   redo: () => void
   onOpenFilter: (filterType: FilterType) => void
+  onToggleRecording?: () => void
+  onQuickMenu?: () => void
+  onClearLayer?: () => void
 }
 
-export function useKeyboardShortcuts({ manager, undo, redo, onOpenFilter }: UseKeyboardShortcutsOptions) {
+export function useKeyboardShortcuts({ manager, undo, redo, onOpenFilter, onToggleRecording, onQuickMenu, onClearLayer }: UseKeyboardShortcutsOptions) {
   const shortcutMap = useMemo(() => buildShortcutMap(DEFAULT_SHORTCUTS), [])
 
   const dispatch = useCallback(
@@ -102,9 +105,18 @@ export function useKeyboardShortcuts({ manager, undo, redo, onOpenFilter }: UseK
         case 'toggle-guides':
           useUIStore.getState().setShowDrawingGuidesDialog(true)
           break
+        case 'toggle-recording':
+          onToggleRecording?.()
+          break
+        case 'quick-menu':
+          onQuickMenu?.()
+          break
+        case 'clear-layer':
+          onClearLayer?.()
+          break
       }
     },
-    [manager, undo, redo, onOpenFilter],
+    [manager, undo, redo, onOpenFilter, onToggleRecording, onQuickMenu, onClearLayer],
   )
 
   useEffect(() => {

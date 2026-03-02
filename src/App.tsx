@@ -10,6 +10,9 @@ import { FullscreenHud } from '@components/shell/FullscreenHud.tsx'
 import { ToastContainer } from '@components/ui/ToastContainer.tsx'
 import { ContextMenu, type ContextMenuItem } from '@components/ui/ContextMenu.tsx'
 import { LoadingOverlay } from '@components/ui/LoadingOverlay.tsx'
+import { QuickMenu } from '@components/shell/QuickMenu.tsx'
+import { TextInputOverlay } from '@components/shell/TextInputOverlay.tsx'
+import { CookieConsentBanner } from '@components/shell/CookieConsentBanner.tsx'
 
 // Lazy-loaded dialogs — only fetched when opened
 const ExportDialog = lazy(() => import('@components/dialogs/ExportDialog.tsx').then(m => ({ default: m.ExportDialog })))
@@ -19,6 +22,8 @@ const ShortcutsModal = lazy(() => import('@components/dialogs/ShortcutsModal.tsx
 const AboutModal = lazy(() => import('@components/dialogs/AboutModal.tsx').then(m => ({ default: m.AboutModal })))
 const BrushStudio = lazy(() => import('@components/dialogs/BrushStudio.tsx').then(m => ({ default: m.BrushStudio })))
 const DrawingGuidesDialog = lazy(() => import('@components/dialogs/DrawingGuidesDialog.tsx').then(m => ({ default: m.DrawingGuidesDialog })))
+const TimelapseExportDialog = lazy(() => import('@components/dialogs/TimelapseExportDialog.tsx').then(m => ({ default: m.TimelapseExportDialog })))
+const QuickMenuSettingsDialog = lazy(() => import('@components/dialogs/QuickMenuSettingsDialog.tsx').then(m => ({ default: m.QuickMenuSettingsDialog })))
 import { useEngine } from '@hooks/useEngine.ts'
 import { useKeyboardShortcuts } from '@hooks/useKeyboardShortcuts.ts'
 import { useBrushStore } from '@stores/brushStore.ts'
@@ -29,11 +34,17 @@ import { useUIStore } from '@stores/uiStore.ts'
 import { useFilterStore } from '@stores/filterStore.ts'
 import { useProjectStore } from '@stores/projectStore.ts'
 import { useGuideStore } from '@stores/guideStore.ts'
+import { useTimelapseStore } from '@stores/timelapseStore.ts'
+import { useTextStore } from '@stores/textStore.ts'
+import { useQuickMenuStore } from '@stores/quickMenuStore.ts'
 import { exportImage, downloadBlob } from './io/formats/image/ImageExporter.ts'
 import { getImageFromClipboard, getImageFromDrop, decodeImageBlob, pickImageFile } from './io/importImage.ts'
 import { hsbToRgba, rgbaToHsb } from '@app-types/color.ts'
+import { isGoogleFontsConsented, isGoogleFontsDeclined, setGoogleFontsConsent, preloadGoogleFonts, GOOGLE_FONTS_POPULAR } from './utils/googleFonts.ts'
+import { WEB_SAFE_FONTS } from '@app-types/text.ts'
 import type { ExportOptions } from '@app-types/project.ts'
 import type { FilterType } from '@app-types/filter.ts'
+import type { QuickMenuSlot } from '@app-types/quickmenu.ts'
 import styles from './App.module.css'
 
 export default function App() {
@@ -47,6 +58,8 @@ export default function App() {
   const showCanvasSizeDialog = useUIStore((s) => s.showCanvasSizeDialog)
   const showBrushStudio = useUIStore((s) => s.showBrushStudio)
   const showDrawingGuidesDialog = useUIStore((s) => s.showDrawingGuidesDialog)
+  const showTimelapseExportDialog = useUIStore((s) => s.showTimelapseExportDialog)
+  const showQuickMenuSettings = useUIStore((s) => s.showQuickMenuSettings)
   const fullscreen = useUIStore((s) => s.fullscreen)
   const panelsHidden = useUIStore((s) => s.panelsHidden)
   const leftPanelOpen = useUIStore((s) => s.leftPanelOpen)
@@ -55,6 +68,22 @@ export default function App() {
   const canvasWidth = useProjectStore((s) => s.canvasWidth)
   const canvasHeight = useProjectStore((s) => s.canvasHeight)
   const projectName = useProjectStore((s) => s.currentProjectName)
+
+  // Google Fonts consent state
+  const [showConsentBanner, setShowConsentBanner] = useState(false)
+
+  // Check consent status on mount
+  useEffect(() => {
+    if (!isGoogleFontsConsented() && !isGoogleFontsDeclined()) {
+      setShowConsentBanner(true)
+    }
+    // If already consented, preload fonts and update text store
+    if (isGoogleFontsConsented()) {
+      preloadGoogleFonts()
+      const merged = [...new Set([...WEB_SAFE_FONTS, ...GOOGLE_FONTS_POPULAR])].sort((a, b) => a.localeCompare(b))
+      useTextStore.getState().setAvailableFonts(merged)
+    }
+  }, [])
 
   // Sync brush preset changes to the engine
   useEffect(() => {
@@ -367,8 +396,155 @@ export default function App() {
     }
   }, [manager])
 
+  // ── Timelapse recording ──
+  const handleStartRecording = useCallback(() => {
+    if (!manager) return
+    manager.timelapseRecorder.startRecording()
+    useTimelapseStore.getState().setState('recording')
+    useTimelapseStore.getState().setFrameCount(0)
+    useUIStore.getState().addToast('Recording started', 'info')
+  }, [manager])
+
+  const handleStopRecording = useCallback(async () => {
+    if (!manager) return
+    try {
+      const blob = await manager.timelapseRecorder.stopRecording()
+      useTimelapseStore.getState().setVideoBlob(blob)
+      useTimelapseStore.getState().setState('idle')
+      useUIStore.getState().setShowTimelapseExportDialog(true)
+    } catch {
+      useUIStore.getState().addToast('Failed to stop recording', 'error')
+    }
+  }, [manager])
+
+  const handleDiscardRecording = useCallback(() => {
+    if (!manager) return
+    manager.timelapseRecorder.discard()
+    useTimelapseStore.getState().reset()
+    useUIStore.getState().addToast('Recording discarded', 'info')
+  }, [manager])
+
+  const handleToggleRecording = useCallback(() => {
+    const state = useTimelapseStore.getState().state
+    if (state === 'idle') handleStartRecording()
+    else handleStopRecording()
+  }, [handleStartRecording, handleStopRecording])
+
+  const handleTimelapseDownload = useCallback(() => {
+    const blob = useTimelapseStore.getState().videoBlob
+    if (blob) {
+      downloadBlob(blob, `${projectName}-timelapse.webm`)
+      useUIStore.getState().addToast('Timelapse downloaded', 'success')
+    }
+    useUIStore.getState().setShowTimelapseExportDialog(false)
+    useTimelapseStore.getState().reset()
+  }, [projectName])
+
+  const handleTimelapseDiscard = useCallback(() => {
+    useUIStore.getState().setShowTimelapseExportDialog(false)
+    useTimelapseStore.getState().reset()
+  }, [])
+
+  // Sync timelapse frame count from engine to store
+  useEffect(() => {
+    if (!manager) return
+    const interval = setInterval(() => {
+      if (manager.timelapseRecorder.getState() === 'recording') {
+        useTimelapseStore.getState().setFrameCount(manager.timelapseRecorder.getFrameCount())
+      }
+    }, 500)
+    return () => clearInterval(interval)
+  }, [manager])
+
+  // ── Symmetry center dragging ──
+  useEffect(() => {
+    if (!manager) return
+    manager.setSymmetryCenterChangedCallback((cx, cy) => {
+      useGuideStore.getState().setSymmetryCenterX(cx)
+      useGuideStore.getState().setSymmetryCenterY(cy)
+    })
+  }, [manager])
+
+  // ── Text tool ──
+  useEffect(() => {
+    if (!manager) return
+    manager.setTextInputCallback((screenX, screenY, canvasX, canvasY) => {
+      useTextStore.getState().beginEditing(screenX, screenY, canvasX, canvasY)
+    })
+  }, [manager])
+
+  // Sync text color from color store
+  useEffect(() => {
+    const unsub = useColorStore.subscribe((state) => {
+      const rgba = hsbToRgba(state.primary)
+      const hex = '#' + [rgba.r, rgba.g, rgba.b].map(c => c.toString(16).padStart(2, '0')).join('')
+      useTextStore.getState().setColor(hex)
+    })
+    return unsub
+  }, [])
+
+  const handleTextCommit = useCallback(async (text: string) => {
+    if (!manager) return
+    const pos = useTextStore.getState().editPosition
+    if (!pos) return
+    const props = useTextStore.getState().properties
+    // Ensure Google Font is loaded before rasterizing
+    await manager.textTool.ensureFontLoaded(props.fontFamily)
+    manager.commitText(text, props, pos.canvasX, pos.canvasY)
+    useTextStore.getState().endEditing()
+  }, [manager])
+
+  const handleTextCancel = useCallback(() => {
+    useTextStore.getState().endEditing()
+  }, [])
+
+  // ── Google Fonts consent ──
+  const handleFontConsentAccept = useCallback(() => {
+    setGoogleFontsConsent(true)
+    setShowConsentBanner(false)
+    preloadGoogleFonts()
+    const merged = [...new Set([...WEB_SAFE_FONTS, ...GOOGLE_FONTS_POPULAR])].sort((a, b) => a.localeCompare(b))
+    useTextStore.getState().setAvailableFonts(merged)
+  }, [])
+
+  const handleFontConsentDecline = useCallback(() => {
+    setGoogleFontsConsent(false)
+    setShowConsentBanner(false)
+  }, [])
+
+  // ── Quick Menu ──
+  const handleQuickMenuAction = useCallback((slot: QuickMenuSlot) => {
+    if (slot.actionType.kind === 'tool') {
+      useToolStore.getState().setTool(slot.actionType.tool)
+    } else {
+      switch (slot.actionType.action) {
+        case 'undo': undo(); break
+        case 'redo': redo(); break
+        case 'clear-layer': manager?.clearActiveLayer(); break
+      }
+    }
+  }, [manager, undo, redo])
+
+  const handleShowQuickMenu = useCallback(() => {
+    const vw = window.innerWidth / 2
+    const vh = window.innerHeight / 2
+    useQuickMenuStore.getState().show(vw, vh)
+  }, [])
+
+  const handleClearLayer = useCallback(() => {
+    manager?.clearActiveLayer()
+  }, [manager])
+
   // Keyboard shortcuts (declarative registry-based system)
-  useKeyboardShortcuts({ manager, undo, redo, onOpenFilter: handleOpenFilter })
+  useKeyboardShortcuts({
+    manager,
+    undo,
+    redo,
+    onOpenFilter: handleOpenFilter,
+    onToggleRecording: handleToggleRecording,
+    onQuickMenu: handleShowQuickMenu,
+    onClearLayer: handleClearLayer,
+  })
 
   // Canvas context menu
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
@@ -430,6 +606,9 @@ export default function App() {
             onUndo={undo}
             onRedo={redo}
             onImportImage={handleImportImage}
+            onStartRecording={handleStartRecording}
+            onStopRecording={handleStopRecording}
+            onDiscardRecording={handleDiscardRecording}
             manager={manager}
           />
           <BrushControls />
@@ -526,6 +705,22 @@ export default function App() {
             onClose={() => useUIStore.getState().setShowDrawingGuidesDialog(false)}
           />
         )}
+        {showTimelapseExportDialog && useTimelapseStore.getState().videoBlob && (
+          <TimelapseExportDialog
+            open={showTimelapseExportDialog}
+            videoBlob={useTimelapseStore.getState().videoBlob!}
+            frameCount={useTimelapseStore.getState().frameCount}
+            onDownload={handleTimelapseDownload}
+            onDiscard={handleTimelapseDiscard}
+            onClose={() => useUIStore.getState().setShowTimelapseExportDialog(false)}
+          />
+        )}
+        {showQuickMenuSettings && (
+          <QuickMenuSettingsDialog
+            open={showQuickMenuSettings}
+            onClose={() => useUIStore.getState().setShowQuickMenuSettings(false)}
+          />
+        )}
       </Suspense>
       {ctxMenu && (
         <ContextMenu
@@ -534,6 +729,11 @@ export default function App() {
           y={ctxMenu.y}
           onClose={() => setCtxMenu(null)}
         />
+      )}
+      <QuickMenu onAction={handleQuickMenuAction} />
+      <TextInputOverlay onCommit={handleTextCommit} onCancel={handleTextCancel} />
+      {showConsentBanner && (
+        <CookieConsentBanner onAccept={handleFontConsentAccept} onDecline={handleFontConsentDecline} />
       )}
       <ToastContainer />
     </div>

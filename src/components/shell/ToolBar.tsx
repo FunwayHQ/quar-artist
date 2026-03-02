@@ -7,6 +7,7 @@ import {
   Pipette,
   PaintBucket,
   Hand,
+  Type,
 } from 'lucide-react'
 import { useToolStore } from '@stores/toolStore.ts'
 import { Tooltip } from '@components/ui/Tooltip.tsx'
@@ -20,6 +21,7 @@ const tools: { id: ToolType; icon: typeof Brush; label: string }[] = [
   { id: 'eraser', icon: Eraser, label: 'Eraser' },
   { id: 'fill', icon: PaintBucket, label: 'Fill' },
   { id: 'eyedropper', icon: Pipette, label: 'Eyedropper' },
+  { id: 'text', icon: Type, label: 'Text' },
   { id: 'selection', icon: MousePointer2, label: 'Selection' },
   { id: 'transform', icon: Move, label: 'Transform' },
   { id: 'move', icon: Hand, label: 'Move' },
@@ -36,7 +38,7 @@ export function ToolBar() {
         const shortcutDisplay = shortcutKeys ? formatShortcutDisplay(shortcutKeys) : undefined
         return (
           <React.Fragment key={tool.id}>
-            {i === 4 && <div className={styles.divider} />}
+            {i === 5 && <div className={styles.divider} />}
             <Tooltip content={tool.label} shortcut={shortcutDisplay} position="right">
               <button
                 className={styles.tool}

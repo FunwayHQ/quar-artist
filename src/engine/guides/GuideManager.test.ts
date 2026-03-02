@@ -235,4 +235,84 @@ describe('GuideManager', () => {
     // 2 VP handles = 2 arc calls
     expect(ctx.arc).toHaveBeenCalledTimes(2)
   })
+
+  // ── hitTestSymmetryCenter ──
+
+  it('hitTestSymmetryCenter returns true when near center in quadrant mode', () => {
+    gm.symmetryEnabled = true
+    gm.symmetryType = 'quadrant'
+    gm.symmetryCenterX = 512
+    gm.symmetryCenterY = 384
+    expect(gm.hitTestSymmetryCenter(515, 386, 1)).toBe(true)
+  })
+
+  it('hitTestSymmetryCenter returns true when near center in radial mode', () => {
+    gm.symmetryEnabled = true
+    gm.symmetryType = 'radial'
+    gm.symmetryCenterX = 512
+    gm.symmetryCenterY = 384
+    expect(gm.hitTestSymmetryCenter(512, 384, 1)).toBe(true)
+  })
+
+  it('hitTestSymmetryCenter returns false for vertical/horizontal modes', () => {
+    gm.symmetryEnabled = true
+    gm.symmetryType = 'vertical'
+    gm.symmetryCenterX = 512
+    gm.symmetryCenterY = 384
+    expect(gm.hitTestSymmetryCenter(512, 384, 1)).toBe(false)
+  })
+
+  it('hitTestSymmetryCenter returns false when symmetry disabled', () => {
+    gm.symmetryEnabled = false
+    gm.symmetryType = 'quadrant'
+    gm.symmetryCenterX = 512
+    gm.symmetryCenterY = 384
+    expect(gm.hitTestSymmetryCenter(512, 384, 1)).toBe(false)
+  })
+
+  it('hitTestSymmetryCenter returns false when far from center', () => {
+    gm.symmetryEnabled = true
+    gm.symmetryType = 'quadrant'
+    gm.symmetryCenterX = 512
+    gm.symmetryCenterY = 384
+    expect(gm.hitTestSymmetryCenter(600, 500, 1)).toBe(false)
+  })
+
+  it('hitTestSymmetryCenter respects zoom-adjusted hit radius', () => {
+    gm.symmetryEnabled = true
+    gm.symmetryType = 'quadrant'
+    gm.symmetryCenterX = 100
+    gm.symmetryCenterY = 200
+    // At zoom=2, hit radius = 12/2 = 6px
+    expect(gm.hitTestSymmetryCenter(105, 200, 2)).toBe(true)   // 5px away, within 6
+    expect(gm.hitTestSymmetryCenter(108, 200, 2)).toBe(false)   // 8px away, outside 6
+  })
+
+  // ── drawSymmetryAxis with center handle ──
+
+  it('drawSymmetryAxis draws center handle for quadrant mode', () => {
+    gm.symmetryType = 'quadrant'
+    gm.symmetryCenterX = 512
+    gm.symmetryCenterY = 384
+    gm.drawSymmetryAxis(ctx, 1, 1024, 768)
+    // Center handle draws an arc
+    expect(ctx.arc).toHaveBeenCalledTimes(1)
+  })
+
+  it('drawSymmetryAxis draws center handle for radial mode', () => {
+    gm.symmetryType = 'radial'
+    gm.symmetryAxes = 4
+    gm.symmetryCenterX = 512
+    gm.symmetryCenterY = 384
+    gm.drawSymmetryAxis(ctx, 1, 1024, 768)
+    // Center handle draws an arc
+    expect(ctx.arc).toHaveBeenCalledTimes(1)
+  })
+
+  it('drawSymmetryAxis does not draw center handle for vertical mode', () => {
+    gm.symmetryType = 'vertical'
+    gm.symmetryCenterX = 512
+    gm.drawSymmetryAxis(ctx, 1, 1024, 768)
+    expect(ctx.arc).not.toHaveBeenCalled()
+  })
 })

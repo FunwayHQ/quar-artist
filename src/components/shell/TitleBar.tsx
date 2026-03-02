@@ -3,6 +3,7 @@ import { DropdownMenu, type MenuItem } from './DropdownMenu.tsx'
 import { useUIStore } from '@stores/uiStore.ts'
 import { useProjectStore } from '@stores/projectStore.ts'
 import { useGuideStore } from '@stores/guideStore.ts'
+import { useTimelapseStore } from '@stores/timelapseStore.ts'
 import type { CanvasManager } from '@engine/canvas/CanvasManager.ts'
 import type { FilterType } from '@app-types/filter.ts'
 import styles from './TitleBar.module.css'
@@ -13,16 +14,21 @@ interface TitleBarProps {
   onRedo?: () => void
   onSave?: () => void
   onImportImage?: () => void
+  onStartRecording?: () => void
+  onStopRecording?: () => void
+  onDiscardRecording?: () => void
   manager?: CanvasManager | null
 }
 
 type MenuName = 'file' | 'edit' | 'view' | 'adjustments' | 'selection' | 'help'
 
-export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, manager }: TitleBarProps) {
+export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, onStartRecording, onStopRecording, onDiscardRecording, manager }: TitleBarProps) {
   const [openMenu, setOpenMenu] = useState<MenuName | null>(null)
   const buttonRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const zoom = useUIStore((s) => s.zoom)
   const projectName = useProjectStore((s) => s.currentProjectName)
+  const recordingState = useTimelapseStore((s) => s.state)
+  const frameCount = useTimelapseStore((s) => s.frameCount)
 
   const closeMenu = useCallback(() => setOpenMenu(null), [])
 
@@ -41,6 +47,13 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, 
           { separator: true, label: '' },
           { label: 'Export...', shortcut: 'Ctrl+E', action: () => useUIStore.getState().setShowExportDialog(true) },
           { label: 'Save', shortcut: 'Ctrl+S', action: () => onSave?.() },
+          { separator: true, label: '' },
+          ...(recordingState === 'idle'
+            ? [{ label: 'Start Recording', shortcut: 'Ctrl+Shift+R', action: () => onStartRecording?.() }]
+            : [
+                { label: 'Stop Recording', shortcut: 'Ctrl+Shift+R', action: () => onStopRecording?.() },
+                { label: 'Discard Recording', action: () => onDiscardRecording?.() },
+              ]),
           { separator: true, label: '' },
           { label: 'Gallery', action: () => useProjectStore.getState().setView('gallery') },
         ]
@@ -118,6 +131,20 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, 
         ))}
       </nav>
       <div className={styles.projectName}>{projectName}</div>
+      {recordingState === 'recording' && (
+        <div className={styles.recordIndicator} data-testid="record-indicator">
+          <span className={styles.recordDot} />
+          <span className={styles.frameCount}>{frameCount} frames</span>
+          <button
+            className={styles.stopBtn}
+            onClick={onStopRecording}
+            title="Stop recording"
+            type="button"
+          >
+            Stop
+          </button>
+        </div>
+      )}
       <button
         className={styles.zoomIndicator}
         onClick={() => manager?.viewTransform.reset()}

@@ -12,6 +12,8 @@ import { EyedropperTool } from '../tools/EyedropperTool.ts'
 import { GuideManager } from '../guides/GuideManager.ts'
 import { SymmetryEngine } from '../guides/SymmetryEngine.ts'
 import { QuickShape, type DetectedShape } from '../tools/QuickShape.ts'
+import { TextTool } from '../tools/TextTool.ts'
+import { TimelapseRecorder } from '../timelapse/TimelapseRecorder.ts'
 import { createRenderer } from '../renderer.ts'
 import type { ViewState, PointerState, ToolType } from '../../types/engine.ts'
 import type { StrokePoint } from '../../types/brush.ts'
@@ -20,6 +22,7 @@ import type { LayerSnapshot, LayerUndoEntry } from '../undo/UndoManager.ts'
 import type { SelectionToolType, SelectionMode, BoundingBox } from '../../types/selection.ts'
 import type { SelectionUndoEntry } from '../undo/UndoManager.ts'
 import type { RGBAColor } from '../../types/color.ts'
+import type { TextProperties } from '../../types/text.ts'
 
 /**
  * Manages the two-canvas architecture:
@@ -44,6 +47,9 @@ export class CanvasManager {
 
   /** VP dragging state for perspective guides */
   private draggingVP: number | null = null
+
+  /** Symmetry center dragging state */
+  private draggingSymmetryCenter = false
 
   /** QuickShape hold timer state */
   private quickShapeHoldTimer: ReturnType<typeof setTimeout> | null = null
@@ -75,9 +81,13 @@ export class CanvasManager {
   readonly guideManager = new GuideManager()
   readonly symmetryEngine = new SymmetryEngine()
   readonly quickShape = new QuickShape()
+  readonly textTool = new TextTool()
+  readonly timelapseRecorder = new TimelapseRecorder()
 
   private onColorSampled: ((color: RGBAColor) => void) | null = null
   private onViewChange: ((state: ViewState) => void) | null = null
+  private onTextInput: ((screenX: number, screenY: number, canvasX: number, canvasY: number) => void) | null = null
+  private onSymmetryCenterChanged: ((cx: number, cy: number) => void) | null = null
   private resizeObserver: ResizeObserver | null = null
   private container: HTMLElement | null = null
 
@@ -426,6 +436,8 @@ export class CanvasManager {
         this.overlayCanvas.style.cursor = 'grab'
       } else if (tool === 'transform') {
         this.overlayCanvas.style.cursor = 'move'
+      } else if (tool === 'text') {
+        this.overlayCanvas.style.cursor = 'text'
       } else {
         this.overlayCanvas.style.cursor = ''
       }
@@ -470,6 +482,44 @@ export class CanvasManager {
     this.snapshotSelectionBefore()
     this.selectionController.invertSelection()
     this.commitSelectionUndo()
+  }
+
+  /** Clear the active layer to transparent. */
+  clearActiveLayer(): void {
+    if (!this.app) return
+    const layer = this.layerManager.getActiveLayer()
+    if (!layer) return
+
+    // Snapshot before
+    const extracted = this.app.renderer.extract.pixels({ target: layer.texture })
+    const before: LayerSnapshot = {
+      width: extracted.width,
+      height: extracted.height,
+      data: new Uint8Array(extracted.pixels.buffer, extracted.pixels.byteOffset, extracted.pixels.byteLength),
+    }
+
+    // Clear the layer
+    const emptyContainer = new Container()
+    this.app.renderer.render({ container: emptyContainer, target: layer.texture, clear: true })
+
+    // Snapshot after
+    const after: LayerSnapshot = {
+      width: before.width,
+      height: before.height,
+      data: new Uint8Array(before.width * before.height * 4),
+    }
+
+    const entry: LayerUndoEntry = {
+      type: 'layer',
+      layerId: layer.info.id,
+      before,
+      after,
+    }
+    this.brushEngine.undoManager.pushEntry(entry)
+    this.brushEngine.clearSnapshotCache()
+    this.compositor.invalidateCache()
+    this.recomposite()
+    this.layerManager.updateThumbnails()
   }
 
   // ── Filter preview system ────────────────────────────────────────
@@ -517,6 +567,7 @@ export class CanvasManager {
       this.brushEngine.undoManager.pushEntry(entry)
       this.recomposite()
       this.layerManager.updateThumbnails()
+      this.captureTimelapseFrame()
     }
   }
 
@@ -538,6 +589,33 @@ export class CanvasManager {
   /** Set callback for color sampling (eyedropper). */
   setColorSampledCallback(cb: (color: RGBAColor) => void): void {
     this.onColorSampled = cb
+  }
+
+  /** Set callback for text input (opens the React TextInputOverlay). */
+  setTextInputCallback(cb: (screenX: number, screenY: number, canvasX: number, canvasY: number) => void): void {
+    this.onTextInput = cb
+  }
+
+  /** Set callback for symmetry center changes (dragging the center handle). */
+  setSymmetryCenterChangedCallback(cb: (cx: number, cy: number) => void): void {
+    this.onSymmetryCenterChanged = cb
+  }
+
+  /** Rasterize text at a position and import as a new layer. */
+  commitText(text: string, props: TextProperties, canvasX: number, canvasY: number): void {
+    const result = this.textTool.rasterize(text, props, canvasX, canvasY, this.documentWidth, this.documentHeight)
+    if (!result) return
+    this.importImageToNewLayer(result.pixels, result.width, result.height, `Text: ${text.slice(0, 20)}`)
+    this.captureTimelapseFrame()
+  }
+
+  /** Capture a timelapse frame from the current composite output. */
+  captureTimelapseFrame(): void {
+    if (this.timelapseRecorder.getState() !== 'recording') return
+    const result = this.getCompositePixels()
+    if (result) {
+      this.timelapseRecorder.captureFrame(result.pixels, result.width, result.height)
+    }
   }
 
   private handleFloodFill(canvasPoint: { x: number; y: number }): void {
@@ -597,6 +675,7 @@ export class CanvasManager {
 
     this.recomposite()
     this.layerManager.updateThumbnails()
+    this.captureTimelapseFrame()
   }
 
   private handleEyedropper(canvasPoint: { x: number; y: number }): void {
@@ -681,6 +760,12 @@ export class CanvasManager {
       }
     }
 
+    // Symmetry center handle dragging (before tool routing)
+    if (this.guideManager.hitTestSymmetryCenter(canvasPoint.x, canvasPoint.y, this.viewTransform.getState().zoom)) {
+      this.draggingSymmetryCenter = true
+      return
+    }
+
     if (this.activeTool === 'move') {
       this.handPanState = { lastX: ps.x, lastY: ps.y }
       if (this.overlayCanvas) this.overlayCanvas.style.cursor = 'grabbing'
@@ -699,6 +784,11 @@ export class CanvasManager {
 
     if (this.activeTool === 'eyedropper') {
       this.handleEyedropper(canvasPoint)
+      return
+    }
+
+    if (this.activeTool === 'text') {
+      this.onTextInput?.(ps.x, ps.y, canvasPoint.x, canvasPoint.y)
       return
     }
 
@@ -728,6 +818,16 @@ export class CanvasManager {
       const points = [...this.guideManager.vanishingPoints]
       points[this.draggingVP] = { x: canvasPoint.x, y: canvasPoint.y }
       this.guideManager.vanishingPoints = points
+      return
+    }
+
+    // Symmetry center handle dragging
+    if (this.draggingSymmetryCenter) {
+      const canvasPoint = this.viewTransform.screenToCanvas(ps.x, ps.y)
+      this.guideManager.symmetryCenterX = canvasPoint.x
+      this.guideManager.symmetryCenterY = canvasPoint.y
+      this.symmetryEngine.centerX = canvasPoint.x
+      this.symmetryEngine.centerY = canvasPoint.y
       return
     }
 
@@ -769,6 +869,13 @@ export class CanvasManager {
     // VP handle dragging finish
     if (this.draggingVP !== null) {
       this.draggingVP = null
+      return
+    }
+
+    // Symmetry center dragging finish — notify React to sync store
+    if (this.draggingSymmetryCenter) {
+      this.draggingSymmetryCenter = false
+      this.onSymmetryCenterChanged?.(this.guideManager.symmetryCenterX, this.guideManager.symmetryCenterY)
       return
     }
 
@@ -898,6 +1005,7 @@ export class CanvasManager {
 
       this.recomposite()
       this.layerManager.updateThumbnails()
+      this.captureTimelapseFrame()
     }
 
     // Cleanup
@@ -1040,6 +1148,7 @@ export class CanvasManager {
     this.recomposite()
     // Update layer thumbnails for the panel
     this.layerManager.updateThumbnails()
+    this.captureTimelapseFrame()
   }
 
   /** Whether QuickShape is enabled (set from React via guideStore sync). */
@@ -1079,6 +1188,7 @@ export class CanvasManager {
 
       this.recomposite()
       this.layerManager.updateThumbnails()
+      this.captureTimelapseFrame()
     })
   }
 

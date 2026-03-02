@@ -20,6 +20,8 @@ interface UIStore {
   showCanvasSizeDialog: boolean
   showBrushStudio: boolean
   showDrawingGuidesDialog: boolean
+  showTimelapseExportDialog: boolean
+  showQuickMenuSettings: boolean
   toasts: Toast[]
   toggleLeftPanel: () => void
   toggleRightPanel: () => void
@@ -34,6 +36,8 @@ interface UIStore {
   setShowCanvasSizeDialog: (show: boolean) => void
   setShowBrushStudio: (show: boolean) => void
   setShowDrawingGuidesDialog: (show: boolean) => void
+  setShowTimelapseExportDialog: (show: boolean) => void
+  setShowQuickMenuSettings: (show: boolean) => void
   addToast: (message: string, type?: Toast['type']) => void
   dismissToast: (id: string) => void
 }
@@ -54,6 +58,8 @@ export const useUIStore = create<UIStore>((set) => ({
   showCanvasSizeDialog: false,
   showBrushStudio: false,
   showDrawingGuidesDialog: false,
+  showTimelapseExportDialog: false,
+  showQuickMenuSettings: false,
   toasts: [],
 
   toggleLeftPanel: () => set((s) => ({ leftPanelOpen: !s.leftPanelOpen })),
@@ -69,6 +75,8 @@ export const useUIStore = create<UIStore>((set) => ({
   setShowCanvasSizeDialog: (show) => set({ showCanvasSizeDialog: show }),
   setShowBrushStudio: (show) => set({ showBrushStudio: show }),
   setShowDrawingGuidesDialog: (show) => set({ showDrawingGuidesDialog: show }),
+  setShowTimelapseExportDialog: (show) => set({ showTimelapseExportDialog: show }),
+  setShowQuickMenuSettings: (show) => set({ showQuickMenuSettings: show }),
 
   addToast: (message, type = 'info') => {
     const id = `toast_${++toastIdCounter}`

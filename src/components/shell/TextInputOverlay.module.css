@@ -1,0 +1,26 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  pointer-events: none;
+}
+
+.textarea {
+  position: absolute;
+  background: transparent;
+  border: 1px dashed rgba(245, 158, 11, 0.5);
+  outline: none;
+  resize: none;
+  min-width: 100px;
+  min-height: 1.5em;
+  padding: 2px 4px;
+  pointer-events: auto;
+  overflow: hidden;
+  white-space: pre-wrap;
+  caret-color: var(--color-accent-primary);
+  color: var(--color-text-primary);
+}
+
+.textarea::placeholder {
+  color: rgba(245, 158, 11, 0.4);
+}

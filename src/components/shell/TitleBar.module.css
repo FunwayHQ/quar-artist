@@ -80,3 +80,51 @@
   color: var(--color-text-primary);
   background: var(--color-bg-hover);
 }
+
+/* ── Recording indicator ── */
+.recordIndicator {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 2px 10px;
+  border-radius: var(--radius-sm);
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  -webkit-app-region: no-drag;
+}
+
+.recordDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ef4444;
+  animation: recordPulse 1s ease-in-out infinite;
+}
+
+@keyframes recordPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.frameCount {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
+  color: #ef4444;
+}
+
+.stopBtn {
+  padding: 1px 8px;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  border-radius: var(--radius-xs);
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+  font-family: var(--font-family-ui);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--easing-default);
+}
+
+.stopBtn:hover {
+  background: rgba(239, 68, 68, 0.35);
+}

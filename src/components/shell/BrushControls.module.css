@@ -383,3 +383,66 @@
   border-color: var(--color-accent-primary);
   background: rgba(245, 158, 11, 0.06);
 }
+
+/* ═══════════════════════════════════════════════════
+   Text Tool Controls
+   ═══════════════════════════════════════════════════ */
+
+.select {
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-xs);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-ui);
+  font-size: var(--font-size-2xs);
+  padding: 1px 4px;
+  cursor: pointer;
+  max-width: 120px;
+}
+
+.select:focus {
+  border-color: var(--color-accent-primary);
+  outline: none;
+}
+
+.numberInput {
+  background: var(--color-bg-tertiary);
+  border: 1px solid var(--color-border-default);
+  border-radius: var(--radius-xs);
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-2xs);
+  padding: 1px 4px;
+  width: 48px;
+  text-align: center;
+}
+
+.numberInput:focus {
+  border-color: var(--color-accent-primary);
+  outline: none;
+}
+
+.iconToggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--easing-default);
+}
+
+.iconToggle:hover {
+  color: var(--color-text-secondary);
+  background: var(--color-bg-hover);
+}
+
+.iconToggle[data-active='true'] {
+  color: var(--color-accent-primary);
+  border-color: var(--color-accent-primary);
+  background: rgba(245, 158, 11, 0.08);
+}
