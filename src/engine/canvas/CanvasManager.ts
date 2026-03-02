@@ -460,7 +460,7 @@ export class CanvasManager {
       } else if (tool === 'text') {
         this.overlayCanvas.style.cursor = 'text'
       } else {
-        this.overlayCanvas.style.cursor = ''
+        this.overlayCanvas.style.cursor = 'crosshair'
       }
     }
   }
@@ -1226,6 +1226,30 @@ export class CanvasManager {
     }
   }
 
+  // ── Custom cursors for transform tool ───────────────────────────
+
+  private static readonly ROTATE_CURSOR = (() => {
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="%23F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9"/><polyline points="21 3 21 9 15 9"/></svg>`
+    return `url("data:image/svg+xml,${svg}") 12 12, crosshair`
+  })()
+
+  private static readonly SCALE_CURSORS: Record<string, string> = (() => {
+    const arrow = (angle: number) => {
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="%23F59E0B" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><g transform="rotate(${angle} 12 12)"><line x1="12" y1="3" x2="12" y2="21"/><polyline points="8 7 12 3 16 7"/><polyline points="8 17 12 21 16 17"/></g></svg>`
+      return `url("data:image/svg+xml,${svg}") 12 12`
+    }
+    return {
+      topLeft: `${arrow(-45)}, nwse-resize`,
+      topRight: `${arrow(45)}, nesw-resize`,
+      bottomLeft: `${arrow(45)}, nesw-resize`,
+      bottomRight: `${arrow(-45)}, nwse-resize`,
+      topCenter: `${arrow(0)}, ns-resize`,
+      bottomCenter: `${arrow(0)}, ns-resize`,
+      middleLeft: `${arrow(90)}, ew-resize`,
+      middleRight: `${arrow(90)}, ew-resize`,
+    }
+  })()
+
   /** Update cursor based on transform handle hover. */
   private updateTransformCursor(canvasPoint: { x: number; y: number }) {
     if (!this.overlayCanvas) return
@@ -1235,30 +1259,21 @@ export class CanvasManager {
     }
 
     const zoom = this.viewTransform.getState().zoom
+    // Keep zoom in sync so edge/rotation hit-testing uses correct thresholds
+    this.transformController.setZoom(zoom)
+
     const handleRadius = 8 / zoom
     const handle = this.transformController.manager.hitTestHandle(canvasPoint, handleRadius, zoom)
 
-    const cursorMap: Record<string, string> = {
-      topLeft: 'nwse-resize',
-      topRight: 'nesw-resize',
-      bottomLeft: 'nesw-resize',
-      bottomRight: 'nwse-resize',
-      topCenter: 'ns-resize',
-      bottomCenter: 'ns-resize',
-      middleLeft: 'ew-resize',
-      middleRight: 'ew-resize',
-    }
-
     if (handle && handle !== 'rotation') {
-      this.overlayCanvas.style.cursor = cursorMap[handle] || 'default'
+      this.overlayCanvas.style.cursor = CanvasManager.SCALE_CURSORS[handle] || 'nwse-resize'
     } else if (this.transformController.hitTestRotationZone(canvasPoint)) {
-      // Near a corner but outside bounds — rotate cursor
-      this.overlayCanvas.style.cursor = 'crosshair'
+      this.overlayCanvas.style.cursor = CanvasManager.ROTATE_CURSOR
     } else {
       // Check edge proximity (hovering on bounding box line)
       const edgeHandle = this.transformController.hitTestEdge(canvasPoint)
       if (edgeHandle) {
-        this.overlayCanvas.style.cursor = cursorMap[edgeHandle] || 'default'
+        this.overlayCanvas.style.cursor = CanvasManager.SCALE_CURSORS[edgeHandle] || 'ns-resize'
       } else if (this.transformController.manager.isInsideBounds(canvasPoint)) {
         this.overlayCanvas.style.cursor = 'move'
       } else {

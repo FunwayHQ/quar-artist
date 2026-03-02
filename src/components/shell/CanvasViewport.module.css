@@ -3,5 +3,5 @@
   position: relative;
   overflow: hidden;
   background: var(--color-bg-canvas);
-  cursor: crosshair;
+  /* cursor controlled per-tool via overlayCanvas.style.cursor */
 }

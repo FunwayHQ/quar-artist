@@ -226,7 +226,7 @@ describe('CanvasManager', () => {
       cm.setActiveTool('move')
       cm.setActiveTool('brush')
       const overlay = container.querySelectorAll('canvas')[1]
-      expect(overlay.style.cursor).toBe('')
+      expect(overlay.style.cursor).toBe('crosshair')
     })
   })
 
