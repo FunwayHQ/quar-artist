@@ -172,13 +172,22 @@ export class BrushEngine {
     return {
       width: w,
       height: h,
-      data: new Uint8Array(pixels.pixels.buffer, pixels.pixels.byteOffset, pixels.pixels.byteLength),
+      data: new Uint8Array(pixels.pixels.buffer.slice(pixels.pixels.byteOffset, pixels.pixels.byteOffset + pixels.pixels.byteLength)),
     }
   }
 
   /** Get accumulated points from the current stroke (for QuickShape). */
   getLastStrokePoints(): StrokePoint[] {
     return this.interpolator.getAccumulatedPoints()
+  }
+
+  /** Destroy GPU resources held by the brush engine. */
+  destroy() {
+    this.stampGraphics.destroy?.()
+    this.stampContainer.destroy?.()
+    this.lastSnapshot.clear()
+    this.activeLayerTexture = null
+    this.app = null
   }
 
   /** Render stamp positions to the active layer texture. */
@@ -268,6 +277,10 @@ export class BrushEngine {
         clear: false,
       })
 
+      // Destroy temp GPU resources to prevent leaks
+      maskedContainer.destroy()
+      stampSprite.destroy()
+      maskSprite.destroy()
       maskTex.destroy(true)
       stampTex.destroy(true)
     } else {

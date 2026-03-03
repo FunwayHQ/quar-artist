@@ -27,7 +27,7 @@ export function AboutModal({ open, onClose }: AboutModalProps) {
 
   return (
     <div className={styles.overlay} onClick={handleOverlayClick}>
-      <div className={styles.dialog} role="dialog" aria-label="About QUAR Artist">
+      <div className={styles.dialog} role="dialog" aria-modal="true" aria-label="About QUAR Artist">
         <img src="/logo.svg" alt="QUAR Artist" className={styles.logo} />
         <h2 className={styles.name}>QUAR Artist</h2>
         <span className={styles.version}>v0.8.0 (Sprint 8)</span>

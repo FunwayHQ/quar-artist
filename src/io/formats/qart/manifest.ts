@@ -1,13 +1,11 @@
 import type { QartManifest, QartLayerManifest } from '../../../types/project.ts'
 import type { BlendMode } from '../../../types/layer.ts'
+import { ALL_BLEND_MODES } from '../../../types/layer.ts'
 
 const CURRENT_VERSION = '1.0'
 const APP_ID = 'quar-artist'
 
-const VALID_BLEND_MODES: BlendMode[] = [
-  'normal', 'multiply', 'screen', 'overlay',
-  'softLight', 'add', 'color', 'luminosity',
-]
+const VALID_BLEND_MODES: readonly BlendMode[] = ALL_BLEND_MODES
 
 export function createManifest(
   canvas: { width: number; height: number; dpi: number },

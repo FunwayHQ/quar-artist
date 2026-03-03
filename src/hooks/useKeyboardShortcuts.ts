@@ -181,13 +181,29 @@ export function useKeyboardShortcuts({ manager, undo, redo, onOpenFilter, onTogg
       }
     }
 
+    // Reset Alt-hold eyedropper if window loses focus (Alt+Tab, etc.)
+    const handleBlur = () => {
+      if (useToolStore.getState().activeTool === 'eyedropper') {
+        useToolStore.getState().popTool()
+      }
+    }
+    const handleVisibilityChange = () => {
+      if (document.hidden && useToolStore.getState().activeTool === 'eyedropper') {
+        useToolStore.getState().popTool()
+      }
+    }
+
     document.addEventListener('keydown', handleKeyDown)
     document.addEventListener('keydown', handleAltDown)
     document.addEventListener('keyup', handleKeyUp)
+    window.addEventListener('blur', handleBlur)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
     return () => {
       document.removeEventListener('keydown', handleKeyDown)
       document.removeEventListener('keydown', handleAltDown)
       document.removeEventListener('keyup', handleKeyUp)
+      window.removeEventListener('blur', handleBlur)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
     }
   }, [shortcutMap, dispatch])
 }

@@ -23,6 +23,18 @@ export class TimelapseRecorder {
   private chunks: Blob[] = []
   private stream: MediaStream | null = null
 
+  /** Reusable temp canvas for scaling source frames. */
+  private srcCanvas: HTMLCanvasElement | null = null
+  private srcCtx: CanvasRenderingContext2D | null = null
+
+  /** Callback fired when frame count changes. */
+  private onFrameCountChange: ((count: number) => void) | null = null
+
+  /** Set callback for frame count updates. */
+  setFrameCountCallback(cb: ((count: number) => void) | null) {
+    this.onFrameCountChange = cb
+  }
+
   getState(): TimelapseState {
     return this.state
   }
@@ -95,16 +107,18 @@ export class TimelapseRecorder {
     // Create ImageData from the source pixels
     const imageData = new ImageData(pixels, width, height)
 
-    // Draw source to a temp canvas, then scale to offscreen canvas
-    const srcCanvas = document.createElement('canvas')
-    srcCanvas.width = width
-    srcCanvas.height = height
-    const srcCtx = srcCanvas.getContext('2d')
-    if (!srcCtx) return
+    // Reuse temp canvas for scaling, resize if needed
+    if (!this.srcCanvas || !this.srcCtx || this.srcCanvas.width !== width || this.srcCanvas.height !== height) {
+      this.srcCanvas = document.createElement('canvas')
+      this.srcCanvas.width = width
+      this.srcCanvas.height = height
+      this.srcCtx = this.srcCanvas.getContext('2d')
+      if (!this.srcCtx) return
+    }
 
-    srcCtx.putImageData(imageData, 0, 0)
+    this.srcCtx.putImageData(imageData, 0, 0)
     this.offscreenCtx.clearRect(0, 0, targetW, targetH)
-    this.offscreenCtx.drawImage(srcCanvas, 0, 0, width, height, 0, 0, targetW, targetH)
+    this.offscreenCtx.drawImage(this.srcCanvas!, 0, 0, width, height, 0, 0, targetW, targetH)
 
     // Request a frame from the stream
     const track = this.stream?.getVideoTracks()[0]
@@ -113,6 +127,7 @@ export class TimelapseRecorder {
     }
 
     this.frameCount++
+    this.onFrameCountChange?.(this.frameCount)
   }
 
   /** Stop recording and return the WebM blob. */
@@ -150,5 +165,7 @@ export class TimelapseRecorder {
     this.stream = null
     this.offscreenCanvas = null
     this.offscreenCtx = null
+    this.srcCanvas = null
+    this.srcCtx = null
   }
 }

@@ -27,21 +27,32 @@ export class TransformController {
   private dragStart: Point | null = null
   private isConstrained = false
 
+  /** Callback fired when the active state changes. */
+  private onActiveChange: ((active: boolean) => void) | null = null
+
+  /** Set callback for transform active state changes. */
+  setActiveChangeCallback(cb: ((active: boolean) => void) | null) {
+    this.onActiveChange = cb
+  }
+
   /** Begin a transform operation on the given bounds. */
   begin(bounds: BoundingBox) {
     this.manager.begin(bounds)
+    this.onActiveChange?.(true)
   }
 
   /** Cancel the current transform. */
   cancel() {
     this.manager.cancel()
     this.resetDrag()
+    this.onActiveChange?.(false)
   }
 
   /** Apply the current transform and return the final state. */
   apply(): TransformState | null {
     const result = this.manager.apply()
     this.resetDrag()
+    this.onActiveChange?.(false)
     return result
   }
 

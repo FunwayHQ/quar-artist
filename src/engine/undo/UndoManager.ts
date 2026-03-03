@@ -61,6 +61,9 @@ function compressInBackground(snapshot: LayerSnapshot): void {
       snapshot.compressed = true
     }
     snapshot._compressing = undefined
+  }).catch(() => {
+    // Compression failed — keep original uncompressed data
+    snapshot._compressing = undefined
   })
 }
 

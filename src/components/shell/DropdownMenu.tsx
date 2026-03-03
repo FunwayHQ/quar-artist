@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import styles from './DropdownMenu.module.css'
 
 export interface MenuItem {
@@ -91,7 +92,7 @@ export function DropdownMenu({ items, onClose, anchorEl }: DropdownMenuProps) {
     return () => document.removeEventListener('keydown', handleKeyDown)
   }, [items, activeIndex, onClose])
 
-  return (
+  return createPortal(
     <div
       ref={menuRef}
       className={`glass ${styles.menu}`}
@@ -127,6 +128,7 @@ export function DropdownMenu({ items, onClose, anchorEl }: DropdownMenuProps) {
           </button>
         )
       })}
-    </div>
+    </div>,
+    document.body,
   )
 }

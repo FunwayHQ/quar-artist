@@ -3,7 +3,7 @@
   bottom: var(--space-md);
   left: 50%;
   transform: translateX(-50%);
-  z-index: 900;
+  z-index: var(--z-fullscreen-hud);
   display: flex;
   align-items: center;
   gap: var(--space-sm);

@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import styles from './FilterSlider.module.css'
 
 interface FilterSliderProps {
@@ -10,7 +11,7 @@ interface FilterSliderProps {
   onChange: (value: number) => void
 }
 
-export function FilterSlider({ label, value, min, max, step = 1, unit = '', onChange }: FilterSliderProps) {
+export const FilterSlider = memo(function FilterSlider({ label, value, min, max, step = 1, unit = '', onChange }: FilterSliderProps) {
   return (
     <div className={styles.row}>
       <div className={styles.header}>
@@ -29,4 +30,4 @@ export function FilterSlider({ label, value, min, max, step = 1, unit = '', onCh
       />
     </div>
   )
-}
+})

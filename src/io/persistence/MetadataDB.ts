@@ -180,18 +180,25 @@ export class MetadataDB {
     layerId: string,
   ): Promise<TileRecord[]> {
     const db = await getDB()
-    const allTiles = await db.getAllFromIndex('tiles', 'by-projectId', projectId)
-    return allTiles.filter((t) => t.layerId === layerId)
+    // Use compound index range to query only tiles for this project+layer
+    const range = IDBKeyRange.bound(
+      [projectId, layerId, ''],
+      [projectId, layerId, '\uffff'],
+    )
+    return db.getAllFromIndex('tiles', 'by-project-layer-key', range)
   }
 
   async deleteLayerTiles(projectId: number, layerId: string): Promise<void> {
     const db = await getDB()
-    const allTiles = await db.getAllFromIndex('tiles', 'by-projectId', projectId)
+    // Use compound index range to find only this layer's tiles
+    const range = IDBKeyRange.bound(
+      [projectId, layerId, ''],
+      [projectId, layerId, '\uffff'],
+    )
+    const tiles = await db.getAllFromIndex('tiles', 'by-project-layer-key', range)
     const tx = db.transaction('tiles', 'readwrite')
-    for (const tile of allTiles) {
-      if (tile.layerId === layerId) {
-        await tx.store.delete(tile.id!)
-      }
+    for (const tile of tiles) {
+      await tx.store.delete(tile.id!)
     }
     await tx.done
   }

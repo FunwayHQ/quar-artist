@@ -4,6 +4,7 @@ import type { LayerSnapshot } from '../undo/UndoManager.ts'
 import { createFilterPipeline } from './filterFactory.ts'
 import { cpuUnsharpMask } from '../shaders/filters/sharpenFilter.ts'
 import { cpuApplyCurves } from '../shaders/filters/curvesFilter.ts'
+import { get2dContext } from '../../utils/canvas2d.ts'
 
 /**
  * Non-destructive filter preview system.
@@ -263,7 +264,7 @@ export class FilterManager {
     const canvas = document.createElement('canvas')
     canvas.width = w
     canvas.height = h
-    const ctx = canvas.getContext('2d')!
+    const ctx = get2dContext(canvas)
     const imageData = new ImageData(
       new Uint8ClampedArray(data.buffer, data.byteOffset, expectedLen),
       w,

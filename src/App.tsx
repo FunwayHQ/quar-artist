@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useCallback, lazy, Suspense } from 'react'
+import { useRef, useState, useEffect, useCallback, lazy, Suspense, memo } from 'react'
 import { TitleBar } from '@components/shell/TitleBar.tsx'
 import { BrushControls } from '@components/shell/BrushControls.tsx'
 import { CanvasViewport } from '@components/shell/CanvasViewport.tsx'
@@ -13,6 +13,7 @@ import { LoadingOverlay } from '@components/ui/LoadingOverlay.tsx'
 import { QuickMenu } from '@components/shell/QuickMenu.tsx'
 import { TextInputOverlay } from '@components/shell/TextInputOverlay.tsx'
 import { CookieConsentBanner } from '@components/shell/CookieConsentBanner.tsx'
+import { ErrorBoundary } from '@components/ui/ErrorBoundary.tsx'
 
 // Lazy-loaded dialogs — only fetched when opened
 const ExportDialog = lazy(() => import('@components/dialogs/ExportDialog.tsx').then(m => ({ default: m.ExportDialog })))
@@ -66,6 +67,8 @@ export default function App() {
   const showDrawingGuidesDialog = useUIStore((s) => s.showDrawingGuidesDialog)
   const showTimelapseExportDialog = useUIStore((s) => s.showTimelapseExportDialog)
   const showQuickMenuSettings = useUIStore((s) => s.showQuickMenuSettings)
+  const timelapseVideoBlob = useTimelapseStore((s) => s.videoBlob)
+  const timelapseFrameCount = useTimelapseStore((s) => s.frameCount)
   const fullscreen = useUIStore((s) => s.fullscreen)
   const panelsHidden = useUIStore((s) => s.panelsHidden)
   const leftPanelOpen = useUIStore((s) => s.leftPanelOpen)
@@ -457,15 +460,13 @@ export default function App() {
     useTimelapseStore.getState().reset()
   }, [])
 
-  // Sync timelapse frame count from engine to store
+  // Sync timelapse frame count from engine to store via callback
   useEffect(() => {
     if (!manager) return
-    const interval = setInterval(() => {
-      if (manager.timelapseRecorder.getState() === 'recording') {
-        useTimelapseStore.getState().setFrameCount(manager.timelapseRecorder.getFrameCount())
-      }
-    }, 500)
-    return () => clearInterval(interval)
+    manager.timelapseRecorder.setFrameCountCallback((count) => {
+      useTimelapseStore.getState().setFrameCount(count)
+    })
+    return () => manager.timelapseRecorder.setFrameCountCallback(null)
   }, [manager])
 
   // ── Symmetry center dragging ──
@@ -489,17 +490,13 @@ export default function App() {
     })
   }, [commitTransform, cancelTransform, flipLayerHorizontal, flipLayerVertical, rotateLayer90CW, rotateLayer90CCW])
 
-  // Sync transform active state to store
+  // Sync transform active state to store via callback
   useEffect(() => {
     if (!manager) return
-    const interval = setInterval(() => {
-      const isActive = manager.transformController.isActive()
-      const storeActive = useTransformStore.getState().isActive
-      if (isActive !== storeActive) {
-        useTransformStore.getState().setIsActive(isActive)
-      }
-    }, 100)
-    return () => clearInterval(interval)
+    manager.transformController.setActiveChangeCallback((active) => {
+      useTransformStore.getState().setIsActive(active)
+    })
+    return () => manager.transformController.setActiveChangeCallback(null)
   }, [manager])
 
   // ── Text tool ──
@@ -696,6 +693,7 @@ export default function App() {
       </div>
       {fullscreen && <FullscreenHud manager={manager} />}
       <FilterDialogRouter onApply={handleFilterApply} onCancel={handleFilterCancel} />
+      <ErrorBoundary>
       <Suspense fallback={null}>
         {showExportDialog && (
           <ExportDialog
@@ -748,11 +746,11 @@ export default function App() {
             onClose={() => useUIStore.getState().setShowDrawingGuidesDialog(false)}
           />
         )}
-        {showTimelapseExportDialog && useTimelapseStore.getState().videoBlob && (
+        {showTimelapseExportDialog && timelapseVideoBlob && (
           <TimelapseExportDialog
             open={showTimelapseExportDialog}
-            videoBlob={useTimelapseStore.getState().videoBlob!}
-            frameCount={useTimelapseStore.getState().frameCount}
+            videoBlob={timelapseVideoBlob}
+            frameCount={timelapseFrameCount}
             onDownload={handleTimelapseDownload}
             onDiscard={handleTimelapseDiscard}
             onClose={() => useUIStore.getState().setShowTimelapseExportDialog(false)}
@@ -765,6 +763,7 @@ export default function App() {
           />
         )}
       </Suspense>
+      </ErrorBoundary>
       {ctxMenu && (
         <ContextMenu
           items={canvasContextItems}

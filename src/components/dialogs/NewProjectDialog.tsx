@@ -43,7 +43,7 @@ export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogPr
 
   return (
     <div className={styles.overlay} onClick={onClose}>
-      <div className={styles.dialog} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="New Project">
+      <div className={styles.dialog} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="New Project">
         <h2 className={styles.title}>New Project</h2>
 
         <label className={styles.field}>

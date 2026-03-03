@@ -58,7 +58,18 @@
   padding: 4px 12px;
   border-radius: var(--radius-sm);
   background: var(--color-bg-hover);
+  border: 1px solid transparent;
+  outline: none;
+  min-width: 120px;
+  max-width: 300px;
+  transition: border-color var(--duration-fast) var(--easing-default),
+    color var(--duration-fast) var(--easing-default);
   -webkit-app-region: no-drag;
+}
+
+.projectName:focus {
+  border-color: var(--color-accent-primary);
+  color: var(--color-text-primary);
 }
 
 .zoomIndicator {

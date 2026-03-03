@@ -85,8 +85,13 @@ export const useColorStore = create<ColorStore>((set, get) => ({
   activePaletteId: 'default',
 
   setPrimary: (color) => {
-    set({ primary: color })
-    get().addRecentColor(color)
+    set((s) => {
+      const filtered = s.recentColors.filter((c) => !colorsMatch(c, color))
+      return {
+        primary: color,
+        recentColors: [color, ...filtered].slice(0, MAX_RECENT),
+      }
+    })
   },
 
   setSecondary: (color) => set({ secondary: color }),

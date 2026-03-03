@@ -159,15 +159,16 @@ export function PressureCurveEditor({ value, onChange, size = 200 }: PressureCur
     draw()
   }, [draw])
 
-  const getCanvasPos = useCallback((e: React.MouseEvent) => {
+  const getCanvasPos = useCallback((e: React.PointerEvent | React.MouseEvent) => {
     const canvas = canvasRef.current
     if (!canvas) return { x: 0, y: 0 }
     const rect = canvas.getBoundingClientRect()
     return { x: e.clientX - rect.left, y: e.clientY - rect.top }
   }, [])
 
-  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+  const handlePointerDown = useCallback((e: React.PointerEvent) => {
     e.preventDefault()
+    e.currentTarget.setPointerCapture(e.pointerId)
     const pos = getCanvasPos(e)
     const p1 = toCSS(value[0], value[1])
     const p2 = toCSS(value[2], value[3])
@@ -182,7 +183,7 @@ export function PressureCurveEditor({ value, onChange, size = 200 }: PressureCur
     }
   }, [value, toCSS, getCanvasPos])
 
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+  const handlePointerMove = useCallback((e: React.PointerEvent) => {
     if (!dragging) return
     e.preventDefault()
     const pos = getCanvasPos(e)
@@ -195,7 +196,8 @@ export function PressureCurveEditor({ value, onChange, size = 200 }: PressureCur
     }
   }, [dragging, value, onChange, fromCSS, getCanvasPos])
 
-  const handleMouseUp = useCallback(() => {
+  const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    e.currentTarget.releasePointerCapture(e.pointerId)
     setDragging(null)
   }, [])
 
@@ -212,10 +214,9 @@ export function PressureCurveEditor({ value, onChange, size = 200 }: PressureCur
         cursor: dragging ? 'grabbing' : 'crosshair',
         display: 'block',
       }}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
     />
   )
 }

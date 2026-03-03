@@ -23,7 +23,27 @@
       "Bash(grep:*)",
       "Bash(rm:*)",
       "Bash(mkdir:*)",
-      "Bash(npm:*)"
+      "Bash(npm:*)",
+      "Bash(xargs:*)",
+      "Bash(start:*)",
+      "Bash(npx:*)",
+      "mcp__playwright__browser_snapshot",
+      "mcp__playwright__browser_select_option",
+      "Bash(find .:*)",
+      "Bash(node:*)",
+      "mcp__playwright__browser_fill_form",
+      "mcp__playwright__browser_wait_for",
+      "Bash(cat:*)",
+      "Bash(find:*)",
+      "mcp__playwright__browser_handle_dialog",
+      "mcp__playwright__browser_type",
+      "Bash(ls:*)",
+      "Bash(pip install:*)",
+      "Bash(tar:*)",
+      "Bash(choco install:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "mcp__playwright__browser_close"
     ]
   }
 }

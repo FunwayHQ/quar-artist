@@ -54,11 +54,11 @@ export const useProjectStore = create<ProjectStore>((set) => ({
   setProjectName: (name) => set({ currentProjectName: name }),
 
   setSaveStatus: (status) =>
-    set({
+    set((s) => ({
       saveStatus: status,
       isSaving: status === 'saving',
-      lastSaved: status === 'saved' ? new Date() : undefined,
-    }),
+      lastSaved: status === 'saved' ? new Date() : s.lastSaved,
+    })),
 
   setCanvasSize: (width, height) => set({ canvasWidth: width, canvasHeight: height }),
 

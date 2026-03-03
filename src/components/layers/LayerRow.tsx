@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, memo } from 'react'
 import { Eye, EyeOff, Lock, LockOpen, GripVertical, Paperclip } from 'lucide-react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -24,7 +24,7 @@ interface LayerRowProps {
   onMergeDown: () => void
 }
 
-export function LayerRow({
+export const LayerRow = memo(function LayerRow({
   layer,
   isActive,
   canDelete,
@@ -163,4 +163,4 @@ export function LayerRow({
       )}
     </div>
   )
-}
+})

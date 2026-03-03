@@ -25,6 +25,7 @@ import type { SelectionToolType, SelectionMode, BoundingBox } from '../../types/
 import type { SelectionUndoEntry } from '../undo/UndoManager.ts'
 import type { RGBAColor } from '../../types/color.ts'
 import type { TextProperties } from '../../types/text.ts'
+import { get2dContext } from '../../utils/canvas2d.ts'
 
 /**
  * Manages the two-canvas architecture:
@@ -315,7 +316,7 @@ export class CanvasManager {
     const canvas = document.createElement('canvas')
     canvas.width = w
     canvas.height = h
-    const ctx = canvas.getContext('2d')!
+    const ctx = get2dContext(canvas)
     const imageData = new ImageData(
       new Uint8ClampedArray(data.buffer, data.byteOffset, expectedLen),
       w,
@@ -388,13 +389,13 @@ export class CanvasManager {
     const canvas = document.createElement('canvas')
     canvas.width = docW
     canvas.height = docH
-    const ctx = canvas.getContext('2d')!
+    const ctx = get2dContext(canvas)
 
     // Draw the imported image centered, scaled to fit if larger than document
     const srcCanvas = document.createElement('canvas')
     srcCanvas.width = imgW
     srcCanvas.height = imgH
-    const srcCtx = srcCanvas.getContext('2d')!
+    const srcCtx = get2dContext(srcCanvas)
     srcCtx.putImageData(new ImageData(pixels, imgW, imgH), 0, 0)
 
     // Scale down to fit within document bounds (maintain aspect ratio)
@@ -990,7 +991,7 @@ export class CanvasManager {
     const canvas = document.createElement('canvas')
     canvas.width = before.width
     canvas.height = before.height
-    const ctx = canvas.getContext('2d')!
+    const ctx = get2dContext(canvas)
     const imageData = new ImageData(
       new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, extracted.width * extracted.height * 4),
       before.width,
@@ -1176,11 +1177,11 @@ export class CanvasManager {
       const canvas = document.createElement('canvas')
       canvas.width = docW
       canvas.height = docH
-      const ctx = canvas.getContext('2d')!
+      const ctx = get2dContext(canvas)
       const srcCanvas = document.createElement('canvas')
       srcCanvas.width = result.width
       srcCanvas.height = result.height
-      const srcCtx = srcCanvas.getContext('2d')!
+      const srcCtx = get2dContext(srcCanvas)
       srcCtx.putImageData(
         new ImageData(new Uint8ClampedArray(result.pixels.buffer, result.pixels.byteOffset, result.width * result.height * 4), result.width, result.height),
         0, 0,
@@ -1238,7 +1239,7 @@ export class CanvasManager {
       const c = document.createElement('canvas')
       c.width = size
       c.height = size
-      const ctx = c.getContext('2d')!
+      const ctx = get2dContext(c)
       draw(ctx)
       return c.toDataURL('image/png')
     }
@@ -1583,6 +1584,9 @@ export class CanvasManager {
       this.recomposite()
       this.layerManager.updateThumbnails()
       this.captureTimelapseFrame()
+    }).catch(() => {
+      // Undo failed — stroke already ended, just recomposite
+      this.recomposite()
     })
   }
 
@@ -1630,7 +1634,17 @@ export class CanvasManager {
       cancelAnimationFrame(this.compositeRafId)
       this.compositeRafId = null
     }
+    if (this.quickShapeHoldTimer) {
+      clearTimeout(this.quickShapeHoldTimer)
+      this.quickShapeHoldTimer = null
+    }
 
+    // Clean up active transform if any
+    if (this.transformState) {
+      this.cleanupTransform()
+    }
+
+    this.brushEngine.destroy()
     this.selectionController.destroy()
     this.filterManager.destroy()
     this.layerManager.destroy()

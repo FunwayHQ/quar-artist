@@ -14,6 +14,7 @@ export class AutoSave {
   private debounceMs: number
   private timerId: ReturnType<typeof setTimeout> | null = null
   private projectId: number | null = null
+  private saving = false
   private statusCallback: SaveStatusCallback | null = null
   private extractLayerData: (() => LayerDataSet | null) | null = null
 
@@ -72,10 +73,12 @@ export class AutoSave {
 
   private async save(): Promise<void> {
     if (this.projectId === null || !this.extractLayerData) return
+    if (this.saving) return
 
     const data = this.extractLayerData()
     if (!data) return
 
+    this.saving = true
     this.statusCallback?.('saving')
 
     try {
@@ -101,6 +104,8 @@ export class AutoSave {
       this.statusCallback?.('saved')
     } catch {
       this.statusCallback?.('error')
+    } finally {
+      this.saving = false
     }
   }
 

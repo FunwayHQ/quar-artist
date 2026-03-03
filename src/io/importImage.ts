@@ -2,6 +2,7 @@
  * Utilities for importing images from clipboard paste, file input, and drag-and-drop.
  * Converts image sources to RGBA pixel data (Uint8ClampedArray) with dimensions.
  */
+import { get2dContext } from '../utils/canvas2d.ts'
 
 export interface DecodedImage {
   pixels: Uint8ClampedArray
@@ -19,7 +20,7 @@ export async function decodeImageBlob(blob: Blob): Promise<DecodedImage> {
   const canvas = document.createElement('canvas')
   canvas.width = width
   canvas.height = height
-  const ctx = canvas.getContext('2d')!
+  const ctx = get2dContext(canvas)
   ctx.drawImage(bitmap, 0, 0)
   bitmap.close()
 
@@ -64,14 +65,31 @@ export function getImageFromDrop(e: DragEvent): File | null {
  */
 export function pickImageFile(): Promise<File | null> {
   return new Promise((resolve) => {
+    let resolved = false
     const input = document.createElement('input')
     input.type = 'file'
     input.accept = 'image/png,image/jpeg,image/webp,image/gif,image/bmp'
     input.onchange = () => {
+      if (resolved) return
+      resolved = true
       resolve(input.files?.[0] ?? null)
     }
-    // Handle cancel (no reliable 'cancel' event, but clicking away)
-    input.oncancel = () => resolve(null)
+    input.oncancel = () => {
+      if (resolved) return
+      resolved = true
+      resolve(null)
+    }
+    // Focus-based fallback for browsers without 'cancel' event on file inputs
+    const handleFocus = () => {
+      setTimeout(() => {
+        if (!resolved) {
+          resolved = true
+          resolve(null)
+        }
+        window.removeEventListener('focus', handleFocus)
+      }, 300)
+    }
+    window.addEventListener('focus', handleFocus)
     input.click()
   })
 }

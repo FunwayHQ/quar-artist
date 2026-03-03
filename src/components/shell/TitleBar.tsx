@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react'
+import { useState, useRef, useCallback, useEffect } from 'react'
 import { DropdownMenu, type MenuItem } from './DropdownMenu.tsx'
 import { useUIStore } from '@stores/uiStore.ts'
 import { useProjectStore } from '@stores/projectStore.ts'
@@ -6,6 +6,7 @@ import { useGuideStore } from '@stores/guideStore.ts'
 import { useTimelapseStore } from '@stores/timelapseStore.ts'
 import type { CanvasManager } from '@engine/canvas/CanvasManager.ts'
 import type { FilterType } from '@app-types/filter.ts'
+import { MetadataDB } from '../../io/persistence/MetadataDB.ts'
 import styles from './TitleBar.module.css'
 
 interface TitleBarProps {
@@ -27,8 +28,35 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, 
   const buttonRefs = useRef<Record<string, HTMLButtonElement | null>>({})
   const zoom = useUIStore((s) => s.zoom)
   const projectName = useProjectStore((s) => s.currentProjectName)
+  const currentProjectId = useProjectStore((s) => s.currentProjectId)
   const recordingState = useTimelapseStore((s) => s.state)
   const frameCount = useTimelapseStore((s) => s.frameCount)
+  const committedName = useRef(projectName)
+  const nameInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    committedName.current = projectName
+    if (nameInputRef.current) {
+      nameInputRef.current.value = projectName
+    }
+  }, [projectName])
+
+  const commitRename = useCallback((value: string) => {
+    const trimmed = value.trim()
+    if (!trimmed) {
+      if (nameInputRef.current) nameInputRef.current.value = committedName.current
+      return
+    }
+    if (trimmed !== committedName.current) {
+      committedName.current = trimmed
+      useProjectStore.getState().setProjectName(trimmed)
+      if (currentProjectId != null) {
+        const db = new MetadataDB()
+        db.updateProject(currentProjectId, { name: trimmed })
+      }
+    }
+    if (nameInputRef.current) nameInputRef.current.value = trimmed
+  }, [currentProjectId])
 
   const closeMenu = useCallback(() => setOpenMenu(null), [])
 
@@ -130,7 +158,24 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, 
           </button>
         ))}
       </nav>
-      <div className={styles.projectName}>{projectName}</div>
+      <input
+        ref={nameInputRef}
+        className={styles.projectName}
+        defaultValue={projectName}
+        onClick={(e) => (e.target as HTMLInputElement).select()}
+        onBlur={(e) => commitRename(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation()
+          if (e.key === 'Enter') {
+            commitRename((e.target as HTMLInputElement).value)
+            ;(e.target as HTMLInputElement).blur()
+          } else if (e.key === 'Escape') {
+            ;(e.target as HTMLInputElement).value = committedName.current
+            ;(e.target as HTMLInputElement).blur()
+          }
+        }}
+        spellCheck={false}
+      />
       {recordingState === 'recording' && (
         <div className={styles.recordIndicator} data-testid="record-indicator">
           <span className={styles.recordDot} />

@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, memo } from 'react'
 import { X } from 'lucide-react'
 import type { Toast as ToastData } from '@stores/uiStore.ts'
 import styles from './Toast.module.css'
@@ -10,7 +10,7 @@ interface ToastProps {
 
 const AUTO_DISMISS_MS = 3000
 
-export function Toast({ toast, onDismiss }: ToastProps) {
+export const Toast = memo(function Toast({ toast, onDismiss }: ToastProps) {
   useEffect(() => {
     const timer = setTimeout(() => onDismiss(toast.id), AUTO_DISMISS_MS)
     return () => clearTimeout(timer)
@@ -28,4 +28,4 @@ export function Toast({ toast, onDismiss }: ToastProps) {
       </button>
     </div>
   )
-}
+})

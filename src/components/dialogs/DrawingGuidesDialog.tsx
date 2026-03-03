@@ -45,6 +45,22 @@ export function DrawingGuidesDialog({ open, onClose }: DrawingGuidesDialogProps)
   // QuickShape state
   const quickShapeEnabled = useGuideStore((s) => s.quickShapeEnabled)
 
+  // Setters (stable references — safe to extract once)
+  const setGridEnabled = useGuideStore((s) => s.setGridEnabled)
+  const setGridSpacing = useGuideStore((s) => s.setGridSpacing)
+  const setGridSnap = useGuideStore((s) => s.setGridSnap)
+  const setGridOpacity = useGuideStore((s) => s.setGridOpacity)
+  const setIsometricEnabled = useGuideStore((s) => s.setIsometricEnabled)
+  const setIsometricSpacing = useGuideStore((s) => s.setIsometricSpacing)
+  const setPerspectiveEnabled = useGuideStore((s) => s.setPerspectiveEnabled)
+  const setPerspectiveType = useGuideStore((s) => s.setPerspectiveType)
+  const setPerspectiveLineCount = useGuideStore((s) => s.setPerspectiveLineCount)
+  const setSymmetryEnabled = useGuideStore((s) => s.setSymmetryEnabled)
+  const setSymmetryType = useGuideStore((s) => s.setSymmetryType)
+  const setSymmetryAxes = useGuideStore((s) => s.setSymmetryAxes)
+  const setSymmetryRotation = useGuideStore((s) => s.setSymmetryRotation)
+  const setQuickShapeEnabled = useGuideStore((s) => s.setQuickShapeEnabled)
+
   // Escape key handler
   useEffect(() => {
     if (!open) return
@@ -60,13 +76,11 @@ export function DrawingGuidesDialog({ open, onClose }: DrawingGuidesDialogProps)
 
   if (!open) return null
 
-  const store = useGuideStore.getState()
-
   return (
     // eslint-disable-next-line jsx-a11y/no-static-element-interactions
     <div className={styles.overlay} onClick={onClose} onKeyDown={(e) => e.stopPropagation()}>
       {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events */}
-      <div className={styles.dialog} role="dialog" aria-label="Drawing Guides" onClick={(e) => e.stopPropagation()}>
+      <div className={styles.dialog} role="dialog" aria-modal="true" aria-label="Drawing Guides" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className={styles.header}>
           <span className={styles.headerTitle}>Drawing Guides</span>
@@ -101,7 +115,7 @@ export function DrawingGuidesDialog({ open, onClose }: DrawingGuidesDialogProps)
                     type="checkbox"
                     className={styles.paramToggle}
                     checked={gridEnabled}
-                    onChange={(e) => store.setGridEnabled(e.target.checked)}
+                    onChange={(e) => setGridEnabled(e.target.checked)}
                     aria-label="Enable grid"
                   />
                 </div>
@@ -115,7 +129,8 @@ export function DrawingGuidesDialog({ open, onClose }: DrawingGuidesDialogProps)
                       min={4}
                       max={256}
                       value={gridSpacing}
-                      onChange={(e) => store.setGridSpacing(Number(e.target.value))}
+                      onChange={(e) => setGridSpacing(Number(e.target.value))}
+                      aria-label="Grid spacing"
                     />
                     <span className={styles.paramValue}>{gridSpacing}px</span>
                   </div>
@@ -128,7 +143,7 @@ export function DrawingGuidesDialog({ open, onClose }: DrawingGuidesDialogProps)
                       type="checkbox"
                       className={styles.paramToggle}
                       checked={gridSnap}
-                      onChange={(e) => store.setGridSnap(e.target.checked)}
+                      onChange={(e) => setGridSnap(e.target.checked)}
                     />
                   </div>
                 </div>
@@ -143,7 +158,8 @@ export function DrawingGuidesDialog({ open, onClose }: DrawingGuidesDialogProps)
                       max={1}
                       step={0.01}
                       value={gridOpacity}
-                      onChange={(e) => store.setGridOpacity(Number(e.target.value))}
+                      onChange={(e) => setGridOpacity(Number(e.target.value))}
+                      aria-label="Grid opacity"
                     />
                     <span className={styles.paramValue}>{Math.round(gridOpacity * 100)}%</span>
                   </div>
@@ -160,7 +176,7 @@ export function DrawingGuidesDialog({ open, onClose }: DrawingGuidesDialogProps)
                     type="checkbox"
                     className={styles.paramToggle}
                     checked={isometricEnabled}
-                    onChange={(e) => store.setIsometricEnabled(e.target.checked)}
+                    onChange={(e) => setIsometricEnabled(e.target.checked)}
                     aria-label="Enable isometric grid"
                   />
                 </div>
@@ -174,7 +190,8 @@ export function DrawingGuidesDialog({ open, onClose }: DrawingGuidesDialogProps)
                       min={8}
                       max={256}
                       value={isometricSpacing}
-                      onChange={(e) => store.setIsometricSpacing(Number(e.target.value))}
+                      onChange={(e) => setIsometricSpacing(Number(e.target.value))}
+                      aria-label="Isometric spacing"
                     />
                     <span className={styles.paramValue}>{isometricSpacing}px</span>
                   </div>
@@ -191,7 +208,7 @@ export function DrawingGuidesDialog({ open, onClose }: DrawingGuidesDialogProps)
                     type="checkbox"
                     className={styles.paramToggle}
                     checked={perspectiveEnabled}
-                    onChange={(e) => store.setPerspectiveEnabled(e.target.checked)}
+                    onChange={(e) => setPerspectiveEnabled(e.target.checked)}
                     aria-label="Enable perspective guides"
                   />
                 </div>
@@ -204,7 +221,7 @@ export function DrawingGuidesDialog({ open, onClose }: DrawingGuidesDialogProps)
                         key={t}
                         className={styles.typeBtn}
                         data-active={perspectiveType === t}
-                        onClick={() => store.setPerspectiveType(t)}
+                        onClick={() => setPerspectiveType(t)}
                         type="button"
                       >
                         {t}
@@ -222,7 +239,8 @@ export function DrawingGuidesDialog({ open, onClose }: DrawingGuidesDialogProps)
                       min={4}
                       max={48}
                       value={perspectiveLineCount}
-                      onChange={(e) => store.setPerspectiveLineCount(Number(e.target.value))}
+                      onChange={(e) => setPerspectiveLineCount(Number(e.target.value))}
+                      aria-label="Perspective line count"
                     />
                     <span className={styles.paramValue}>{perspectiveLineCount}</span>
                   </div>
@@ -239,7 +257,7 @@ export function DrawingGuidesDialog({ open, onClose }: DrawingGuidesDialogProps)
                     type="checkbox"
                     className={styles.paramToggle}
                     checked={symmetryEnabled}
-                    onChange={(e) => store.setSymmetryEnabled(e.target.checked)}
+                    onChange={(e) => setSymmetryEnabled(e.target.checked)}
                     aria-label="Enable symmetry"
                   />
                 </div>
@@ -252,7 +270,7 @@ export function DrawingGuidesDialog({ open, onClose }: DrawingGuidesDialogProps)
                         key={t}
                         className={styles.typeBtn}
                         data-active={symmetryType === t}
-                        onClick={() => store.setSymmetryType(t)}
+                        onClick={() => setSymmetryType(t)}
                         type="button"
                       >
                         {t.charAt(0).toUpperCase() + t.slice(1)}
@@ -271,7 +289,8 @@ export function DrawingGuidesDialog({ open, onClose }: DrawingGuidesDialogProps)
                         min={2}
                         max={24}
                         value={symmetryAxes}
-                        onChange={(e) => store.setSymmetryAxes(Number(e.target.value))}
+                        onChange={(e) => setSymmetryAxes(Number(e.target.value))}
+                        aria-label="Symmetry axes"
                       />
                       <span className={styles.paramValue}>{symmetryAxes}</span>
                     </div>
@@ -288,7 +307,8 @@ export function DrawingGuidesDialog({ open, onClose }: DrawingGuidesDialogProps)
                         min={0}
                         max={360}
                         value={Math.round(symmetryRotation * (180 / Math.PI))}
-                        onChange={(e) => store.setSymmetryRotation(Number(e.target.value) * (Math.PI / 180))}
+                        onChange={(e) => setSymmetryRotation(Number(e.target.value) * (Math.PI / 180))}
+                        aria-label="Symmetry rotation"
                       />
                       <span className={styles.paramValue}>{Math.round(symmetryRotation * (180 / Math.PI))}&deg;</span>
                     </div>
@@ -306,7 +326,7 @@ export function DrawingGuidesDialog({ open, onClose }: DrawingGuidesDialogProps)
                     type="checkbox"
                     className={styles.paramToggle}
                     checked={quickShapeEnabled}
-                    onChange={(e) => store.setQuickShapeEnabled(e.target.checked)}
+                    onChange={(e) => setQuickShapeEnabled(e.target.checked)}
                     aria-label="Enable QuickShape"
                   />
                 </div>

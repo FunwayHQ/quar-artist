@@ -53,7 +53,7 @@ export function QuickMenuSettingsDialog({ open, onClose }: QuickMenuSettingsDial
     // eslint-disable-next-line jsx-a11y/no-static-element-interactions
     <div className={styles.overlay} onKeyDown={(e) => e.stopPropagation()} onClick={onClose}>
       {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
-      <div className={styles.dialog} onClick={(e) => e.stopPropagation()}>
+      <div className={styles.dialog} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Quick Menu Settings">
         <h2 className={styles.title}>Quick Menu Settings</h2>
 
         <div className={styles.slotList}>

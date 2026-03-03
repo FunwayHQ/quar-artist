@@ -41,7 +41,7 @@ export function ExportDialog({
 
   return (
     <div className={styles.overlay} onClick={onClose}>
-      <div className={styles.dialog} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Export">
+      <div className={styles.dialog} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Export">
         <h2 className={styles.title}>Export</h2>
 
         <div className={styles.tabs}>

@@ -2,6 +2,7 @@ import { RenderTexture, Sprite, Container, type Application } from 'pixi.js'
 import { TileManager } from './TileManager.ts'
 import type { LayerInfo, BlendMode } from '../../types/layer.ts'
 import { MAX_LAYERS } from '../../types/layer.ts'
+import { get2dContext } from '../../utils/canvas2d.ts'
 
 let nextId = 1
 function generateLayerId(): string {
@@ -51,22 +52,28 @@ export class LayerManager {
     this.canvasWidth = width
     this.canvasHeight = height
 
+    // Reuse a single empty container and copy sprite across all layers
+    const emptyContainer = new Container()
+    const copySprite = new Sprite()
+
     for (const layer of this.layers) {
       const oldTexture = layer.texture
       const newTexture = RenderTexture.create({ width, height })
 
       // Clear new texture to transparent
-      const emptyContainer = new Container()
       this.app.renderer.render({ container: emptyContainer, target: newTexture, clear: true })
 
       // Copy old content into new texture (top-left aligned)
-      const sprite = new Sprite(oldTexture)
-      this.app.renderer.render({ container: sprite, target: newTexture, clear: false })
+      copySprite.texture = oldTexture
+      this.app.renderer.render({ container: copySprite, target: newTexture, clear: false })
 
       layer.texture = newTexture
       layer.sprite.texture = newTexture
       oldTexture.destroy(true)
     }
+
+    copySprite.destroy?.()
+    emptyContainer.destroy?.({ children: true })
 
     this.notifyStructuralChange()
     this.notifyChange()
@@ -332,14 +339,17 @@ export class LayerManager {
     const thumbSize = 40
     const thumbTex = RenderTexture.create({ width: thumbSize, height: thumbSize })
 
-    for (const layer of this.layers) {
-      const scaleX = thumbSize / this.canvasWidth
-      const scaleY = thumbSize / this.canvasHeight
-      const layerSprite = new Sprite(layer.texture)
-      layerSprite.scale.set(scaleX, scaleY)
+    // Reuse a single sprite + container across all layers
+    const layerSprite = new Sprite()
+    const thumbContainer = new Container()
+    thumbContainer.addChild(layerSprite)
 
-      const thumbContainer = new Container()
-      thumbContainer.addChild(layerSprite)
+    const scaleX = thumbSize / this.canvasWidth
+    const scaleY = thumbSize / this.canvasHeight
+
+    for (const layer of this.layers) {
+      layerSprite.texture = layer.texture
+      layerSprite.scale.set(scaleX, scaleY)
 
       this.app.renderer.render({
         container: thumbContainer,
@@ -352,7 +362,7 @@ export class LayerManager {
       const canvas = document.createElement('canvas')
       canvas.width = thumbSize
       canvas.height = thumbSize
-      const ctx = canvas.getContext('2d')!
+      const ctx = get2dContext(canvas)
       const imageData = new ImageData(
         new Uint8ClampedArray(pixels.pixels.buffer, pixels.pixels.byteOffset, pixels.pixels.byteLength),
         thumbSize,
@@ -362,6 +372,8 @@ export class LayerManager {
       layer.info.thumbnail = canvas.toDataURL('image/png')
     }
 
+    layerSprite.destroy?.()
+    thumbContainer.destroy?.({ children: true })
     thumbTex.destroy(true)
     this.notifyChange()
   }

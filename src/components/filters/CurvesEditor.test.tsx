@@ -32,6 +32,13 @@ beforeEach(() => {
   vi.clearAllMocks()
   // Mock canvas getContext
   HTMLCanvasElement.prototype.getContext = vi.fn().mockReturnValue(mockCtx)
+  // Mock pointer capture (not in jsdom)
+  if (!HTMLElement.prototype.setPointerCapture) {
+    HTMLElement.prototype.setPointerCapture = vi.fn()
+  }
+  if (!HTMLElement.prototype.releasePointerCapture) {
+    HTMLElement.prototype.releasePointerCapture = vi.fn()
+  }
 })
 
 describe('CurvesEditor', () => {
@@ -78,7 +85,7 @@ describe('CurvesEditor', () => {
     }))
 
     // Click in the middle of the canvas (away from existing points)
-    fireEvent.mouseDown(canvas, { clientX: 128, clientY: 128 })
+    fireEvent.pointerDown(canvas, { clientX: 128, clientY: 128, pointerId: 1 })
     expect(onChange).toHaveBeenCalledTimes(1)
     const newPoints = onChange.mock.calls[0][0]
     expect(newPoints.length).toBe(3) // original 2 + 1 new

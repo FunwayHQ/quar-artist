@@ -58,7 +58,7 @@ export function ShortcutsModal({ open, onClose }: ShortcutsModalProps) {
 
   return (
     <div className={styles.overlay} onClick={handleOverlayClick}>
-      <div className={styles.dialog} role="dialog" aria-label="Keyboard Shortcuts">
+      <div className={styles.dialog} role="dialog" aria-modal="true" aria-label="Keyboard Shortcuts">
         <div className={styles.header}>
           <h2 className={styles.title}>Keyboard Shortcuts</h2>
           <button className={styles.closeBtn} onClick={onClose} aria-label="Close">

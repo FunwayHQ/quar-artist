@@ -11,7 +11,7 @@ interface FilterDialogProps {
 export function FilterDialog({ title, children, onApply, onCancel }: FilterDialogProps) {
   return (
     <div className={styles.backdrop}>
-      <div className={styles.dialog} role="dialog" aria-label={title} onClick={(e) => e.stopPropagation()}>
+      <div className={styles.dialog} role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
         <h2 className={styles.title}>{title}</h2>
         <div className={styles.content}>
           {children}

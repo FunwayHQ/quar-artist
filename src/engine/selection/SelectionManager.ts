@@ -19,6 +19,8 @@ export class SelectionManager {
   private width: number
   private height: number
   private onChange: SelectionChangeCallback | null = null
+  private _hasSelectionCache: boolean | null = null
+  private _boundsCache: BoundingBox | null | undefined = undefined
 
   constructor(width: number, height: number) {
     this.width = width
@@ -35,6 +37,7 @@ export class SelectionManager {
     this.width = width
     this.height = height
     this.mask = new Uint8Array(width * height)
+    this.invalidateCache()
     this.notifyChange()
   }
 
@@ -67,12 +70,11 @@ export class SelectionManager {
     this.mask[iy * this.width + ix] = Math.max(0, Math.min(255, Math.round(value)))
   }
 
-  /** Check if there's any selection. */
+  /** Check if there's any selection (cached — avoids O(n) scan). */
   hasSelection(): boolean {
-    for (let i = 0; i < this.mask.length; i++) {
-      if (this.mask[i] > 0) return true
-    }
-    return false
+    if (this._hasSelectionCache !== null) return this._hasSelectionCache
+    this.computeCache()
+    return this._hasSelectionCache!
   }
 
   /** Select all pixels. */
@@ -267,28 +269,11 @@ export class SelectionManager {
     this.notifyChange()
   }
 
-  /** Get the bounding box of the current selection, or null if empty. */
+  /** Get the bounding box of the current selection, or null if empty (cached). */
   getBounds(): BoundingBox | null {
-    let minX = this.width
-    let minY = this.height
-    let maxX = 0
-    let maxY = 0
-    let found = false
-
-    for (let y = 0; y < this.height; y++) {
-      for (let x = 0; x < this.width; x++) {
-        if (this.mask[y * this.width + x] > 0) {
-          found = true
-          minX = Math.min(minX, x)
-          minY = Math.min(minY, y)
-          maxX = Math.max(maxX, x)
-          maxY = Math.max(maxY, y)
-        }
-      }
-    }
-
-    if (!found) return null
-    return { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 }
+    if (this._boundsCache !== undefined) return this._boundsCache
+    this.computeCache()
+    return this._boundsCache!
   }
 
   /**
@@ -354,6 +339,38 @@ export class SelectionManager {
       this.mask.set(data)
       this.notifyChange()
     }
+  }
+
+  /** Invalidate cached hasSelection and bounds. */
+  private invalidateCache() {
+    this._hasSelectionCache = null
+    this._boundsCache = undefined
+  }
+
+  /** Compute hasSelection and bounds in a single pass. */
+  private computeCache() {
+    let minX = this.width
+    let minY = this.height
+    let maxX = 0
+    let maxY = 0
+    let found = false
+
+    for (let y = 0; y < this.height; y++) {
+      for (let x = 0; x < this.width; x++) {
+        if (this.mask[y * this.width + x] > 0) {
+          found = true
+          minX = Math.min(minX, x)
+          minY = Math.min(minY, y)
+          maxX = Math.max(maxX, x)
+          maxY = Math.max(maxY, y)
+        }
+      }
+    }
+
+    this._hasSelectionCache = found
+    this._boundsCache = found
+      ? { x: minX, y: minY, width: maxX - minX + 1, height: maxY - minY + 1 }
+      : null
   }
 
   /**
@@ -429,6 +446,7 @@ export class SelectionManager {
   }
 
   private notifyChange() {
+    this.invalidateCache()
     this.onChange?.(this.hasSelection(), this.getBounds())
   }
 }

@@ -9,26 +9,28 @@ import { useProjectStore } from '@stores/projectStore.ts'
  */
 export function useEngine(containerRef: React.RefObject<HTMLElement | null>) {
   const managerRef = useRef<CanvasManager | null>(null)
+  const [manager, setManager] = useState<CanvasManager | null>(null)
   const [ready, setReady] = useState(false)
 
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
 
-    const manager = new CanvasManager()
-    managerRef.current = manager
+    const mgr = new CanvasManager()
+    managerRef.current = mgr
 
     // Wire layer changes to the React store
-    manager.setLayerChangeCallback((layers, activeId) => {
+    mgr.setLayerChangeCallback((layers, activeId) => {
       useLayerStore.getState().syncFromEngine(layers, activeId)
     })
 
     // Pass document dimensions so textures are created at the correct size
     const { canvasWidth, canvasHeight } = useProjectStore.getState()
 
-    manager
+    mgr
       .init(container, canvasWidth, canvasHeight)
       .then(() => {
+        setManager(mgr)
         setReady(true)
       })
       .catch((err) => {
@@ -36,8 +38,9 @@ export function useEngine(containerRef: React.RefObject<HTMLElement | null>) {
       })
 
     return () => {
-      manager.destroy()
+      mgr.destroy()
       managerRef.current = null
+      setManager(null)
       setReady(false)
     }
   }, [containerRef])
@@ -75,7 +78,7 @@ export function useEngine(containerRef: React.RefObject<HTMLElement | null>) {
   }, [])
 
   return {
-    manager: managerRef.current,
+    manager,
     ready,
     undo,
     redo,

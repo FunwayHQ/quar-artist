@@ -54,7 +54,7 @@ export function CanvasSizeDialog({ open, currentWidth, currentHeight, onClose, o
   return (
     <div className={styles.overlay} onClick={onClose}>
       {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
-      <div className={styles.dialog} onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Canvas Size">
+      <div className={styles.dialog} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Canvas Size">
         <h2 className={styles.title}>Canvas Size</h2>
 
         <div className={styles.presets}>

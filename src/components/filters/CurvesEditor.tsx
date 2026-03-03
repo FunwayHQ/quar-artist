@@ -28,7 +28,7 @@ export function CurvesEditor({ points, onChange, channelColor = '#F59E0B' }: Cur
     y: Math.round(Math.max(0, Math.min(255, (DISPLAY_SIZE - cy) * 255 / DISPLAY_SIZE))),
   })
 
-  const getCanvasCoords = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
+  const getCanvasCoords = useCallback((e: React.PointerEvent<HTMLCanvasElement> | React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current
     if (!canvas) return { x: 0, y: 0 }
     const rect = canvas.getBoundingClientRect()
@@ -107,9 +107,11 @@ export function CurvesEditor({ points, onChange, channelColor = '#F59E0B' }: Cur
     }
   }, [points, channelColor])
 
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const { x, y } = getCanvasCoords(e)
     const idx = findPointIndex(x, y)
+
+    e.currentTarget.setPointerCapture(e.pointerId)
 
     if (idx >= 0) {
       setDraggingIndex(idx)
@@ -124,7 +126,7 @@ export function CurvesEditor({ points, onChange, channelColor = '#F59E0B' }: Cur
     }
   }
 
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
+  const handlePointerMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     if (draggingIndex === null) return
 
     const { x, y } = getCanvasCoords(e)
@@ -150,7 +152,8 @@ export function CurvesEditor({ points, onChange, channelColor = '#F59E0B' }: Cur
     onChange(newPoints)
   }
 
-  const handleMouseUp = () => {
+  const handlePointerUp = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    e.currentTarget.releasePointerCapture(e.pointerId)
     setDraggingIndex(null)
   }
 
@@ -171,10 +174,9 @@ export function CurvesEditor({ points, onChange, channelColor = '#F59E0B' }: Cur
       className={styles.canvas}
       width={CANVAS_SIZE}
       height={CANVAS_SIZE}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
       onDoubleClick={handleDoubleClick}
     />
   )

@@ -225,7 +225,7 @@ export function BrushStudio({ open, onClose }: BrushStudioProps) {
 
   return (
     <div className={styles.overlay} onClick={handleOverlayClick}>
-      <div className={styles.dialog} role="dialog" aria-label="Brush Studio">
+      <div className={styles.dialog} role="dialog" aria-modal="true" aria-label="Brush Studio">
         {/* Header */}
         <div className={styles.header}>
           <h2 className={styles.title}>Brush Studio</h2>
@@ -305,6 +305,7 @@ export function BrushStudio({ open, onClose }: BrushStudioProps) {
             <div
               className={styles.saveDialog}
               role="dialog"
+              aria-modal="true"
               aria-label="Save Brush Preset"
               onClick={(e) => e.stopPropagation()}
             >

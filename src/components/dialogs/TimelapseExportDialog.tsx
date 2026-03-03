@@ -40,7 +40,7 @@ export function TimelapseExportDialog({
     // eslint-disable-next-line jsx-a11y/no-static-element-interactions
     <div className={styles.overlay} onKeyDown={(e) => e.stopPropagation()} onClick={onClose}>
       {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
-      <div className={styles.dialog} onClick={(e) => e.stopPropagation()}>
+      <div className={styles.dialog} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Timelapse Export">
         <h2 className={styles.title}>Timelapse Recording</h2>
 
         {/* eslint-disable-next-line jsx-a11y/media-has-caption */}

@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import styles from './ProjectCard.module.css'
 
 interface ProjectCardProps {
@@ -13,7 +14,7 @@ interface ProjectCardProps {
   onRename: (name: string) => void
 }
 
-export function ProjectCard({
+export const ProjectCard = memo(function ProjectCard({
   name,
   width,
   height,
@@ -55,4 +56,4 @@ export function ProjectCard({
       </div>
     </div>
   )
-}
+})
