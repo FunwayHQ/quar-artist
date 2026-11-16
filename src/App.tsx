@@ -28,7 +28,8 @@ const TimelapseExportDialog = lazy(() => import('@components/dialogs/TimelapseEx
 const QuickMenuSettingsDialog = lazy(() => import('@components/dialogs/QuickMenuSettingsDialog.tsx').then(m => ({ default: m.QuickMenuSettingsDialog })))
 import { useEngine } from '@hooks/useEngine.ts'
 import { getBackend } from '@engine/renderer.ts'
-import { createId } from './utils/id.ts'
+import { projectService } from './io/persistence/ProjectService.ts'
+import type { GalleryActions } from '@components/gallery/GalleryView.tsx'
 import { useKeyboardShortcuts } from '@hooks/useKeyboardShortcuts.ts'
 import { useGlobalErrorToasts } from '@hooks/useGlobalErrorToasts.ts'
 import { useBrushStore } from '@stores/brushStore.ts'
@@ -48,10 +49,26 @@ import { getImageFromClipboard, getImageFromDrop, decodeImageBlob, pickImageFile
 import { hsbToRgba, rgbaToHsb } from '@app-types/color.ts'
 import { isGoogleFontsConsented, isGoogleFontsDeclined, setGoogleFontsConsent, preloadGoogleFonts, GOOGLE_FONTS_POPULAR } from './utils/googleFonts.ts'
 import { WEB_SAFE_FONTS } from '@app-types/text.ts'
-import type { ExportOptions } from '@app-types/project.ts'
+import type { ExportOptions, NewProjectConfig } from '@app-types/project.ts'
 import type { FilterType } from '@app-types/filter.ts'
 import type { QuickMenuSlot } from '@app-types/quickmenu.ts'
 import styles from './App.module.css'
+
+/** The Gallery's actions, all handled by the project service. */
+const GALLERY_ACTIONS: GalleryActions = {
+  openProject: (id) => void projectService.openProject(id),
+  newProject: () => useUIStore.getState().setShowNewProjectDialog(true),
+  renameProject: (id, name) => void projectService.renameProject(id, name),
+  duplicateProject: (id) => void projectService.duplicateProject(id),
+  deleteProject: (id) => void projectService.deleteProject(id),
+  moveToStack: (projectId, stackId) => void projectService.moveToStack(projectId, stackId),
+  createStack: (name, projectIds) => void projectService.createStack(name, projectIds),
+  renameStack: (id, name) => void projectService.renameStack(id, name),
+  unstack: (id) => void projectService.unstack(id),
+  openStack: (id) => projectService.openStack(id),
+  setSort: (sort) => void projectService.setSort(sort),
+  importFiles: (files) => void projectService.importFiles(files),
+}
 
 export default function App() {
   const {
@@ -81,6 +98,15 @@ export default function App() {
   const canvasWidth = useProjectStore((s) => s.canvasWidth)
   const canvasHeight = useProjectStore((s) => s.canvasHeight)
   const projectName = useProjectStore((s) => s.currentProjectName)
+  const sessionId = useProjectStore((s) => s.sessionId)
+
+  // Open the Gallery, or a new project when there are none (M1.1)
+  useEffect(() => {
+    void projectService.start()
+  }, [])
+
+  // Hand each document's engine to the project service, which loads the document and saves it
+  useEffect(() => (manager ? projectService.attachEngine(manager) : undefined), [manager])
 
   // Google Fonts consent state
   // Ask until the user has either consented or declined
@@ -285,11 +311,15 @@ export default function App() {
     useUIStore.getState().setShowExportDialog(false)
   }, [manager, projectName])
 
-  // New project handler
-  const handleNewProject = useCallback((name: string, width: number, height: number, dpi: number) => {
-    useProjectStore.getState().setCurrentProject(createId(), name, width, height, dpi)
+  // New project: saves and closes the open one, then opens a fresh document
+  const handleNewProject = useCallback((config: NewProjectConfig) => {
     useUIStore.getState().setShowNewProjectDialog(false)
-    // Engine reinit will happen via the view change
+    void projectService.createProject(config)
+  }, [])
+
+  // Ctrl+S and File › Save
+  const handleSave = useCallback(() => {
+    void projectService.saveNow()
   }, [])
 
   // Canvas resize handler
@@ -297,16 +327,6 @@ export default function App() {
     useProjectStore.getState().setCanvasSize(width, height)
     useUIStore.getState().setShowCanvasSizeDialog(false)
     useUIStore.getState().addToast(`Canvas resized to ${width}×${height}`, 'success')
-  }, [])
-
-  // Gallery handlers
-  // TODO(F03, plan M1.1): load the project with this id. Today it only switches view.
-  const handleOpenProject = useCallback((_id: string) => {
-    useProjectStore.getState().setView('canvas')
-  }, [])
-
-  const handleGalleryNewProject = useCallback(() => {
-    useUIStore.getState().setShowNewProjectDialog(true)
   }, [])
 
   // ── Image import: clipboard paste (Ctrl+V) ──
@@ -554,6 +574,7 @@ export default function App() {
     onFlipVertical: flipLayerVertical,
     onRotateCW: rotateLayer90CW,
     onRotateCCW: rotateLayer90CCW,
+    onSave: handleSave,
   })
 
   // Canvas context menu
@@ -574,17 +595,21 @@ export default function App() {
     { label: 'Fit to Document', shortcut: 'Ctrl+0', action: () => manager?.fitToDocument() },
   ]
 
+  // Deciding where to start, or reading a project before it opens
+  if (appView === 'loading') {
+    return (
+      <div className={styles.app}>
+        <LoadingOverlay label="Loading…" />
+        <ToastContainer />
+      </div>
+    )
+  }
+
   // Gallery view
   if (appView === 'gallery') {
     return (
       <div className={styles.app}>
-        <GalleryView
-          onOpenProject={handleOpenProject}
-          onNewProject={handleGalleryNewProject}
-          onDeleteProject={() => {}}
-          onDuplicateProject={() => {}}
-          onRenameProject={() => {}}
-        />
+        <GalleryView actions={GALLERY_ACTIONS} />
         <Suspense fallback={null}>
           {showNewProjectDialog && (
             <NewProjectDialog
@@ -594,6 +619,7 @@ export default function App() {
             />
           )}
         </Suspense>
+        <ToastContainer />
       </div>
     )
   }
@@ -615,6 +641,7 @@ export default function App() {
             onOpenFilter={handleOpenFilter}
             onUndo={undo}
             onRedo={redo}
+            onSave={handleSave}
             onImportImage={handleImportImage}
             onStartRecording={handleStartRecording}
             onStopRecording={handleStopRecording}
@@ -633,7 +660,7 @@ export default function App() {
 
         {/* Center: Canvas */}
         <div onContextMenu={handleCanvasContextMenu} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          <CanvasViewport ref={containerRef} engineReady={ready} renderer={(ready && getBackend()) || undefined} />
+          <CanvasViewport key={sessionId ?? 'unsaved'} ref={containerRef} engineReady={ready} renderer={(ready && getBackend()) || undefined} />
         </div>
 
         {showPanels && rightPanelOpen && (

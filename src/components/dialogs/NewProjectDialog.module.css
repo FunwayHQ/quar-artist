@@ -133,3 +133,15 @@
 .createBtn:hover {
   opacity: 0.9;
 }
+
+.createBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.error {
+  margin: 0;
+  font-family: var(--font-family-ui);
+  font-size: var(--font-size-xs);
+  color: var(--color-accent-error);
+}

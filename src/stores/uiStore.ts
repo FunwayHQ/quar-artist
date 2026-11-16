@@ -1,6 +1,23 @@
 import { create } from 'zustand'
 
-export interface Toast {
+export interface ToastAction {
+  label: string
+  run: () => void
+}
+
+/** Why a toast went away: it timed out, the user dismissed it, or the user chose its action. */
+export type ToastCloseReason = 'timeout' | 'dismiss' | 'action'
+
+export interface ToastOptions {
+  /** A button on the toast, such as Undo. */
+  action?: ToastAction
+  /** How long the toast stays up, in ms. */
+  durationMs?: number
+  /** Called once when the toast goes away. */
+  onClose?: (reason: ToastCloseReason) => void
+}
+
+export interface Toast extends ToastOptions {
   id: string
   message: string
   type: 'info' | 'success' | 'error'
@@ -38,13 +55,13 @@ interface UIStore {
   setShowDrawingGuidesDialog: (show: boolean) => void
   setShowTimelapseExportDialog: (show: boolean) => void
   setShowQuickMenuSettings: (show: boolean) => void
-  addToast: (message: string, type?: Toast['type']) => void
-  dismissToast: (id: string) => void
+  addToast: (message: string, type?: Toast['type'], options?: ToastOptions) => void
+  dismissToast: (id: string, reason?: ToastCloseReason) => void
 }
 
 let toastIdCounter = 0
 
-export const useUIStore = create<UIStore>((set) => ({
+export const useUIStore = create<UIStore>((set, get) => ({
   leftPanelOpen: true,
   rightPanelOpen: true,
   rightPanelTab: 'color',
@@ -78,12 +95,15 @@ export const useUIStore = create<UIStore>((set) => ({
   setShowTimelapseExportDialog: (show) => set({ showTimelapseExportDialog: show }),
   setShowQuickMenuSettings: (show) => set({ showQuickMenuSettings: show }),
 
-  addToast: (message, type = 'info') => {
+  addToast: (message, type = 'info', options = {}) => {
     const id = `toast_${++toastIdCounter}`
-    set((s) => ({ toasts: [...s.toasts, { id, message, type }] }))
+    set((s) => ({ toasts: [...s.toasts, { ...options, id, message, type }] }))
   },
 
-  dismissToast: (id) => {
+  dismissToast: (id, reason = 'dismiss') => {
+    const toast = get().toasts.find((t) => t.id === id)
+    if (!toast) return
     set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }))
+    toast.onClose?.(reason)
   },
 }))

@@ -98,17 +98,7 @@ export class LayerManager {
     if (this.layers.length >= MAX_LAYERS) return null
 
     const id = createId()
-    const texture = RenderTexture.create({
-      width: this.canvasWidth,
-      height: this.canvasHeight,
-    })
-    // Clear to transparent — GPU memory may be uninitialized
-    if (this.app) {
-      const emptyContainer = new Container()
-      this.app.renderer.render({ container: emptyContainer, target: texture, clear: true })
-    }
-    const sprite = new Sprite(texture)
-    const info: LayerInfo = {
+    const layer = this.makeLayer({
       id,
       name: name ?? `Layer ${this.layers.length + 1}`,
       visible: true,
@@ -117,13 +107,7 @@ export class LayerManager {
       alphaLock: false,
       clippingMask: false,
       locked: false,
-    }
-    const layer: Layer = {
-      info,
-      texture,
-      sprite,
-      tileManager: new TileManager(),
-    }
+    })
 
     // Insert above active layer, or at top if no active
     const activeIdx = this.layers.findIndex((l) => l.info.id === this.activeLayerId)
@@ -133,6 +117,52 @@ export class LayerManager {
     this.notifyStructuralChange()
     this.notifyChange()
     return id
+  }
+
+  /**
+   * Replace every layer with empty ones that have the given properties, bottom
+   * first, keeping their ids (opening a saved document). A repeated id gets a
+   * new one, and an empty list leaves one empty layer. Returns the new layers,
+   * in order, for the caller to fill.
+   */
+  replaceLayers(infos: readonly LayerInfo[], activeId: string | null): readonly Layer[] {
+    for (const layer of this.layers) layer.texture.destroy(true)
+    this.layers = []
+
+    const seen = new Set<string>()
+    for (const saved of infos.slice(0, MAX_LAYERS)) {
+      const id = seen.has(saved.id) ? createId() : saved.id
+      seen.add(id)
+      const info: LayerInfo = { ...saved, id }
+      delete info.thumbnail // drawn again from the pixels
+      this.layers.push(this.makeLayer(info))
+    }
+    if (this.layers.length === 0) {
+      this.layers.push(this.makeLayer({
+        id: createId(), name: 'Layer 1', visible: true, opacity: 1, blendMode: 'normal',
+        alphaLock: false, clippingMask: false, locked: false,
+      }))
+    }
+
+    const top = this.layers[this.layers.length - 1].info.id
+    this.activeLayerId = activeId !== null && seen.has(activeId) ? activeId : top
+    this.notifyStructuralChange()
+    this.notifyChange()
+    return this.layers
+  }
+
+  /** A layer with the given properties and a texture cleared to transparent. */
+  private makeLayer(info: LayerInfo): Layer {
+    const texture = RenderTexture.create({
+      width: this.canvasWidth,
+      height: this.canvasHeight,
+    })
+    // Clear to transparent — GPU memory may be uninitialized
+    if (this.app) {
+      const emptyContainer = new Container()
+      this.app.renderer.render({ container: emptyContainer, target: texture, clear: true })
+    }
+    return { info, texture, sprite: new Sprite(texture), tileManager: new TileManager() }
   }
 
   /** Delete a layer by id. Cannot delete the last layer. */

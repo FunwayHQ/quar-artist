@@ -121,6 +121,10 @@ export class Quar {
     return this.page.evaluate(() => window.__quar!.redo())
   }
 
+  reopen(): Promise<void> {
+    return this.page.evaluate(() => window.__quar!.reopen())
+  }
+
   async readLayer(layerId: string): Promise<Pixels> {
     return Pixels.decode(await this.page.evaluate((i) => window.__quar!.readLayer(i), layerId))
   }

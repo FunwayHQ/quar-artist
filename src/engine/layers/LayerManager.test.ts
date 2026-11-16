@@ -37,6 +37,7 @@ vi.mock('pixi.js', () => {
 })
 
 import { LayerManager } from './LayerManager.ts'
+import { MAX_LAYERS, type LayerInfo } from '../../types/layer.ts'
 
 describe('LayerManager', () => {
   let lm: LayerManager
@@ -369,4 +370,73 @@ describe('LayerManager', () => {
       expect(lm.getActiveLayerId()).toBe('')
     })
   })
+
+  describe('replaceLayers (opening a project)', () => {
+    const info = (id: string, name: string, extra: Partial<LayerInfo> = {}): LayerInfo => ({
+      id,
+      name,
+      visible: true,
+      opacity: 1,
+      blendMode: 'normal',
+      alphaLock: false,
+      clippingMask: false,
+      locked: false,
+      ...extra,
+    })
+
+    it('replaces every layer, keeping ids, order and properties', () => {
+      lm.init()
+      const old = lm.getLayers()[0]
+
+      const created = lm.replaceLayers(
+        [info('a', 'Sky'), info('b', 'Ink', { opacity: 0.5, blendMode: 'multiply', locked: true })],
+        'a',
+      )
+
+      expect(created).toHaveLength(2)
+      expect(lm.getLayerInfos()).toEqual([
+        info('a', 'Sky'),
+        info('b', 'Ink', { opacity: 0.5, blendMode: 'multiply', locked: true }),
+      ])
+      expect(lm.getActiveLayerId()).toBe('a')
+      expect((old.texture as unknown as { destroyed: boolean }).destroyed).toBe(true)
+      expect(created.every((l) => l.texture.width === 1024 && l.texture.height === 768)).toBe(true)
+    })
+
+    it('makes the top layer active when the saved one is missing', () => {
+      lm.replaceLayers([info('a', 'Sky'), info('b', 'Ink')], 'gone')
+      expect(lm.getActiveLayerId()).toBe('b')
+      lm.replaceLayers([info('a', 'Sky'), info('b', 'Ink')], null)
+      expect(lm.getActiveLayerId()).toBe('b')
+    })
+
+    it('starts with one empty layer when there are none', () => {
+      lm.replaceLayers([], null)
+      expect(lm.count).toBe(1)
+      expect(lm.getLayerInfos()[0].name).toBe('Layer 1')
+      expect(lm.getActiveLayerId()).toBe(lm.getLayerInfos()[0].id)
+    })
+
+    it('gives a repeated id a new one, and drops saved thumbnails', () => {
+      lm.replaceLayers([info('a', 'Sky', { thumbnail: 'data:old' }), info('a', 'Copy')], 'a')
+      const [first, second] = lm.getLayerInfos()
+      expect(first.id).toBe('a')
+      expect(second.id).not.toBe('a')
+      expect(first.thumbnail).toBeUndefined()
+    })
+
+    it('keeps no more than the layer limit', () => {
+      const many = Array.from({ length: MAX_LAYERS + 3 }, (_, i) => info(`l${i}`, `Layer ${i}`))
+      lm.replaceLayers(many, null)
+      expect(lm.count).toBe(MAX_LAYERS)
+    })
+
+    it('reports the change', () => {
+      const onChange = vi.fn()
+      lm.setChangeCallback(onChange)
+      lm.replaceLayers([info('a', 'Sky')], 'a')
+      expect(onChange).toHaveBeenCalledWith([info('a', 'Sky')], 'a')
+    })
+  })
 })
+

@@ -1,5 +1,15 @@
 import type { BlendMode } from './layer.ts'
 
+/**
+ * An encoded image kept in IndexedDB as bytes rather than as a Blob, because
+ * Safari can't store Blobs in IndexedDB in private windows.
+ */
+export interface StoredImage {
+  /** MIME type, such as image/webp. */
+  type: string
+  data: ArrayBuffer
+}
+
 export interface ProjectMeta {
   id: string
   name: string
@@ -8,7 +18,7 @@ export interface ProjectMeta {
   dpi: number
   createdAt: Date
   updatedAt: Date
-  thumbnailBlob?: Blob
+  thumbnail?: StoredImage
 }
 
 export interface ProjectLayerMeta {
@@ -29,6 +39,20 @@ export interface CanvasConfig {
   height: number
   dpi: number
 }
+
+/** The colour space a document is painted in. Display P3 needs wide-gamut canvases (plan M7.3). */
+export type ColorSpace = 'srgb' | 'display-p3'
+
+/** What the New Project dialog asks for. */
+export interface NewProjectConfig extends CanvasConfig {
+  colorSpace: ColorSpace
+}
+
+/** How the Gallery orders projects and stacks. */
+export type GallerySort = 'updated' | 'created' | 'name'
+
+/** DPI values the New Project dialog offers before "Custom". */
+export const DPI_PRESETS = [72, 150, 300, 600] as const
 
 export const CANVAS_PRESETS: { label: string; width: number; height: number; dpi: number }[] = [
   { label: '1080 × 1080 (Square)', width: 1080, height: 1080, dpi: 72 },

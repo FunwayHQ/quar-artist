@@ -1,7 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import 'fake-indexeddb/auto'
 import { deleteDB, openDB, type IDBPDatabase } from 'idb'
-import { DB_NAME, getDB, resetDB, type QuarDB } from './schema.ts'
+import { DB_NAME, DB_VERSION, getDB, resetDB, setDatabaseEventListener, type QuarDB } from './schema.ts'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
@@ -208,5 +208,80 @@ describe('QuarDB upgrade from version 1', () => {
     const db = await getDB()
     expect(await db.count('layers')).toBe(0)
     expect(await db.count('tiles')).toBe(0)
+  })
+})
+
+describe('QuarDB upgrade from version 2', () => {
+  beforeEach(async () => {
+    resetDB()
+    await deleteDB(DB_NAME)
+  })
+  afterEach(() => resetDB())
+
+  it('adds the stacks store and keeps the projects', async () => {
+    const v2 = await openDB(DB_NAME, 2, {
+      upgrade(db) {
+        const projects = db.createObjectStore('projects', { keyPath: 'id' })
+        projects.createIndex('by-name', 'name')
+        projects.createIndex('by-updatedAt', 'updatedAt')
+        const layers = db.createObjectStore('layers', { keyPath: 'id', autoIncrement: true })
+        layers.createIndex('by-projectId', 'projectId')
+        layers.createIndex('by-project-layer', ['projectId', 'layerId'])
+        const tiles = db.createObjectStore('tiles', { keyPath: 'id', autoIncrement: true })
+        tiles.createIndex('by-projectId', 'projectId')
+        tiles.createIndex('by-project-layer-key', ['projectId', 'layerId', 'key'])
+        db.createObjectStore('settings', { keyPath: 'key' })
+      },
+    })
+    await v2.add('projects', project('p1', 'Kept'))
+    v2.close()
+
+    const db = await getDB()
+    expect(db.version).toBe(DB_VERSION)
+    expect([...db.objectStoreNames]).toContain('stacks')
+    expect((await db.get('projects', 'p1'))!.name).toBe('Kept')
+    await db.add('stacks', { id: 's1', name: 'Studies', createdAt: new Date(), updatedAt: new Date() })
+    expect(await db.count('stacks')).toBe(1)
+  })
+})
+
+describe('QuarDB connection', () => {
+  beforeEach(async () => {
+    resetDB()
+    await deleteDB(DB_NAME)
+  })
+  afterEach(() => {
+    setDatabaseEventListener(null)
+    resetDB()
+  })
+
+  it('shares one connection between concurrent first calls', async () => {
+    const [a, b] = await Promise.all([getDB(), getDB()])
+    expect(a).toBe(b)
+  })
+
+  it('lets a newer version in another tab upgrade, and says so', async () => {
+    const events: string[] = []
+    setDatabaseEventListener((e) => events.push(e))
+    await getDB()
+
+    // Another tab opens a newer version: without giving way, this would wait forever.
+    const newer = await openDB(DB_NAME, DB_VERSION + 1)
+    expect(newer.version).toBe(DB_VERSION + 1)
+    expect(events).toEqual(['blocking'])
+    newer.close()
+  })
+
+  it('reports an upgrade that waits for an older tab to close', async () => {
+    const events: string[] = []
+    setDatabaseEventListener((e) => events.push(e))
+    // An older version of the app, open in another tab, that doesn't give way.
+    const older = await openDB(DB_NAME, DB_VERSION - 1)
+
+    const opening = getDB()
+    await vi.waitFor(() => expect(events).toEqual(['blocked']))
+    older.close()
+
+    expect((await opening).version).toBe(DB_VERSION)
   })
 })

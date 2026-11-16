@@ -77,7 +77,9 @@ vi.stubGlobal('ResizeObserver', MockResizeObserver)
 
 // Import AFTER mocks are set up
 import { CanvasManager } from './CanvasManager.ts'
+import { FilterManager } from '../filters/FilterManager.ts'
 import { createRenderer } from '../renderer.ts'
+import type { LayerInfo } from '../../types/layer.ts'
 
 describe('CanvasManager', () => {
   let cm: CanvasManager
@@ -307,6 +309,109 @@ describe('CanvasManager', () => {
       expect(vi.getTimerCount()).toBe(0)
       cm.requestOverlayRender()
       expect(vi.getTimerCount()).toBe(0)
+    })
+  })
+
+  describe('documents (M1.1)', () => {
+    const info = (id: string, name: string): LayerInfo => ({
+      id,
+      name,
+      visible: true,
+      opacity: 1,
+      blendMode: 'normal',
+      alphaLock: false,
+      clippingMask: false,
+      locked: false,
+    })
+
+    beforeEach(async () => {
+      await cm.init(container, 4, 4)
+      // Layer thumbnails read pixels back, which the mocked renderer can't.
+      vi.spyOn(cm.layerManager, 'updateThumbnails').mockImplementation(() => {})
+    })
+
+    it('reports layer changes and history steps as changes worth saving', () => {
+      const onChange = vi.fn()
+      cm.setDocumentChangeCallback(onChange)
+
+      cm.layerManager.createLayer('Ink')
+      expect(onChange).toHaveBeenCalled()
+
+      onChange.mockClear()
+      cm.brushEngine.undoManager.clear()
+      expect(onChange).toHaveBeenCalled()
+    })
+
+    it('still tells the layers panel about layer changes', () => {
+      const onLayers = vi.fn()
+      const onChange = vi.fn()
+      cm.setLayerChangeCallback(onLayers)
+      cm.setDocumentChangeCallback(onChange)
+      cm.layerManager.createLayer('Ink')
+      expect(onLayers).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ name: 'Ink' })]), expect.any(String))
+      expect(onChange).toHaveBeenCalled()
+    })
+
+    it('loads saved layers, with an empty history, without reporting a change', () => {
+      const onChange = vi.fn()
+      const onLayers = vi.fn()
+      cm.setDocumentChangeCallback(onChange)
+      cm.setLayerChangeCallback(onLayers)
+
+      cm.loadDocument([{ info: info('a', 'Sky'), pixels: null }, { info: info('b', 'Ink'), pixels: null }], 'a')
+
+      expect(onChange).not.toHaveBeenCalled()
+      expect(onLayers).toHaveBeenCalledWith([info('a', 'Sky'), info('b', 'Ink')], 'a')
+      expect(cm.getLayerInfos()).toEqual([info('a', 'Sky'), info('b', 'Ink')])
+      expect(cm.getActiveLayerId()).toBe('a')
+      expect(cm.brushEngine.undoManager.canUndo).toBe(false)
+
+      // Changes after loading count again.
+      cm.layerManager.createLayer('New')
+      expect(onChange).toHaveBeenCalled()
+    })
+
+    it('saves the pixels from before a filter preview, which is not part of the document yet', () => {
+      const id = cm.getActiveLayerId()
+      const committed = { width: 4, height: 4, data: new Uint8Array(64).fill(7) }
+      vi.spyOn(FilterManager.prototype, 'isActive').mockReturnValue(true)
+      vi.spyOn(FilterManager.prototype, 'committedPixels').mockImplementation((layerId) => (layerId === id ? committed : null))
+
+      expect(cm.isPreviewing()).toBe(true)
+      expect(cm.getLayerPixels(id)).toBe(committed.data)
+    })
+
+    it('saves the pixels from before a transform', () => {
+      const id = cm.getActiveLayerId()
+      const before = { width: 4, height: 4, data: new Uint8Array(64).fill(3) }
+      ;(cm as unknown as { transformState: { layerId: string; beforeSnapshot: typeof before } }).transformState = {
+        layerId: id,
+        beforeSnapshot: before,
+      }
+      expect(cm.isPreviewing()).toBe(true)
+      expect(cm.getLayerPixels(id)).toBe(before.data)
+      ;(cm as unknown as { transformState: null }).transformState = null
+    })
+
+    it('refuses to read pixels once the GPU context is lost, rather than give blanks to save', () => {
+      const id = cm.getActiveLayerId()
+      const staticCanvas = container.querySelectorAll('canvas')[0]
+      staticCanvas.dispatchEvent(new Event('webglcontextlost'))
+
+      expect(() => cm.getLayerPixels(id)).toThrow('graphics processor reset')
+      expect(() => cm.getCompositePixels()).toThrow('graphics processor reset')
+    })
+
+    it('knows the document size', () => {
+      expect(cm.getDocumentSize()).toEqual({ width: 4, height: 4 })
+    })
+
+    it('stops reporting once destroyed', () => {
+      const onChange = vi.fn()
+      cm.setDocumentChangeCallback(onChange)
+      cm.destroy()
+      cm.layerManager.createLayer('Late')
+      expect(onChange).not.toHaveBeenCalled()
     })
   })
 

@@ -6,7 +6,7 @@ import { useGuideStore } from '@stores/guideStore.ts'
 import { useTimelapseStore } from '@stores/timelapseStore.ts'
 import type { CanvasManager } from '@engine/canvas/CanvasManager.ts'
 import type { FilterType } from '@app-types/filter.ts'
-import { MetadataDB } from '../../io/persistence/MetadataDB.ts'
+import { projectService } from '../../io/persistence/ProjectService.ts'
 import styles from './TitleBar.module.css'
 
 interface TitleBarProps {
@@ -50,8 +50,10 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, 
       committedName.current = trimmed
       useProjectStore.getState().setProjectName(trimmed)
       if (currentProjectId != null) {
-        const db = new MetadataDB()
-        db.updateProject(currentProjectId, { name: trimmed })
+        projectService.renameProject(currentProjectId, trimmed).catch((err: unknown) => {
+          console.error('[QUAR] Rename failed:', err)
+          useUIStore.getState().addToast("Couldn't save the new name", 'error')
+        })
       }
     }
     if (nameInputRef.current) nameInputRef.current.value = trimmed
@@ -82,7 +84,7 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, 
                 { label: 'Discard Recording', action: () => onDiscardRecording?.() },
               ]),
           { separator: true, label: '' },
-          { label: 'Gallery', action: () => useProjectStore.getState().setView('gallery') },
+          { label: 'Gallery', action: () => void projectService.goToGallery() },
         ]
       case 'edit':
         return [
@@ -159,6 +161,7 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, 
       <input
         ref={nameInputRef}
         className={styles.projectName}
+        aria-label="Project name"
         defaultValue={projectName}
         onClick={(e) => (e.target as HTMLInputElement).select()}
         onBlur={(e) => commitRename(e.target.value)}

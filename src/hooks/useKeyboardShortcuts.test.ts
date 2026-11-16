@@ -110,4 +110,17 @@ describe('useKeyboardShortcuts', () => {
     expect(useToolStore.getState().activeTool).toBe('brush') // unchanged
     document.body.removeChild(input)
   })
+
+  it('saves on Ctrl+S (and Cmd+S), instead of the browser saving the page', () => {
+    const onSave = vi.fn()
+    renderHook(() => useKeyboardShortcuts({ manager: null, undo, redo, onOpenFilter, onSave }))
+
+    const event = new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true })
+    document.dispatchEvent(event)
+    fireKey('s', { metaKey: true })
+
+    expect(onSave).toHaveBeenCalledTimes(2)
+    expect(event.defaultPrevented).toBe(true)
+  })
 })
+

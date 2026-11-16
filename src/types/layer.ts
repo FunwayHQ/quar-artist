@@ -26,6 +26,13 @@ export interface LayerInfo {
   thumbnail?: string
 }
 
+/** A layer as saved: its properties, and its pixels if it has any. */
+export interface StoredLayer {
+  info: LayerInfo
+  /** Straight RGBA at document size, or null for an empty layer. */
+  pixels: Uint8Array | null
+}
+
 export const ALL_BLEND_MODES: BlendMode[] = [
   'normal',
   'darken', 'multiply', 'colorBurn',

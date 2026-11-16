@@ -8,6 +8,7 @@ describe('NewProjectDialog', () => {
     open: true,
     onClose: vi.fn(),
     onCreate: vi.fn(),
+    maxSide: 8192,
   }
 
   beforeEach(() => {
@@ -67,7 +68,104 @@ describe('NewProjectDialog', () => {
 
     await user.click(screen.getByText('Create'))
 
-    expect(defaultProps.onCreate).toHaveBeenCalledWith('My Art', 1920, 1080, 72)
+    expect(defaultProps.onCreate).toHaveBeenCalledWith({
+      name: 'My Art',
+      width: 1920,
+      height: 1080,
+      dpi: 72,
+      colorSpace: 'srgb',
+    })
+  })
+
+  it('names a project Untitled when the name is blank', async () => {
+    const user = userEvent.setup()
+    render(<NewProjectDialog {...defaultProps} />)
+    await user.clear(screen.getByLabelText('Project name'))
+    await user.type(screen.getByLabelText('Project name'), '   ')
+    await user.click(screen.getByText('Create'))
+    expect(defaultProps.onCreate).toHaveBeenCalledWith(expect.objectContaining({ name: 'Untitled' }))
+  })
+
+  describe('size limits (PRD 4.2)', () => {
+    it('refuses a side beyond what the device supports, and says why', () => {
+      render(<NewProjectDialog {...defaultProps} />)
+      fireEvent.change(screen.getByLabelText('Canvas width'), { target: { value: '8193' } })
+
+      expect(screen.getByRole('alert')).toHaveTextContent('up to 8192 × 8192 px')
+      expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled()
+      fireEvent.click(screen.getByRole('button', { name: 'Create' }))
+      expect(defaultProps.onCreate).not.toHaveBeenCalled()
+    })
+
+    it('accepts the largest supported side', () => {
+      render(<NewProjectDialog {...defaultProps} />)
+      fireEvent.change(screen.getByLabelText('Canvas width'), { target: { value: '8192' } })
+      fireEvent.change(screen.getByLabelText('Canvas height'), { target: { value: '8192' } })
+      expect(screen.queryByRole('alert')).toBeNull()
+      expect(screen.getByRole('button', { name: 'Create' })).toBeEnabled()
+    })
+
+    it('uses the smaller mobile limit when given one', () => {
+      render(<NewProjectDialog {...defaultProps} maxSide={4096} />)
+      fireEvent.change(screen.getByLabelText('Canvas height'), { target: { value: '5000' } })
+      expect(screen.getByRole('alert')).toHaveTextContent('up to 4096 × 4096 px')
+    })
+
+    it('hides presets the device can\'t make', () => {
+      render(<NewProjectDialog {...defaultProps} maxSide={3000} />)
+      expect(screen.getByText('2048 × 2048')).toBeInTheDocument()
+      expect(screen.queryByText('4096 × 4096')).toBeNull()
+      expect(screen.queryByText('A4 300 DPI')).toBeNull()
+    })
+
+    it('refuses sizes that are not whole numbers of at least 1 px', () => {
+      render(<NewProjectDialog {...defaultProps} />)
+      fireEvent.change(screen.getByLabelText('Canvas width'), { target: { value: '0' } })
+      expect(screen.getByRole('alert')).toHaveTextContent('at least 1 px')
+      expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled()
+    })
+  })
+
+  describe('DPI', () => {
+    it('offers 72, 150, 300, 600 and Custom', () => {
+      render(<NewProjectDialog {...defaultProps} />)
+      const options = Array.from((screen.getByLabelText('DPI') as HTMLSelectElement).options).map((o) => o.text)
+      expect(options).toEqual(['72', '150', '300', '600', 'Custom…'])
+    })
+
+    it('takes a custom value', async () => {
+      const user = userEvent.setup()
+      render(<NewProjectDialog {...defaultProps} />)
+      fireEvent.change(screen.getByLabelText('DPI'), { target: { value: 'custom' } })
+      fireEvent.change(screen.getByLabelText('Custom DPI'), { target: { value: '240' } })
+      await user.click(screen.getByText('Create'))
+      expect(defaultProps.onCreate).toHaveBeenCalledWith(expect.objectContaining({ dpi: 240 }))
+    })
+
+    it('refuses a custom value out of range', () => {
+      render(<NewProjectDialog {...defaultProps} />)
+      fireEvent.change(screen.getByLabelText('DPI'), { target: { value: 'custom' } })
+      fireEvent.change(screen.getByLabelText('Custom DPI'), { target: { value: '0' } })
+      expect(screen.getByRole('alert')).toHaveTextContent('DPI must be a whole number from 1 to 9600')
+      expect(screen.getByRole('button', { name: 'Create' })).toBeDisabled()
+    })
+
+    it('takes a preset\'s DPI', async () => {
+      const user = userEvent.setup()
+      render(<NewProjectDialog {...defaultProps} />)
+      await user.click(screen.getByText('A4 300 DPI'))
+      expect((screen.getByLabelText('DPI') as HTMLSelectElement).value).toBe('300')
+      await user.click(screen.getByText('Create'))
+      expect(defaultProps.onCreate).toHaveBeenCalledWith(expect.objectContaining({ width: 2480, height: 3508, dpi: 300 }))
+    })
+  })
+
+  it('offers sRGB now, and Display P3 as not available yet', () => {
+    render(<NewProjectDialog {...defaultProps} />)
+    const select = screen.getByLabelText('Colour space') as HTMLSelectElement
+    expect(select.value).toBe('srgb')
+    const p3 = Array.from(select.options).find((o) => o.value === 'display-p3')!
+    expect(p3.disabled).toBe(true)
   })
 
   it('calls onClose when Cancel is clicked', async () => {

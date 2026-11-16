@@ -1,27 +1,44 @@
 import { useState } from 'react'
-import { CANVAS_PRESETS } from '@app-types/project.ts'
+import { CANVAS_PRESETS, DPI_PRESETS, type ColorSpace, type NewProjectConfig } from '@app-types/project.ts'
+import { canvasSizeProblem, maxCanvasSide } from '../../utils/deviceLimits.ts'
 import styles from './NewProjectDialog.module.css'
 
 interface NewProjectDialogProps {
   open: boolean
   onClose: () => void
-  onCreate: (name: string, width: number, height: number, dpi: number) => void
+  onCreate: (config: NewProjectConfig) => void
+  /** The largest side this device allows. */
+  maxSide?: number
 }
 
-export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogProps) {
+const MAX_DPI = 9600
+
+export function NewProjectDialog({ open, onClose, onCreate, maxSide = maxCanvasSide() }: NewProjectDialogProps) {
   const [name, setName] = useState('Untitled')
   const [width, setWidth] = useState(1920)
   const [height, setHeight] = useState(1080)
-  const [dpi, setDpi] = useState(72)
+  const [dpiChoice, setDpiChoice] = useState('72')
+  const [customDpi, setCustomDpi] = useState(96)
+  const [colorSpace, setColorSpace] = useState<ColorSpace>('srgb')
   const [linked, setLinked] = useState(false)
   const [aspect, setAspect] = useState(1920 / 1080)
 
   if (!open) return null
 
+  const dpi = dpiChoice === 'custom' ? customDpi : Number(dpiChoice)
+  const problem = canvasSizeProblem(width, height, maxSide)
+    ?? (Number.isInteger(dpi) && dpi >= 1 && dpi <= MAX_DPI ? null : `DPI must be a whole number from 1 to ${MAX_DPI}`)
+  const presets = CANVAS_PRESETS.filter((p) => p.width <= maxSide && p.height <= maxSide)
+
   const applyPreset = (preset: typeof CANVAS_PRESETS[number]) => {
     setWidth(preset.width)
     setHeight(preset.height)
-    setDpi(preset.dpi)
+    if ((DPI_PRESETS as readonly number[]).includes(preset.dpi)) {
+      setDpiChoice(String(preset.dpi))
+    } else {
+      setDpiChoice('custom')
+      setCustomDpi(preset.dpi)
+    }
     setAspect(preset.width / preset.height)
   }
 
@@ -36,9 +53,8 @@ export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogPr
   }
 
   const handleCreate = () => {
-    if (width > 0 && height > 0) {
-      onCreate(name || 'Untitled', width, height, dpi)
-    }
+    if (problem) return
+    onCreate({ name: name.trim() || 'Untitled', width, height, dpi, colorSpace })
   }
 
   return (
@@ -58,7 +74,7 @@ export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogPr
         </label>
 
         <div className={styles.presets}>
-          {CANVAS_PRESETS.map((p) => (
+          {presets.map((p) => (
             <button
               key={p.label}
               className={styles.presetBtn}
@@ -78,7 +94,7 @@ export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogPr
               type="number"
               value={width}
               min={1}
-              max={16384}
+              max={maxSide}
               onChange={(e) => handleWidthChange(Number(e.target.value))}
               aria-label="Canvas width"
             />
@@ -102,30 +118,63 @@ export function NewProjectDialog({ open, onClose, onCreate }: NewProjectDialogPr
               type="number"
               value={height}
               min={1}
-              max={16384}
+              max={maxSide}
               onChange={(e) => handleHeightChange(Number(e.target.value))}
               aria-label="Canvas height"
             />
           </label>
         </div>
 
-        <label className={styles.field}>
-          <span className={styles.label}>DPI</span>
-          <select
-            className={styles.input}
-            value={dpi}
-            onChange={(e) => setDpi(Number(e.target.value))}
-            aria-label="DPI"
-          >
-            <option value={72}>72</option>
-            <option value={150}>150</option>
-            <option value={300}>300</option>
-          </select>
-        </label>
+        <div className={styles.dimensions}>
+          <label className={styles.field}>
+            <span className={styles.label}>DPI</span>
+            <select
+              className={styles.input}
+              value={dpiChoice}
+              onChange={(e) => setDpiChoice(e.target.value)}
+              aria-label="DPI"
+            >
+              {DPI_PRESETS.map((value) => (
+                <option key={value} value={String(value)}>{value}</option>
+              ))}
+              <option value="custom">Custom…</option>
+            </select>
+          </label>
+          {dpiChoice === 'custom' && (
+            <label className={styles.field}>
+              <span className={styles.label}>Custom DPI</span>
+              <input
+                className={styles.input}
+                type="number"
+                value={customDpi}
+                min={1}
+                max={MAX_DPI}
+                onChange={(e) => setCustomDpi(Number(e.target.value))}
+                aria-label="Custom DPI"
+              />
+            </label>
+          )}
+          <label className={styles.field}>
+            <span className={styles.label}>Colour space</span>
+            <select
+              className={styles.input}
+              value={colorSpace}
+              onChange={(e) => setColorSpace(e.target.value as ColorSpace)}
+              aria-label="Colour space"
+            >
+              <option value="srgb">sRGB</option>
+              <option value="display-p3" disabled>Display P3 (not available yet)</option>
+            </select>
+          </label>
+        </div>
+
+        {problem && <p className={styles.error} role="alert">{problem}</p>}
 
         <div className={styles.footer}>
           <button className={styles.cancelBtn} onClick={onClose} type="button">Cancel</button>
-          <button className={styles.createBtn} onClick={handleCreate} type="button">Create</button>
+          <button className={styles.createBtn} onClick={handleCreate} type="button" disabled={problem !== null}>
+            Create
+          </button>
         </div>
       </div>
     </div>

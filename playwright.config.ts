@@ -52,7 +52,10 @@ export default defineConfig<HarnessWorkerOptions>({
     ...webgpuProjects,
   ],
   webServer: {
-    command: 'npm run dev',
+    // --force rebuilds Vite's dependency cache at start-up. Otherwise, the
+    // first run after app code starts importing an installed package (one the
+    // cache doesn't have yet) bundles it mid-run and reloads every open page.
+    command: 'npm run dev -- --force',
     port: 5173,
     reuseExistingServer: !process.env.CI,
   },

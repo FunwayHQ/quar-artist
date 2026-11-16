@@ -1,12 +1,10 @@
-import { type Application, RenderTexture, Texture, Sprite, Container, Filter } from 'pixi.js'
+import { type Application, RenderTexture, Sprite, Container, Filter } from 'pixi.js'
 import type { FilterParams, SharpenParams, CurvesParams } from '@app-types/filter.ts'
 import type { LayerSnapshot } from '../undo/UndoManager.ts'
 import { createFilterPipeline } from './filterFactory.ts'
 import { cpuUnsharpMask } from '../shaders/filters/sharpenFilter.ts'
 import { cpuApplyCurves } from '../shaders/filters/curvesFilter.ts'
-import { get2dContext } from '../../utils/canvas2d.ts'
-import { asClampedBytes } from '../../utils/typedArrays.ts'
-import { readPixels } from '../utils/readback.ts'
+import { readPixels, writePixels } from '../utils/readback.ts'
 
 /**
  * Non-destructive filter preview system.
@@ -29,6 +27,11 @@ export class FilterManager {
 
   isActive(): boolean {
     return this.active
+  }
+
+  /** The pixels `layerId` had before its preview began, if a preview is on it. */
+  committedPixels(layerId: string): LayerSnapshot | null {
+    return this.active && this.layerId === layerId ? this.originalSnapshot : null
   }
 
   /**
@@ -260,28 +263,9 @@ export class FilterManager {
     const { width: w, height: h, data } = snapshot
     if (w <= 0 || h <= 0) return
 
-    const expectedLen = w * h * 4
-    if (data.length < expectedLen) return
+    if (data.length < w * h * 4) return
 
-    const canvas = document.createElement('canvas')
-    canvas.width = w
-    canvas.height = h
-    const ctx = get2dContext(canvas)
-    const imageData = new ImageData(
-      asClampedBytes(data, expectedLen),
-      w,
-      h,
-    )
-    ctx.putImageData(imageData, 0, 0)
-
-    const tex = Texture.from(canvas)
-    const sprite = new Sprite(tex)
-    this.app.renderer.render({
-      container: sprite,
-      target: layerTexture,
-      clear: true,
-    })
-    tex.destroy(true)
+    writePixels(this.app.renderer, layerTexture, data, w, h)
   }
 
   destroy(): void {

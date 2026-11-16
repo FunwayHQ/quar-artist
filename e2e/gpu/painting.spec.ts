@@ -120,17 +120,9 @@ test.describe('undo and redo', () => {
   })
 
   test('undo restores semi-transparent pixels exactly', async ({ quar }) => {
-    const info = await quar.open({ width: SIZE, height: SIZE })
+    await quar.open({ width: SIZE, height: SIZE })
     // Pure red would hide this: its premultiplied channels are whole numbers at any alpha.
-    expectKnownBug(
-      {
-        id: 'F103',
-        fixedIn: 'M2.2',
-        summary: "Firefox's 2D canvas rounds premultiplied colour up, so each trip through one shifts semi-transparent colours",
-        browsers: ['firefox'],
-      },
-      info,
-    )
+    // Undo used to restore through a 2D canvas, which Firefox rounds up (F103, fixed in M1.1).
     const layer = await quar.baseLayerId()
     await quar.fillRect(layer, [40, 60, 220, 128], { x: 0, y: 0, width: SIZE, height: 16 })
     const before = await quar.readLayer(layer)

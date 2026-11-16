@@ -115,6 +115,12 @@ export interface QuarHarness {
   undo(): Promise<boolean>
   redo(): Promise<boolean>
 
+  /**
+   * Read every layer as autosave does and load them back as opening a
+   * project does (M1.1): the round trip a saved document makes.
+   */
+  reopen(): void
+
   /** Read back a layer's texture. */
   readLayer(layerId: string): EncodedPixels
   /** Recomposite all layers (no cache) and read back the result. */

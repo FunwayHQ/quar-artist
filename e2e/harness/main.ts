@@ -212,6 +212,15 @@ function createHarness(manager: CanvasManager, overlay: HTMLCanvasElement, info:
     undo: () => manager.performUndo(),
     redo: () => manager.performRedo(),
 
+    reopen() {
+      const saved = manager.getLayerInfos().map((info) => {
+        const pixels = manager.getLayerPixels(info.id)
+        // AutoSave stores a copy, as IndexedDB would.
+        return { info, pixels: pixels && new Uint8Array(pixels) }
+      })
+      manager.loadDocument(saved, manager.getActiveLayerId())
+    },
+
     readLayer: (layerId) => read(layerById(layerId).texture),
 
     readComposite() {

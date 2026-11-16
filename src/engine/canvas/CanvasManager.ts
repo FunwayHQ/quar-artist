@@ -18,6 +18,7 @@ import { TextTool } from '../tools/TextTool.ts'
 import { TimelapseRecorder } from '../timelapse/TimelapseRecorder.ts'
 import { createRenderer, type RendererOptions } from '../renderer.ts'
 import type { ViewState, PointerState, ToolType } from '../../types/engine.ts'
+import type { LayerInfo, StoredLayer } from '../../types/layer.ts'
 import type { StrokePoint } from '../../types/brush.ts'
 import type { FilterParams } from '../../types/filter.ts'
 import type { LayerSnapshot, LayerUndoEntry } from '../undo/UndoManager.ts'
@@ -27,7 +28,7 @@ import type { RGBAColor } from '../../types/color.ts'
 import type { TextProperties } from '../../types/text.ts'
 import { get2dContext } from '../../utils/canvas2d.ts'
 import { asClampedBytes } from '../../utils/typedArrays.ts'
-import { readPixels } from '../utils/readback.ts'
+import { readPixels, writePixels } from '../utils/readback.ts'
 import { strokePressure } from '../input/pressure.ts'
 
 /**
@@ -96,17 +97,34 @@ export class CanvasManager {
   private onViewChange: ((state: ViewState) => void) | null = null
   private onTextInput: ((screenX: number, screenY: number, canvasX: number, canvasY: number) => void) | null = null
   private onSymmetryCenterChanged: ((cx: number, cy: number) => void) | null = null
+  private onLayerChange: LayerChangeCallback | null = null
+  private onDocumentChange: (() => void) | null = null
+  /** True while loadDocument runs, so loading isn't reported as a change. */
+  private loadingDocument = false
   private resizeObserver: ResizeObserver | null = null
   private container: HTMLElement | null = null
 
   private documentWidth = 1024
   private documentHeight = 768
+  /** The GPU context was lost, and the layers' pixels with it. */
+  private pixelsLost = false
 
   constructor() {
     // Initialize SelectionController with a default canvas size (resized later)
     this.selectionController = new SelectionController(1024, 768)
     // Wire symmetry engine to brush engine
     this.brushEngine.symmetryEngine = this.symmetryEngine
+
+    // Every history step and every layer change is a change to save.
+    this.brushEngine.undoManager.setChangeCallback(() => this.notifyDocumentChange())
+    this.layerManager.setChangeCallback((layers, activeId) => {
+      this.onLayerChange?.(layers, activeId)
+      this.notifyDocumentChange()
+    })
+  }
+
+  private notifyDocumentChange() {
+    if (!this.loadingDocument) this.onDocumentChange?.()
   }
 
   /**
@@ -140,6 +158,7 @@ export class CanvasManager {
       return
     }
     this.app = app
+    this.watchForContextLoss(app)
 
     // Attach input to overlay (captures all pointer events)
     this.inputManager.attach(this.overlayCanvas)
@@ -219,7 +238,100 @@ export class CanvasManager {
 
   /** Set callback for layer changes (wires to React store). */
   setLayerChangeCallback(cb: LayerChangeCallback) {
-    this.layerManager.setChangeCallback(cb)
+    this.onLayerChange = cb
+  }
+
+  /** Set the callback for every change worth saving: history steps and layer changes. */
+  setDocumentChangeCallback(cb: (() => void) | null) {
+    this.onDocumentChange = cb
+  }
+
+  // ── Document ──────────────────────────────────────────────────────
+
+  getDocumentSize(): { width: number; height: number } {
+    return { width: this.documentWidth, height: this.documentHeight }
+  }
+
+  getLayerInfos(): LayerInfo[] {
+    return this.layerManager.getLayerInfos()
+  }
+
+  getActiveLayerId(): string {
+    return this.layerManager.getActiveLayerId()
+  }
+
+  /**
+   * A layer's pixels, straight RGBA at document size. Under a filter or
+   * transform preview, the pixels from before it: a preview isn't part of the
+   * document until it is applied. Read-only: they may be the preview's own copy.
+   */
+  getLayerPixels(id: string): Uint8Array | null {
+    if (!this.app) return null
+    this.checkPixelsReadable()
+    const layer = this.layerManager.getLayerById(id)
+    if (!layer) return null
+    const committed = this.transformState?.layerId === id
+      ? this.transformState.beforeSnapshot
+      : this.filterManager.committedPixels(id)
+    if (committed) return committed.data
+    const { pixels } = readPixels(this.app.renderer, layer.texture)
+    return new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength)
+  }
+
+  /** Whether a filter or transform preview is on screen. */
+  isPreviewing(): boolean {
+    return this.transformState !== null || this.filterManager.isActive()
+  }
+
+  /**
+   * Note a lost GPU context. The layers' pixels live in their textures, which
+   * the loss empties, and they stay empty if the context comes back. So from
+   * then on reading pixels throws instead of returning blanks that a save
+   * would write over the project (recovering them: F105, M2.2).
+   */
+  private watchForContextLoss(app: Application) {
+    this.staticCanvas?.addEventListener('webglcontextlost', () => {
+      this.pixelsLost = true
+    })
+    const gpu = (app.renderer as { gpu?: { device?: { lost?: Promise<{ reason?: string }> } } }).gpu
+    void gpu?.device?.lost?.then((info) => {
+      if (info.reason !== 'destroyed' && !this.destroyed) this.pixelsLost = true
+    })
+  }
+
+  private checkPixelsReadable() {
+    if (this.pixelsLost) {
+      throw new Error('the canvas lost its pixels when the graphics processor reset. Reload the page: your last save is kept')
+    }
+  }
+
+  /**
+   * Replace the document with saved layers (opening a project). Layer ids are
+   * kept, history starts empty, and none of this counts as a change to save.
+   * Pixels of the wrong size are skipped, leaving that layer empty.
+   */
+  loadDocument(layers: readonly StoredLayer[], activeLayerId: string | null): void {
+    if (!this.app) return
+    this.loadingDocument = true
+    try {
+      this.brushEngine.clearSnapshotCache()
+      const created = this.layerManager.replaceLayers(layers.map((l) => l.info), activeLayerId)
+      const width = this.documentWidth
+      const height = this.documentHeight
+      created.forEach((layer, i) => {
+        const pixels = layers[i]?.pixels
+        if (pixels && pixels.length === width * height * 4) {
+          this.restoreLayerSnapshot(layer.texture, { width, height, data: pixels })
+        }
+      })
+      this.brushEngine.undoManager.clear()
+      this.syncBrushToActiveLayer()
+      this.compositor.invalidateCache()
+      this.recomposite()
+      this.layerManager.updateThumbnails()
+    } finally {
+      this.loadingDocument = false
+    }
   }
 
   getPixiApp(): Application | null {
@@ -329,31 +441,10 @@ export class CanvasManager {
     const { width: w, height: h, data } = snapshot
     if (w <= 0 || h <= 0) return
 
-    const expectedLen = w * h * 4
-    if (data.length < expectedLen) return
+    if (data.length < w * h * 4) return
 
-    // Create a canvas with the snapshot pixel data
-    const canvas = document.createElement('canvas')
-    canvas.width = w
-    canvas.height = h
-    const ctx = get2dContext(canvas)
-    const imageData = new ImageData(
-      asClampedBytes(data, expectedLen),
-      w,
-      h,
-    )
-    ctx.putImageData(imageData, 0, 0)
-
-    // Create texture from canvas and render to the layer with clear:true
-    // This completely replaces the layer contents
-    const tex = Texture.from(canvas)
-    const sprite = new Sprite(tex)
-    this.app.renderer.render({
-      container: sprite,
-      target: layerTexture,
-      clear: true,
-    })
-    tex.destroy(true)
+    // Replaces the layer's contents completely
+    writePixels(this.app.renderer, layerTexture, data, w, h)
   }
 
   /** Set the document dimensions and resize all layer/compositor textures to match. */
@@ -751,6 +842,7 @@ export class CanvasManager {
   /** Extract composite pixel data (all visible layers) for export. */
   getCompositePixels(): { pixels: Uint8ClampedArray; width: number; height: number } | null {
     if (!this.app) return null
+    this.checkPixelsReadable()
     // Force a full N-layer composite for accuracy (bypass cache fast path)
     this.compositor.invalidateCache()
     this.recomposite()
@@ -1674,6 +1766,9 @@ export class CanvasManager {
 
   destroy() {
     this.destroyed = true
+    // Tearing down isn't a change to save.
+    this.onDocumentChange = null
+    this.onLayerChange = null
     this.inputManager.detach()
     this.resizeObserver?.disconnect()
 

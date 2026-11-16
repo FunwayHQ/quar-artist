@@ -1,4 +1,5 @@
 import { openDB, type IDBPDatabase, type IDBPTransaction, type DBSchema, type StoreNames } from 'idb'
+import type { ColorSpace, StoredImage } from '../types/project.ts'
 import { createId } from '../utils/id.ts'
 
 export interface ProjectRecord {
@@ -10,7 +11,23 @@ export interface ProjectRecord {
   dpi: number
   createdAt: Date
   updatedAt: Date
-  thumbnailBlob?: Blob
+  /** The Gallery thumbnail, written on each save. */
+  thumbnail?: StoredImage
+  colorSpace?: ColorSpace
+  /** The stack (Gallery folder) the project is in, if any. */
+  stackId?: string
+  /** The layer that was active at the last save. */
+  activeLayerId?: string
+  /** Set when the project is deleted. The Gallery hides it until the delete is undone or made final. */
+  deletedAt?: Date
+}
+
+/** A Gallery stack: a named folder of projects (PRD 4.9). */
+export interface StackRecord {
+  id: string
+  name: string
+  createdAt: Date
+  updatedAt: Date
 }
 
 export interface LayerRecord {
@@ -69,6 +86,10 @@ interface QuarDBSchema extends DBSchema {
     key: string
     value: SettingRecord
   }
+  stacks: {
+    key: string
+    value: StackRecord
+  }
 }
 
 export type QuarDB = IDBPDatabase<QuarDBSchema>
@@ -81,15 +102,46 @@ export const DB_NAME = 'QuarArtistDB'
  * 1. Projects keyed by an auto-incremented number.
  * 2. Projects keyed by a UUID (plan D12). Upgrading rekeys version 1 projects
  *    and points their layers and tiles at the new ids.
+ * 3. Adds the stacks store (Gallery folders).
  */
-export const DB_VERSION = 2
+export const DB_VERSION = 3
+
+/**
+ * Database events the user may need to act on:
+ * - blocked: an upgrade waits for QUAR Artist in another tab to close;
+ * - blocking: a newer QUAR Artist in another tab needs the database, so this tab let it go;
+ * - terminated: the browser closed the database.
+ */
+export type DatabaseEvent = 'blocked' | 'blocking' | 'terminated'
 
 let dbInstance: QuarDB | null = null
+let opening: Promise<QuarDB> | null = null
+let onDatabaseEvent: ((event: DatabaseEvent) => void) | null = null
 
-export async function getDB(): Promise<QuarDB> {
-  if (dbInstance) return dbInstance
+/** Hear about database events (see DatabaseEvent). */
+export function setDatabaseEventListener(listener: ((event: DatabaseEvent) => void) | null) {
+  onDatabaseEvent = listener
+}
 
-  dbInstance = await openDB<QuarDBSchema>(DB_NAME, DB_VERSION, {
+/** The open database. Concurrent first calls share one connection. */
+export function getDB(): Promise<QuarDB> {
+  if (dbInstance) return Promise.resolve(dbInstance)
+  opening ??= openQuarDB().then(
+    (db) => {
+      dbInstance = db
+      opening = null
+      return db
+    },
+    (err: unknown) => {
+      opening = null
+      throw err
+    },
+  )
+  return opening
+}
+
+function openQuarDB(): Promise<QuarDB> {
+  return openDB<QuarDBSchema>(DB_NAME, DB_VERSION, {
     async upgrade(db, oldVersion, _newVersion, tx) {
       if (oldVersion < 1) {
         createProjectsStore(db)
@@ -103,13 +155,25 @@ export async function getDB(): Promise<QuarDB> {
         tiles.createIndex('by-project-layer-key', ['projectId', 'layerId', 'key'])
 
         db.createObjectStore('settings', { keyPath: 'key' })
-        return
+      } else if (oldVersion < 2) {
+        await rekeyProjects(db, tx)
       }
-      if (oldVersion < 2) await rekeyProjects(db, tx)
+      if (oldVersion < 3) db.createObjectStore('stacks', { keyPath: 'id' })
+    },
+    blocked() {
+      onDatabaseEvent?.('blocked')
+    },
+    blocking(_currentVersion, _blockedVersion, event) {
+      // Close, so the newer version can upgrade instead of waiting for this tab.
+      ;(event.target as IDBDatabase).close()
+      dbInstance = null
+      onDatabaseEvent?.('blocking')
+    },
+    terminated() {
+      dbInstance = null
+      onDatabaseEvent?.('terminated')
     },
   })
-
-  return dbInstance
 }
 
 function createProjectsStore(db: QuarDB) {
@@ -151,8 +215,7 @@ async function rekeyProjects(db: QuarDB, tx: UpgradeTransaction) {
 
 /** Close and reset the cached DB instance (for testing). */
 export function resetDB() {
-  if (dbInstance) {
-    dbInstance.close()
-    dbInstance = null
-  }
+  dbInstance?.close()
+  dbInstance = null
+  opening = null
 }

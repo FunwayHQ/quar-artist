@@ -18,7 +18,12 @@ vi.mock('pixi.js', () => {
   class MockSprite {
     texture: unknown
     filters: unknown[] = []
+    destroy = vi.fn()
     constructor(texture?: unknown) { this.texture = texture }
+  }
+  class MockBufferImageSource {
+    options: unknown
+    constructor(options: unknown) { this.options = options }
   }
   class MockContainer {
     children: unknown[] = []
@@ -46,6 +51,7 @@ vi.mock('pixi.js', () => {
     RendererType: { WEBGL: 1, WEBGPU: 2, CANVAS: 4 },
     Texture: MockTexture,
     Sprite: MockSprite,
+    BufferImageSource: MockBufferImageSource,
     Container: MockContainer,
     RenderTexture: MockRenderTexture,
     Filter: MockFilter,

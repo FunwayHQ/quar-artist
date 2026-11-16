@@ -1,5 +1,5 @@
 import { useCallback } from 'react'
-import { useUIStore } from '@stores/uiStore.ts'
+import { useUIStore, type ToastCloseReason } from '@stores/uiStore.ts'
 import { Toast } from './Toast.tsx'
 import styles from './ToastContainer.module.css'
 
@@ -8,7 +8,7 @@ export function ToastContainer() {
   const dismissToast = useUIStore((s) => s.dismissToast)
 
   const handleDismiss = useCallback(
-    (id: string) => dismissToast(id),
+    (id: string, reason: ToastCloseReason) => dismissToast(id, reason),
     [dismissToast],
   )
 

@@ -134,7 +134,7 @@ flowchart LR
   M6 --> M10
 ```
 
-**Immediate next steps:** M0 is done (M0.2 skipped). Next is M1, starting with M1.1.
+**Immediate next steps:** M0 is done (M0.2 skipped), and so is M1.1. Next is M1.2, the tile store.
 
 ---
 
@@ -255,7 +255,7 @@ flowchart LR
 - Exported PSD files open correctly in Photoshop, GIMP and Krita.
 - PNG, JPEG and TIFF colours and DPI are correct on both backends.
 
-- [ ] **M1.1 Project lifecycle and gallery** · L · fixes F01, F03, F04, F95
+- [x] **M1.1 Project lifecycle and gallery** · L · fixes F01, F03, F04, F95
   - Add a `ProjectService` for create, open, close, rename, delete and duplicate, backed by database records.
   - New Project builds a fresh document (new layers, empty history, new ids) instead of resizing the old one.
   - When projects exist, the app starts in the Gallery (as the PRD specifies), with a "continue last project" option.
@@ -271,6 +271,31 @@ flowchart LR
     - enforce the PRD size limits for the device (8192² on desktop, 4096² on mobile);
     - offer DPI presets and a custom value;
     - offer a colour space choice: sRGB now, Display P3 in M7.3.
+  - **Done 2026-11-16.** Notes:
+    - `ProjectService` (`io/persistence/ProjectService.ts`) runs the project lifecycle on database records: create, open, close, rename, duplicate, delete, stacks and import. Opening, creating and closing run one at a time. Closing saves first, and a project whose save fails stays open, with the reason in a toast.
+    - Each open project is a `DocumentSession`: the engine showing it, attached to an AutoSave that only ever writes to that project (part of F08). New Project and Open start a new session, and the canvas is keyed by it, so every document gets a fresh engine with new layers, an empty history and new ids (F04).
+    - The engine reports each change worth saving (`setDocumentChangeCallback`: history steps and layer changes). `loadDocument` replaces the layers with saved ones, keeping their ids, and doesn't count as a change.
+    - Saves still write whole layers, 5 s after the last change; M1.2 and M1.3 make them incremental and bring the 2 s timing. Each save also writes the size, the active layer and a 400 px WebP thumbnail.
+    - Start-up: the Gallery when projects exist, with Continue for the last one opened; otherwise a new Untitled Project. Without usable storage, the app opens an unsaved canvas and says why.
+    - Gallery: thumbnails; inline rename (double-click or the ⋯ menu); duplicate; delete with an 8 s Undo toast (the data goes when the toast does, or at the next start if the tab closed first); stacks (Move to Stack, Remove from Stack, Rename, Unstack, and empty stacks go away); sorting by last modified, date created or name, remembered; Import… and drag and drop of .qart files and images, into the open stack. PSD files get "can't be opened yet" until M1.7. Renaming and stacking don't change a project's modified date.
+    - Toasts can carry an action button and their own duration, and report why they closed.
+    - New Project dialog (F95): sizes beyond the device's limit (8192 px on desktop, 4096 px on mobile, `utils/deviceLimits.ts`) are refused with the reason, and presets beyond it are hidden. DPI offers 72, 150, 300, 600 and Custom. The colour space is sRGB, with Display P3 listed as not available until M7.3. Every new project gets a database record.
+    - Ctrl+S and File › Save save at once and confirm it in a toast (from M1.5). File › Gallery saves first. Renaming in the title bar goes through the service.
+    - Database: schema version 3 adds a stacks store, and project records gain `colorSpace`, `stackId`, `activeLayerId` and `deletedAt`. Each update reads and writes in one transaction, so a rename during a save can't be lost. Concurrent first calls share one connection. From M1.2's connection handling: an upgrade waiting for an older tab asks to close it, and this version gives way to a newer one opened in another tab and asks for a reload.
+    - Thumbnails are stored as bytes with their MIME type (`StoredImage`), not as Blobs: Safari can't store a Blob in IndexedDB in a private window, and every save failed there (found by the WebKit end-to-end run, whose browser contexts are private).
+    - Every transaction runs through `inTransaction` (`db/transaction.ts`): a failed write is reported once, instead of also leaving the transaction's abort as an unhandled rejection (which showed a second "Something went wrong" toast), and work that fails part-way is rolled back. Deleting a project or a layer's tiles reads keys only, not tile data.
+    - Fixed after a review, before the commit:
+      - A save whose pixel readback fails (a large document out of memory) fails that save only. Before, it stopped every later save without a word.
+      - A save during a filter or transform preview stores the layer as it was before the preview, and keeps the last thumbnail: cancelling it no longer leaves the preview saved.
+      - When the canvas restarts, changes the old engine had since the last save went with it. The last save is loaded into the new engine before anything is saved from it. If the restarted canvas has another size (a Canvas Size not saved yet), the project opens again at its saved size, and if it can't be read, the Gallery shows with the project as saved. Before, either case could save an empty canvas over the project.
+      - Once the GPU context is lost, reading pixels throws, so saves fail and keep the last save instead of writing blank layers over it (F105, recovery in M2.2).
+      - Closing a project keeps saving until changes made during its last save are saved too.
+      - If a new project can't be created after the open one was saved and closed, the Gallery shows, with the reason.
+      - Without storage, New Project asks before replacing a canvas that has changes.
+      - Start-up leaves deletes that another tab can still undo until their Undo window ends. Undo after another tab made a delete final says so.
+      - A duplicate or import that fails part-way leaves no half-made project behind.
+    - Fixed on the way, the restore part of F103: restoring a layer (undo, redo, cancelling a filter, opening) went through a 2D canvas, and Firefox premultiplies `putImageData` rounding up, so faint colours got lighter with every undo, and would have with every reopen. `writePixels` (`engine/utils/readback.ts`) premultiplies on the CPU, rounding to nearest, and uploads the buffer directly. A read and write round trip now leaves every colour as it was; a unit test checks every colour and alpha, and the Firefox undo test is no longer an expected failure. Flood fill, transforms, CPU blending, image import and PNG export still pass through a 2D canvas (M1.8, M2.2).
+    - Tests: unit tests for the service, sessions, autosave, database, transactions, Gallery components and dialog. `e2e/projects.spec.ts` covers saving and reopening across Gallery trips and reloads, New Project, renaming, duplicating, deleting with Undo, stacks, sorting and import by drop, on Chromium, Firefox and WebKit. `e2e/gpu/documents.spec.ts` checks that a reopened document matches pixel for pixel on WebGL and WebGPU. The dev server Playwright starts rebuilds Vite's dependency cache first (`--force`): when app code first imports an installed package, Vite otherwise bundles it mid-run and reloads every open page.
 - [ ] **M1.2 Tile store** · L · fixes F12, F82 (storage part)
   - A storage API that doesn't depend on the engine: `TileStore.put`, `get`, `list`, `deleteLayer` and `commit(manifest)`.
   - The OPFS backend runs in a persistence worker, commits atomically as described in D7, and falls back to IndexedDB.
@@ -377,10 +402,11 @@ flowchart LR
 - [ ] **M2.1 Document model** · M · fixes F98
   - Model the layer tree (raster, group and text layers, plus later types), layer properties, tile maps, a tiled selection mask and document settings.
   - Plain TypeScript with no GPU references, fully unit-tested.
-- [ ] **M2.2 Tile pool, residency and readback** · XL · fixes F07, F51, F97, F82, F103
+- [ ] **M2.2 Tile pool, residency and readback** · XL · fixes F07, F51, F97, F82, F103, F105
   - Implement D2 and D3, with memory budgets per device class.
   - One utility converts between premultiplied and straight alpha.
   - No document-sized 2D canvases anywhere, because of iOS Safari's 16.7-megapixel limit. Uploading straight from buffers also ends F103.
+  - Survive a lost GPU context: upload every layer again from the tiles kept outside the GPU, so the canvas comes back as it was (F105).
 - [ ] **M2.3 Tiled write path** · L
   - `LayerSurface.beginWrite(region)` copies any affected tiles that history still uses, renders with per-tile offsets, and reports changed tiles to the compositor, history and autosave.
 - [ ] **M2.4 Shader compositor** · XL · fixes F15–F20, F27
@@ -887,7 +913,7 @@ These are the defaults I'll use unless you choose otherwise. Nothing here blocks
 | Q8 | PRD conflict: dual brush and CMYK are v1.0 in PRD section 4 but v2.0 in the roadmap | Follow the roadmap: both are v2.0 and out of scope | M7 |
 | Q9 | Oldest supported browsers | The current and previous major versions of Chrome, Edge, Firefox and Safari; iPadOS 17 and later | M0 |
 | Q10 | Analytics for the PRD's usage metrics (monthly active users and similar) | No analytics in the app for now, since it's a privacy-first local app. Revisit at public beta | M6 |
-| Q11 | How work lands | **Decided 2026-11-16:** commits go straight to `main`, one per work package, after `npm run verify` passes. No GitHub CI. Nothing is pushed without your OK | M0 |
+| Q11 | How work lands | **Decided 2026-11-16:** commits go straight to `main`, one per work package, after `npm run verify` and the end-to-end tests pass. No GitHub CI. Each package is then pushed and deployed to the live site | M0 |
 
 ---
 
@@ -999,8 +1025,9 @@ All findings from the 2026-11-16 code review. Paths are relative to `src/`. Seve
 | F100 | M | Alpha lock makes semi-transparent pixels opaque: each batch of masked stamps is drawn source-over onto the layer, so alpha builds up as the stroke passes (found by the M0.3 harness) | `engine/brush/BrushEngine.ts:251-285` | M3.4 |
 | F101 | L | Strokes end up to one stamp spacing before the pen-up point, because stamps are only placed at spacing steps and no final stamp is added (found by the M0.3 harness) | `engine/brush/PathInterpolator.ts:66-75` | M3.3 |
 | F102 | M | With no usable WebGL, PixiJS 8 falls back to its Canvas 2D renderer, which the engine doesn't support, and the app reports it as WebGL 2 (found in M0.4) | `engine/renderer.ts` | M0.4 |
-| F103 | L | On Firefox, semi-transparent colours shift each time pixels pass through a 2D canvas, because Firefox rounds premultiplied colour up when it stores them. Undo, redo, flood fill, filters, transforms, CPU blending and image import upload through a 2D canvas, and PNG export encodes from one. Measured: +2 levels per undo at 50% alpha, +4 in an exported PNG at 25% alpha (found in M0.5) | `engine/canvas/CanvasManager.ts` (`restoreLayerSnapshot`), `io/formats/image/ImageExporter.ts:25-27` | M1.8, M2.2 |
+| F103 | L | On Firefox, semi-transparent colours shift each time pixels pass through a 2D canvas, because Firefox rounds premultiplied colour up when it stores them. Flood fill, transforms, CPU blending and image import upload through a 2D canvas, and PNG export encodes from one. Measured: +2 levels per undo at 50% alpha, +4 in an exported PNG at 25% alpha (found in M0.5). Undo, redo, opening a project and filter restores upload straight from buffers since M1.1 | `io/formats/image/ImageExporter.ts:25-27`, the 2D canvas uploads in `engine/canvas/CanvasManager.ts` and `engine/layers/LayerCompositor.ts` | M1.8, M2.2 |
 | F104 | M | Soft Light is wrong on WebGPU: PixiJS 8's WGSL passes the two halves of the formula to `select` in the wrong order, so every channel takes the other branch (found in M0.5) | PixiJS `advanced-blend-modes/SoftLightBlend`; worked around in `engine/layers/blendModes.ts` | M0.5 |
+| F105 | M | A lost GPU context (on an iPad when switching apps, or after a driver reset) takes every layer's pixels with it, and nothing brings them back. Since M1.1 a save refuses to read a lost context, so the last save is kept, but changes since then are lost and the page has to be reloaded (found in M1.1) | `engine/canvas/CanvasManager.ts` (`watchForContextLoss`) | M2.2 |
 
 ## Appendix B — PRD traceability
 
@@ -1018,8 +1045,8 @@ All findings from the 2026-11-16 code review. Paths are relative to `src/`. Seve
 | 4.1 Stabilisation: StreamLine, rope, motion filtering | MVP (motion filtering v1.0) | StreamLine only | M3.3 |
 | 4.1 Properties: stamp preview, orient to screen, size and opacity limits, smudge | v1.0 | Missing | M3.5, M3.6 |
 | 4.1.3 .qbrush format and .abr import | v1.0 | Missing | M7.4 |
-| 4.2 Maximum canvas: 8192² on desktop, 4096² on mobile | MVP | Not enforced | M1.1, M2.7 |
-| 4.2 DPI presets and custom DPI | MVP | Set in the dialog, but not written to exports | M1.1, M1.8 |
+| 4.2 Maximum canvas: 8192² on desktop, 4096² on mobile | MVP | Enforced in New Project and Gallery import (M1.1); Canvas Size and the GPU's own limits not yet | M1.11, M2.7 |
+| 4.2 DPI presets and custom DPI | MVP | Presets and a custom value (M1.1), but not written to exports | M1.8 |
 | 4.2 Zoom and rotate gestures | MVP | Partial; leaves stray dabs | M3.2 |
 | 4.2 Undo and redo with 100+ steps, plus gestures | MVP | 50 full snapshots; no gestures | M2.5, M3.2 |
 | 4.2 Copy and paste | MVP | Missing | M4.2 |
@@ -1057,7 +1084,7 @@ All findings from the 2026-11-16 code review. Paths are relative to `src/`. Seve
 | 4.9 PSD export and import | MVP | Export is buggy and not wired in; no import | M1.7 |
 | 4.9 PNG, JPEG, TIFF | MVP | PNG and JPEG with a colour bug; no TIFF | M1.8 |
 | 4.9 PDF and SVG | v1.0 | Missing | M7.8 |
-| 4.9 Gallery: grid, stacks, thumbnails | MVP | Empty shell | M1.1 |
+| 4.9 Gallery: grid, stacks, thumbnails | MVP | Done (M1.1) | — |
 | 4.11 Pressure curve calibration with a test stroke area | MVP | Per-brush curves only | M3.8 |
 | 4.11 Pen, touch and mouse detection; switching between devices | MVP | Missing | M3.1 |
 | 4.11 Switch to eraser when the pen is flipped | MVP | Missing | M3.1 |

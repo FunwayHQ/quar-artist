@@ -23,9 +23,10 @@ interface UseKeyboardShortcutsOptions {
   onFlipVertical?: () => void
   onRotateCW?: () => void
   onRotateCCW?: () => void
+  onSave?: () => void
 }
 
-export function useKeyboardShortcuts({ manager, undo, redo, onOpenFilter, onToggleRecording, onQuickMenu, onClearLayer, onCommitTransform, onCancelTransform, onFlipHorizontal, onFlipVertical, onRotateCW, onRotateCCW }: UseKeyboardShortcutsOptions) {
+export function useKeyboardShortcuts({ manager, undo, redo, onOpenFilter, onToggleRecording, onQuickMenu, onClearLayer, onCommitTransform, onCancelTransform, onFlipHorizontal, onFlipVertical, onRotateCW, onRotateCCW, onSave }: UseKeyboardShortcutsOptions) {
   const shortcutMap = useMemo(() => buildShortcutMap(DEFAULT_SHORTCUTS), [])
 
   const dispatch = useCallback(
@@ -96,7 +97,7 @@ export function useKeyboardShortcuts({ manager, undo, redo, onOpenFilter, onTogg
           useUIStore.getState().setShowNewProjectDialog(true)
           break
         case 'save':
-          // Auto-save is already active; this is a manual trigger placeholder
+          onSave?.()
           break
         case 'new-layer':
           if (manager) {
@@ -143,7 +144,7 @@ export function useKeyboardShortcuts({ manager, undo, redo, onOpenFilter, onTogg
           break
       }
     },
-    [manager, undo, redo, onOpenFilter, onToggleRecording, onQuickMenu, onClearLayer, onCommitTransform, onCancelTransform, onFlipHorizontal, onFlipVertical, onRotateCW, onRotateCCW],
+    [manager, undo, redo, onOpenFilter, onToggleRecording, onQuickMenu, onClearLayer, onCommitTransform, onCancelTransform, onFlipHorizontal, onFlipVertical, onRotateCW, onRotateCCW, onSave],
   )
 
   useEffect(() => {

@@ -17,8 +17,9 @@ describe('projectStore', () => {
     })
   })
 
-  it('starts in gallery view', () => {
-    expect(useProjectStore.getState().view).toBe('gallery')
+  it('starts loading, until the project service decides where the app opens', () => {
+    expect(useProjectStore.getInitialState().view).toBe('loading')
+    expect(useProjectStore.getInitialState().sessionId).toBeNull()
   })
 
   it('starts with no current project', () => {
@@ -82,4 +83,50 @@ describe('projectStore', () => {
     expect(state.currentProjectId).toBeNull()
     expect(state.currentProjectName).toBe('Untitled Project')
   })
+
+  it('opens each document in a new session', () => {
+    const doc = { id: 'p1', name: 'Sketch', width: 640, height: 480, dpi: 300, colorSpace: 'srgb' as const }
+    useProjectStore.getState().setSaveStatus('error')
+    useProjectStore.getState().openDocument(doc)
+    const first = useProjectStore.getState().sessionId
+
+    expect(useProjectStore.getState()).toMatchObject({
+      view: 'canvas',
+      currentProjectId: 'p1',
+      currentProjectName: 'Sketch',
+      canvasWidth: 640,
+      canvasHeight: 480,
+      dpi: 300,
+      colorSpace: 'srgb',
+      saveStatus: 'idle',
+      lastSaved: null,
+    })
+    expect(first).toEqual(expect.any(String))
+
+    // The same project opened again still gets a new session, so its canvas starts afresh.
+    useProjectStore.getState().openDocument(doc)
+    expect(useProjectStore.getState().sessionId).not.toBe(first)
+  })
+
+  it('opens an unsaved document without a project id', () => {
+    useProjectStore.getState().openDocument({ id: null, name: 'Untitled Project', width: 1920, height: 1080, dpi: 72, colorSpace: 'srgb' })
+    expect(useProjectStore.getState()).toMatchObject({ view: 'canvas', currentProjectId: null })
+    expect(useProjectStore.getState().sessionId).not.toBeNull()
+  })
+
+  it('ends the session when the project closes', () => {
+    useProjectStore.getState().openDocument({ id: 'p1', name: 'Sketch', width: 640, height: 480, dpi: 72, colorSpace: 'srgb' })
+    useProjectStore.getState().clearCurrentProject()
+    expect(useProjectStore.getState().sessionId).toBeNull()
+  })
+
+  it('keeps the Gallery\'s sort, open stack and last project', () => {
+    useProjectStore.getState().setGallerySort('name')
+    useProjectStore.getState().setOpenStack('s1')
+    useProjectStore.getState().setLastProjectId('p1')
+    useProjectStore.getState().setStacks([{ id: 's1', name: 'Studies', createdAt: new Date(), updatedAt: new Date() }])
+    expect(useProjectStore.getState()).toMatchObject({ gallerySort: 'name', openStackId: 's1', lastProjectId: 'p1' })
+    expect(useProjectStore.getState().stacks).toHaveLength(1)
+  })
 })
+

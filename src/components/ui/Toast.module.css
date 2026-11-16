@@ -34,6 +34,23 @@
   flex: 1;
 }
 
+.action {
+  background: none;
+  border: 1px solid var(--color-accent-primary);
+  border-radius: var(--radius-sm);
+  color: var(--color-accent-primary);
+  cursor: pointer;
+  font-family: var(--font-family-ui);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  padding: 2px var(--space-sm);
+}
+
+.action:hover {
+  background: var(--color-accent-primary);
+  color: var(--color-bg-primary);
+}
+
 .dismiss {
   background: none;
   border: none;
