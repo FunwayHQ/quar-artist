@@ -74,6 +74,7 @@ vi.stubGlobal('ResizeObserver', MockResizeObserver)
 
 // Import AFTER mocks are set up
 import { CanvasManager } from './CanvasManager.ts'
+import { createRenderer } from '../renderer.ts'
 
 describe('CanvasManager', () => {
   let cm: CanvasManager
@@ -274,10 +275,13 @@ describe('CanvasManager', () => {
       expect(cm.getPixiApp()).toBeNull()
     })
 
-    it('survives being called before init completes (StrictMode)', async () => {
+    it('destroys the renderer that finishes starting after destroy() (StrictMode, F60)', async () => {
       const initPromise = cm.init(container)
       cm.destroy()
       await initPromise
+      const app = await vi.mocked(createRenderer).mock.results[0].value
+      expect(app.destroy).toHaveBeenCalledWith(true)
+      expect(cm.getPixiApp()).toBeNull()
     })
 
     it('is safe to call without init', () => {

@@ -128,10 +128,16 @@ export class CanvasManager {
     this.overlayCtx = this.overlayCanvas.getContext('2d', { desynchronized: true })
 
     // Initialize PixiJS renderer (async — check for destroy after await)
-    this.app = await createRenderer(this.staticCanvas, renderer)
+    const app = await createRenderer(this.staticCanvas, renderer)
 
-    // Guard: if destroy() was called while we were awaiting, bail out
-    if (this.destroyed) return
+    // destroy() ran while the renderer was starting (React StrictMode, or the
+    // view changed). Release the renderer we just created instead of leaking
+    // its GPU context.
+    if (this.destroyed) {
+      app.destroy(true)
+      return
+    }
+    this.app = app
 
     // Attach input to overlay (captures all pointer events)
     this.inputManager.attach(this.overlayCanvas)

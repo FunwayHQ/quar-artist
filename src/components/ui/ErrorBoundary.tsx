@@ -3,6 +3,8 @@ import { Component, type ReactNode, type ErrorInfo } from 'react'
 interface ErrorBoundaryProps {
   children: ReactNode
   fallback?: ReactNode
+  /** Cover the whole window (for the boundary around the entire app). */
+  fullScreen?: boolean
 }
 
 interface ErrorBoundaryState {
@@ -34,7 +36,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
       if (this.props.fallback) return this.props.fallback
 
       return (
-        <div style={{
+        <div role="alert" style={{
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
@@ -43,6 +45,12 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           gap: '1rem',
           color: '#e5e5e5',
           fontFamily: 'DM Sans, sans-serif',
+          ...(this.props.fullScreen && {
+            position: 'fixed',
+            inset: 0,
+            zIndex: 'var(--z-loading)',
+            background: 'var(--color-bg-primary)',
+          }),
         }}>
           <h2 style={{ margin: 0, color: '#F59E0B' }}>Something went wrong</h2>
           <p style={{ margin: 0, opacity: 0.7, fontSize: '0.875rem' }}>

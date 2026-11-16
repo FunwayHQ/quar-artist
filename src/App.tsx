@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useCallback, lazy, Suspense } from 'react'
+import { useState, useEffect, useCallback, lazy, Suspense } from 'react'
 import { TitleBar } from '@components/shell/TitleBar.tsx'
 import { BrushControls } from '@components/shell/BrushControls.tsx'
 import { CanvasViewport } from '@components/shell/CanvasViewport.tsx'
@@ -10,6 +10,7 @@ import { FullscreenHud } from '@components/shell/FullscreenHud.tsx'
 import { ToastContainer } from '@components/ui/ToastContainer.tsx'
 import { ContextMenu, type ContextMenuItem } from '@components/ui/ContextMenu.tsx'
 import { LoadingOverlay } from '@components/ui/LoadingOverlay.tsx'
+import { EngineErrorScreen } from '@components/ui/EngineErrorScreen.tsx'
 import { QuickMenu } from '@components/shell/QuickMenu.tsx'
 import { TextInputOverlay } from '@components/shell/TextInputOverlay.tsx'
 import { CookieConsentBanner } from '@components/shell/CookieConsentBanner.tsx'
@@ -28,6 +29,7 @@ const QuickMenuSettingsDialog = lazy(() => import('@components/dialogs/QuickMenu
 import { useEngine } from '@hooks/useEngine.ts'
 import { getBackend } from '@engine/renderer.ts'
 import { useKeyboardShortcuts } from '@hooks/useKeyboardShortcuts.ts'
+import { useGlobalErrorToasts } from '@hooks/useGlobalErrorToasts.ts'
 import { useBrushStore } from '@stores/brushStore.ts'
 import { useColorStore } from '@stores/colorStore.ts'
 import { useToolStore } from '@stores/toolStore.ts'
@@ -51,13 +53,13 @@ import type { QuickMenuSlot } from '@app-types/quickmenu.ts'
 import styles from './App.module.css'
 
 export default function App() {
-  const containerRef = useRef<HTMLDivElement>(null)
   const {
-    manager, ready, undo, redo,
+    containerRef, container, manager, ready, error: engineError, undo, redo,
     commitTransform, cancelTransform,
     flipLayerHorizontal, flipLayerVertical,
     rotateLayer90CW, rotateLayer90CCW,
-  } = useEngine(containerRef)
+  } = useEngine()
+  useGlobalErrorToasts()
   const rightPanelTab = useUIStore((s) => s.rightPanelTab)
   const showExportDialog = useUIStore((s) => s.showExportDialog)
   const showNewProjectDialog = useUIStore((s) => s.showNewProjectDialog)
@@ -330,9 +332,7 @@ export default function App() {
 
   // ── Image import: drag-and-drop ──
   useEffect(() => {
-    if (!manager) return
-    const container = containerRef.current
-    if (!container) return
+    if (!manager || !container) return
 
     const handleDragOver = (e: DragEvent) => {
       if (e.dataTransfer?.types.includes('Files')) {
@@ -361,7 +361,7 @@ export default function App() {
       container.removeEventListener('dragover', handleDragOver)
       container.removeEventListener('drop', handleDrop)
     }
-  }, [manager])
+  }, [manager, container])
 
   // ── Image import: file picker (File > Import Image) ──
   const handleImportImage = useCallback(async () => {
@@ -602,7 +602,7 @@ export default function App() {
   // Canvas view
   return (
     <>
-    {!ready && <LoadingOverlay />}
+    {engineError ? <EngineErrorScreen error={engineError} /> : !ready && <LoadingOverlay />}
     <div
       className={styles.app}
       data-fullscreen={fullscreen || undefined}

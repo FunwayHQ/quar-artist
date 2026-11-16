@@ -1,4 +1,4 @@
-import { Application } from 'pixi.js'
+import { Application, RendererType, type ApplicationOptions, type WebGLRenderer } from 'pixi.js'
 import type { RenderBackend } from '../types/engine.ts'
 
 let backend: RenderBackend | null = null
@@ -11,6 +11,10 @@ export interface RendererOptions {
 /**
  * Initialize the PixiJS Application with WebGPU primary / WebGL 2.0 fallback.
  * Returns the Application instance.
+ *
+ * Rejects when the browser offers neither WebGPU nor WebGL 2. PixiJS would
+ * otherwise fall back to its Canvas 2D renderer (or to WebGL 1), which the
+ * engine doesn't support.
  *
  * Must be called once. The canvas is attached to the DOM by the caller.
  */
@@ -36,50 +40,50 @@ export async function createRenderer(canvas: HTMLCanvasElement, options: Rendere
     } catch { /* let PixiJS create its own context */ }
   }
 
-  try {
-    await app.init({
-      canvas,
-      backgroundAlpha: 0,
-      antialias: false,
-      autoDensity: true,
-      resolution: window.devicePixelRatio || 1,
-      preference: tryWebGPU ? 'webgpu' : 'webgl',
-      width: canvas.clientWidth,
-      height: canvas.clientHeight,
-    })
-
-    // Detect which backend PixiJS actually chose
-    const rendererType = app.renderer.type
-    // PixiJS v8: renderer.type is a number enum — 0x01 = WebGL, 0x02 = WebGPU
-    if (rendererType === 0x02) {
-      backend = 'webgpu'
-      console.log('%c[QUAR] WebGPU initialized', 'color: #f59e0b; font-weight: bold')
-    } else {
-      backend = 'webgl2'
-      console.log('%c[QUAR] WebGL 2.0 fallback', 'color: #fbbf24; font-weight: bold')
-    }
-  } catch (err) {
-    // If WebGPU fails, force WebGL
-    if (tryWebGPU) {
-      console.warn('[QUAR] WebGPU init failed, falling back to WebGL 2.0:', err)
-      await app.init({
-        canvas,
-        backgroundAlpha: 0,
-        antialias: false,
-        autoDensity: true,
-        resolution: window.devicePixelRatio || 1,
-        preference: 'webgl',
-        width: canvas.clientWidth,
-        height: canvas.clientHeight,
-      })
-      backend = 'webgl2'
-      console.log('%c[QUAR] WebGL 2.0 fallback (after WebGPU failure)', 'color: #fbbf24')
-    } else {
-      throw err
-    }
+  const initOptions: Partial<ApplicationOptions> = {
+    canvas,
+    backgroundAlpha: 0,
+    antialias: false,
+    autoDensity: true,
+    resolution: window.devicePixelRatio || 1,
+    width: canvas.clientWidth,
+    height: canvas.clientHeight,
   }
 
+  try {
+    await app.init({ ...initOptions, preference: tryWebGPU ? 'webgpu' : 'webgl' })
+  } catch (err) {
+    // If WebGPU fails, force WebGL
+    if (!tryWebGPU) throw err
+    console.warn('[QUAR] WebGPU init failed, falling back to WebGL 2.0:', err)
+    await app.init({ ...initOptions, preference: 'webgl' })
+  }
+
+  try {
+    backend = detectBackend(app)
+  } catch (err) {
+    backend = null
+    app.destroy()
+    throw err
+  }
+
+  if (backend === 'webgpu') {
+    console.log('%c[QUAR] WebGPU initialized', 'color: #f59e0b; font-weight: bold')
+  } else {
+    console.log('%c[QUAR] WebGL 2.0 fallback', 'color: #fbbf24; font-weight: bold')
+  }
   return app
+}
+
+/** The backend PixiJS chose, or an error if the engine can't run on it. */
+function detectBackend(app: Application): RenderBackend {
+  const { renderer } = app
+  if (renderer.type === RendererType.WEBGPU) return 'webgpu'
+  if (renderer.type === RendererType.WEBGL) {
+    if ((renderer as WebGLRenderer).context.webGLVersion === 2) return 'webgl2'
+    throw new Error('This browser only offers WebGL 1. QUAR Artist needs WebGPU or WebGL 2.')
+  }
+  throw new Error('This browser offers neither WebGPU nor WebGL. QUAR Artist needs WebGPU or WebGL 2.')
 }
 
 export function getBackend(): RenderBackend | null {

@@ -200,7 +200,7 @@ flowchart LR
     - The canvas container exposes the backend as `data-renderer`, so app tests can declare backend-specific bugs.
     - New findings: F100 (alpha lock makes semi-transparent pixels opaque) and F101 (strokes end before the pen-up point). F60 now has a reproducible test (`e2e/lifecycle.spec.ts`). Until M0.4 fixes it, it also breaks about half of the app tests on Chromium, where WebGPU starts slowly enough for the discarded engine to report ready first.
     - `npm run verify` also type-checks `e2e/` and `playwright.config.ts` (`tsconfig.e2e.json`).
-- [ ] **M0.4 Engine lifecycle and error handling** · M · fixes F02, F60, F61
+- [x] **M0.4 Engine lifecycle and error handling** · M · fixes F02, F60, F61, F102
   - `useEngine` attaches through a callback ref, so a newly mounted canvas container gets the engine again.
   - Asynchronous initialisation can be cancelled.
   - If `CanvasManager.init` is cancelled midway, it destroys the PixiJS application it created.
@@ -208,6 +208,14 @@ flowchart LR
   - Add a root error boundary that tries to save and then offers a reload.
   - If the engine can't start, show a screen explaining the WebGPU or WebGL 2 requirement.
   - Show a toast for unhandled promise rejections.
+  - **Done 2026-11-16.** Notes:
+    - `useEngine()` returns a callback ref. Each mounted canvas container gets its own engine, which is destroyed with the container. An engine replaced before it finished starting never reports ready, and its errors are ignored.
+    - Under StrictMode the callback ref means only one engine starts. The e2e test for F60 (`e2e/lifecycle.spec.ts`) now passes, and the Chromium smoke tests no longer lose input.
+    - Gallery › New Project › canvas now gives a working canvas. Leaving the canvas view discards the open document until M1.1 saves it first; before, the document stayed in memory behind a dead canvas.
+    - `CanvasManager.init` destroys the PixiJS application it created when `destroy()` ran during start-up.
+    - Testing the failure screen found F102: with no usable WebGL, PixiJS 8 quietly falls back to its Canvas 2D renderer, and the app reported that as WebGL 2. `createRenderer` now rejects Canvas 2D and WebGL 1, so those browsers get the failure screen.
+    - The root error boundary offers Retry and Reload. Saving first needs persistence, so that step moves to M1.3.
+    - Unhandled promise rejections and exceptions thrown outside React show an error toast. A message that repeats within 5 s is shown once.
 - [ ] **M0.5 Stopgap fixes** · S · fixes F15 (partly), F49, F56, F07 (readback part)
   - Add `import 'pixi.js/advanced-blend-modes'`. This fixes 12 of the 13 modes that currently render as Normal. Hue stays Normal until M2.4 and is labelled that way in the blend menu.
   - Only the primary button or pen contact paints; right-click and middle-click never do.
@@ -268,6 +276,7 @@ flowchart LR
   - The title bar shows Saved, Saving… or Error with a Retry button.
   - A full-storage error explains what to do: free space or export a backup.
   - Flush the save when the page is hidden (`visibilitychange`, `pagehide`), when a project closes, and when going to the Gallery.
+  - The root error boundary (M0.4) flushes the pending save before it offers Retry and Reload.
   - A `beforeunload` prompt appears only when there are unsaved changes.
   - Storage safety:
     - request persistent storage (`navigator.storage.persist()`) on the first save;
@@ -970,6 +979,7 @@ All findings from the 2026-11-16 code review. Paths are relative to `src/`. Seve
 | F99 | M | Panels don't auto-hide (PRD and design system); `useAutoHide` is never used | `hooks/useAutoHide.ts` | M5.1 |
 | F100 | M | Alpha lock makes semi-transparent pixels opaque: each batch of masked stamps is drawn source-over onto the layer, so alpha builds up as the stroke passes (found by the M0.3 harness) | `engine/brush/BrushEngine.ts:251-285` | M3.4 |
 | F101 | L | Strokes end up to one stamp spacing before the pen-up point, because stamps are only placed at spacing steps and no final stamp is added (found by the M0.3 harness) | `engine/brush/PathInterpolator.ts:66-75` | M3.3 |
+| F102 | M | With no usable WebGL, PixiJS 8 falls back to its Canvas 2D renderer, which the engine doesn't support, and the app reports it as WebGL 2 (found in M0.4) | `engine/renderer.ts` | M0.4 |
 
 ## Appendix B — PRD traceability
 

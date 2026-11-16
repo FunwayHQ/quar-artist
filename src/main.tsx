@@ -9,9 +9,12 @@ import '@fontsource/ibm-plex-mono/500.css'
 
 import './styles/global.css'
 import App from './App.tsx'
+import { ErrorBoundary } from './components/ui/ErrorBoundary.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary fullScreen>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 )

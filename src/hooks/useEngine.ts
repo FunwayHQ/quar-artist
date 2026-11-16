@@ -4,46 +4,56 @@ import { useLayerStore } from '@stores/layerStore.ts'
 import { useProjectStore } from '@stores/projectStore.ts'
 
 /**
- * React hook that initializes the CanvasManager (PixiJS + overlay + input + brush engine + layers)
- * on mount and tears it down on unmount.
+ * Runs a CanvasManager (PixiJS + overlay + input + brush engine + layers) on
+ * the canvas container.
+ *
+ * Pass `containerRef` as the container's `ref`. Every newly mounted container
+ * gets its own engine, and the engine is destroyed when its container goes
+ * away, so leaving the canvas view and coming back works. An engine replaced
+ * before it finished starting (React StrictMode, a quick view change) never
+ * reports ready, and its errors are ignored.
  */
-export function useEngine(containerRef: React.RefObject<HTMLElement | null>) {
+export function useEngine() {
+  const [container, setContainer] = useState<HTMLElement | null>(null)
   const managerRef = useRef<CanvasManager | null>(null)
   const [manager, setManager] = useState<CanvasManager | null>(null)
-  const [ready, setReady] = useState(false)
+  const [error, setError] = useState<Error | null>(null)
 
   useEffect(() => {
-    const container = containerRef.current
     if (!container) return
-
+    let cancelled = false
     const mgr = new CanvasManager()
     managerRef.current = mgr
 
     // Wire layer changes to the React store
     mgr.setLayerChangeCallback((layers, activeId) => {
-      useLayerStore.getState().syncFromEngine(layers, activeId)
+      if (!cancelled) useLayerStore.getState().syncFromEngine(layers, activeId)
     })
 
     // Pass document dimensions so textures are created at the correct size
     const { canvasWidth, canvasHeight } = useProjectStore.getState()
 
-    mgr
-      .init(container, canvasWidth, canvasHeight)
-      .then(() => {
-        setManager(mgr)
-        setReady(true)
-      })
-      .catch((err) => {
+    mgr.init(container, canvasWidth, canvasHeight).then(
+      () => {
+        if (!cancelled) setManager(mgr)
+      },
+      (err: unknown) => {
+        if (cancelled) return
         console.error('[QUAR] Engine init failed:', err)
-      })
+        setError(err instanceof Error ? err : new Error(String(err)))
+      },
+    )
 
     return () => {
+      cancelled = true
       mgr.destroy()
-      managerRef.current = null
+      if (managerRef.current === mgr) managerRef.current = null
       setManager(null)
-      setReady(false)
+      setError(null)
     }
-  }, [containerRef])
+  }, [container])
+
+  const containerRef: (element: HTMLElement | null) => void = setContainer
 
   const undo = useCallback(() => {
     managerRef.current?.performUndo()
@@ -78,8 +88,15 @@ export function useEngine(containerRef: React.RefObject<HTMLElement | null>) {
   }, [])
 
   return {
+    /** Callback ref for the element the engine renders into. */
+    containerRef,
+    /** The mounted container, or null outside the canvas view. */
+    container,
+    /** The running engine, once it has finished starting. */
     manager,
-    ready,
+    ready: manager !== null,
+    /** Why the engine failed to start, if it did. */
+    error,
     undo,
     redo,
     commitTransform,
