@@ -24,7 +24,6 @@ export class SelectionController {
   private activeSubTool: SelectionToolType = 'rectangle'
   private selectionMode: SelectionMode = 'replace'
   private isConstrained = false
-  private overlayCtx: CanvasRenderingContext2D | null = null
   private boundarySegments: { x1: number; y1: number; x2: number; y2: number }[] = []
 
   /** Callback to notify external state (e.g., Zustand store) of selection changes. */
@@ -41,11 +40,6 @@ export class SelectionController {
   /** Resize the selection mask (clears selection). */
   resize(width: number, height: number) {
     this.manager.resize(width, height)
-  }
-
-  /** Set the overlay canvas context for marching ants rendering. */
-  setOverlayCtx(ctx: CanvasRenderingContext2D) {
-    this.overlayCtx = ctx
   }
 
   /** Set external callback for selection state changes. */

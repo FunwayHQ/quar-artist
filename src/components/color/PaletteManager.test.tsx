@@ -25,7 +25,6 @@ describe('PaletteManager', () => {
   const defaultProps = {
     palettes: testPalettes,
     activePaletteId: 'test-1',
-    currentColor: { h: 0, s: 1, b: 1 },
     onSetActivePalette: vi.fn(),
     onAddSwatch: vi.fn(),
     onRemoveSwatch: vi.fn(),

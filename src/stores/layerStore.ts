@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { LayerInfo, BlendMode } from '../types/layer.ts'
+import type { LayerInfo } from '../types/layer.ts'
 
 interface LayerStore {
   layers: LayerInfo[]

@@ -7,7 +7,6 @@ import styles from './PaletteManager.module.css'
 interface PaletteManagerProps {
   palettes: ColorPalette[]
   activePaletteId: string
-  currentColor: HSBColor
   onSetActivePalette: (id: string) => void
   onAddSwatch: (paletteId: string) => void
   onRemoveSwatch: (paletteId: string, index: number) => void
@@ -23,7 +22,6 @@ interface PaletteManagerProps {
 export function PaletteManager({
   palettes,
   activePaletteId,
-  currentColor,
   onSetActivePalette,
   onAddSwatch,
   onRemoveSwatch,

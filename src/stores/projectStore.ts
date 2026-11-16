@@ -60,6 +60,8 @@ export const useProjectStore = create<ProjectStore>((set) => ({
       lastSaved: status === 'saved' ? new Date() : s.lastSaved,
     })),
 
+  setLastSaved: (date) => set({ lastSaved: date }),
+
   setCanvasSize: (width, height) => set({ canvasWidth: width, canvasHeight: height }),
 
   clearCurrentProject: () =>

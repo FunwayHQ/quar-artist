@@ -11,7 +11,7 @@ import {
   SortableContext,
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable'
-import { Plus, Merge, Lock, Scissors, Trash2 } from 'lucide-react'
+import { Plus, Merge, Trash2 } from 'lucide-react'
 import { useLayerStore } from '@stores/layerStore.ts'
 import { LayerRow } from './LayerRow.tsx'
 import { Tooltip } from '@components/ui/Tooltip.tsx'

@@ -1,3 +1,5 @@
+import { asClampedBytes } from '../../utils/typedArrays.ts'
+
 export type TimelapseState = 'idle' | 'recording'
 
 export type TimelapseResolution = '1080p' | '2k' | '4k'
@@ -105,7 +107,7 @@ export class TimelapseRecorder {
     const targetH = this.offscreenCanvas.height
 
     // Create ImageData from the source pixels
-    const imageData = new ImageData(pixels, width, height)
+    const imageData = new ImageData(asClampedBytes(pixels), width, height)
 
     // Reuse temp canvas for scaling, resize if needed
     if (!this.srcCanvas || !this.srcCtx || this.srcCanvas.width !== width || this.srcCanvas.height !== height) {
@@ -123,7 +125,7 @@ export class TimelapseRecorder {
     // Request a frame from the stream
     const track = this.stream?.getVideoTracks()[0]
     if (track && 'requestFrame' in track) {
-      ;(track as any).requestFrame()
+      ;(track as CanvasCaptureMediaStreamTrack).requestFrame()
     }
 
     this.frameCount++

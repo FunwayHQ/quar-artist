@@ -1,6 +1,6 @@
 import type { TextProperties } from '../../types/text.ts'
 import { WEB_SAFE_FONTS } from '../../types/text.ts'
-import { isGoogleFontsConsented, GOOGLE_FONTS_POPULAR, loadGoogleFont } from '../../utils/googleFonts.ts'
+import { isGoogleFontsConsented, isGoogleFont, GOOGLE_FONTS_POPULAR, loadGoogleFont } from '../../utils/googleFonts.ts'
 
 export interface RasterizedText {
   pixels: Uint8ClampedArray
@@ -93,7 +93,7 @@ export class TextTool {
    * Call this before rasterize() when using a Google Font.
    */
   async ensureFontLoaded(family: string): Promise<void> {
-    if (isGoogleFontsConsented() && GOOGLE_FONTS_POPULAR.includes(family as any)) {
+    if (isGoogleFontsConsented() && isGoogleFont(family)) {
       await loadGoogleFont(family)
     }
   }

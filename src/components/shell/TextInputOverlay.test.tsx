@@ -101,7 +101,7 @@ describe('TextInputOverlay', () => {
     const event = new KeyboardEvent('keydown', { key: 'a', bubbles: true })
     const stopSpy = vi.spyOn(event, 'stopPropagation')
     textarea.dispatchEvent(event)
-    // React synthetic events handle this - just verify the handler was set
-    expect(textarea).toBeTruthy()
+    // React's synthetic stopPropagation() forwards to the native event
+    expect(stopSpy).toHaveBeenCalled()
   })
 })

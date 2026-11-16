@@ -1,7 +1,5 @@
 import { useQuickMenuStore } from '@stores/quickMenuStore.ts'
-import { DEFAULT_QUICK_MENU_SLOTS } from '@app-types/quickmenu.ts'
 import type { QuickMenuSlot, QuickMenuActionType } from '@app-types/quickmenu.ts'
-import type { ToolType } from '@app-types/engine.ts'
 import styles from './QuickMenuSettingsDialog.module.css'
 
 interface QuickMenuSettingsDialogProps {
@@ -50,9 +48,7 @@ export function QuickMenuSettingsDialog({ open, onClose }: QuickMenuSettingsDial
   }
 
   return (
-    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
     <div className={styles.overlay} onKeyDown={(e) => e.stopPropagation()} onClick={onClose}>
-      {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
       <div className={styles.dialog} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Quick Menu Settings">
         <h2 className={styles.title}>Quick Menu Settings</h2>
 

@@ -123,7 +123,6 @@ export function ColorPanel() {
           <PaletteManager
             palettes={palettes}
             activePaletteId={activePaletteId}
-            currentColor={primary}
             onSetActivePalette={setActivePalette}
             onAddSwatch={handleAddSwatch}
             onRemoveSwatch={removeSwatch}

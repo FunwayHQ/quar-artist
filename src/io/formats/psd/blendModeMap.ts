@@ -1,10 +1,11 @@
+import type { BlendMode as PsdBlendMode } from 'ag-psd'
 import type { BlendMode } from '../../../types/layer.ts'
 
 /**
  * Maps QUAR Artist blend modes to PSD blend mode keys
  * used by the ag-psd library.
  */
-const QUAR_TO_PSD: Record<BlendMode, string> = {
+const QUAR_TO_PSD: Record<BlendMode, PsdBlendMode> = {
   normal: 'normal',
   // Darken
   darken: 'darken',
@@ -39,12 +40,12 @@ const QUAR_TO_PSD: Record<BlendMode, string> = {
   dissolve: 'dissolve',
 }
 
-const PSD_TO_QUAR: Record<string, BlendMode> = {}
+const PSD_TO_QUAR: Partial<Record<string, BlendMode>> = {}
 for (const [quar, psd] of Object.entries(QUAR_TO_PSD)) {
   PSD_TO_QUAR[psd] = quar as BlendMode
 }
 
-export function quarToPsdBlendMode(mode: BlendMode): string {
+export function quarToPsdBlendMode(mode: BlendMode): PsdBlendMode {
   return QUAR_TO_PSD[mode] ?? 'normal'
 }
 

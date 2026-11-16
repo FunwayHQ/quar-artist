@@ -52,7 +52,7 @@ describe('brushPresets', () => {
     })
 
     it('validates required fields', () => {
-      const invalid = { version: 1, preset: { name: 'Incomplete' } }
+      const invalid: { version: number; preset: Partial<BrushPreset> } = { version: 1, preset: { name: 'Incomplete' } }
       expect(invalid.preset.id).toBeUndefined()
     })
   })

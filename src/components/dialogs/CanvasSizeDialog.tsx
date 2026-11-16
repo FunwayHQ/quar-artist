@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { CANVAS_PRESETS } from '@app-types/project.ts'
 import styles from './NewProjectDialog.module.css'
 
@@ -10,22 +10,18 @@ interface CanvasSizeDialogProps {
   onResize: (width: number, height: number) => void
 }
 
-export function CanvasSizeDialog({ open, currentWidth, currentHeight, onClose, onResize }: CanvasSizeDialogProps) {
+export function CanvasSizeDialog(props: CanvasSizeDialogProps) {
+  if (!props.open) return null
+  // Keyed remount: the form starts from the current document size each time
+  // the dialog opens or that size changes.
+  return <CanvasSizeForm key={`${props.currentWidth}x${props.currentHeight}`} {...props} />
+}
+
+function CanvasSizeForm({ currentWidth, currentHeight, onClose, onResize }: CanvasSizeDialogProps) {
   const [width, setWidth] = useState(currentWidth)
   const [height, setHeight] = useState(currentHeight)
   const [linked, setLinked] = useState(false)
   const [aspect, setAspect] = useState(currentWidth / currentHeight)
-
-  // Sync when dialog opens with current project dimensions
-  useEffect(() => {
-    if (open) {
-      setWidth(currentWidth)
-      setHeight(currentHeight)
-      setAspect(currentWidth / currentHeight)
-    }
-  }, [open, currentWidth, currentHeight])
-
-  if (!open) return null
 
   const applyPreset = (preset: typeof CANVAS_PRESETS[number]) => {
     setWidth(preset.width)
@@ -53,7 +49,6 @@ export function CanvasSizeDialog({ open, currentWidth, currentHeight, onClose, o
 
   return (
     <div className={styles.overlay} onClick={onClose}>
-      {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
       <div className={styles.dialog} onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Canvas Size">
         <h2 className={styles.title}>Canvas Size</h2>
 

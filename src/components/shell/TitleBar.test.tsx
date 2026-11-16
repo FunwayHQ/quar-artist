@@ -27,7 +27,8 @@ describe('TitleBar', () => {
 
   it('shows project name', () => {
     render(<TitleBar />)
-    expect(screen.getByText('Untitled Project')).toBeInTheDocument()
+    // The name is an inline-editable input
+    expect(screen.getByDisplayValue('Untitled Project')).toBeInTheDocument()
   })
 
   it('applies glass class for frosted glass effect', () => {

@@ -5,6 +5,7 @@ import { createFilterPipeline } from './filterFactory.ts'
 import { cpuUnsharpMask } from '../shaders/filters/sharpenFilter.ts'
 import { cpuApplyCurves } from '../shaders/filters/curvesFilter.ts'
 import { get2dContext } from '../../utils/canvas2d.ts'
+import { asClampedBytes } from '../../utils/typedArrays.ts'
 
 /**
  * Non-destructive filter preview system.
@@ -266,7 +267,7 @@ export class FilterManager {
     canvas.height = h
     const ctx = get2dContext(canvas)
     const imageData = new ImageData(
-      new Uint8ClampedArray(data.buffer, data.byteOffset, expectedLen),
+      asClampedBytes(data, expectedLen),
       w,
       h,
     )

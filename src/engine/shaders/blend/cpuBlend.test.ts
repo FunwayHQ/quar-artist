@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest'
 import { cpuBlendPixel, cpuBlendLayers } from './cpuBlend.ts'
-import type { BlendMode } from '../../../types/layer.ts'
 
 describe('cpuBlend', () => {
   describe('cpuBlendPixel', () => {

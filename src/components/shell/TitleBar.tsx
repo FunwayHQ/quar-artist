@@ -24,8 +24,7 @@ interface TitleBarProps {
 type MenuName = 'file' | 'edit' | 'view' | 'adjustments' | 'selection' | 'help'
 
 export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, onStartRecording, onStopRecording, onDiscardRecording, manager }: TitleBarProps) {
-  const [openMenu, setOpenMenu] = useState<MenuName | null>(null)
-  const buttonRefs = useRef<Record<string, HTMLButtonElement | null>>({})
+  const [openMenu, setOpenMenu] = useState<{ name: MenuName; anchor: HTMLElement } | null>(null)
   const zoom = useUIStore((s) => s.zoom)
   const projectName = useProjectStore((s) => s.currentProjectName)
   const currentProjectId = useProjectStore((s) => s.currentProjectId)
@@ -60,8 +59,8 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, 
 
   const closeMenu = useCallback(() => setOpenMenu(null), [])
 
-  const toggleMenu = (name: MenuName) => {
-    setOpenMenu((prev) => (prev === name ? null : name))
+  const toggleMenu = (name: MenuName, anchor: HTMLElement) => {
+    setOpenMenu((prev) => (prev?.name === name ? null : { name, anchor }))
   }
 
   const getMenuItems = (name: MenuName): MenuItem[] => {
@@ -144,13 +143,12 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, 
         {menus.map(({ name, label }) => (
           <button
             key={name}
-            ref={(el) => { buttonRefs.current[name] = el }}
             className={styles.menuItem}
-            data-active={openMenu === name}
+            data-active={openMenu?.name === name}
             data-testid={`menu-${name}`}
-            onClick={() => toggleMenu(name)}
-            onMouseEnter={() => {
-              if (openMenu && openMenu !== name) setOpenMenu(name)
+            onClick={(e) => toggleMenu(name, e.currentTarget)}
+            onMouseEnter={(e) => {
+              if (openMenu && openMenu.name !== name) setOpenMenu({ name, anchor: e.currentTarget })
             }}
             type="button"
           >
@@ -200,9 +198,9 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, 
       </button>
       {openMenu && (
         <DropdownMenu
-          items={getMenuItems(openMenu)}
+          items={getMenuItems(openMenu.name)}
           onClose={closeMenu}
-          anchorEl={buttonRefs.current[openMenu] ?? null}
+          anchorEl={openMenu.anchor}
         />
       )}
     </header>

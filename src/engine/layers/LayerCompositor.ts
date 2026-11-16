@@ -1,9 +1,10 @@
-import { RenderTexture, Sprite, Container, Texture, type Application } from 'pixi.js'
+import { RenderTexture, Sprite, Container, Texture, type Application, type BLEND_MODES } from 'pixi.js'
 import type { Layer } from './LayerManager.ts'
 import type { BlendMode } from '../../types/layer.ts'
 import { CUSTOM_BLEND_MODES } from '../shaders/blend/blendFilters.ts'
 import { cpuBlendLayers } from '../shaders/blend/cpuBlend.ts'
 import { PerfMonitor } from '../perf/PerfMonitor.ts'
+import { asClampedBytes } from '../../utils/typedArrays.ts'
 
 /**
  * Composites all visible layers bottom-to-top onto the output RenderTexture.
@@ -18,7 +19,7 @@ import { PerfMonitor } from '../perf/PerfMonitor.ts'
  *  Custom shader modes (vividLight, linearLight, etc.) fall back to 'normal'
  *  here — the compositor detects them and uses the filter pipeline instead.
  */
-const PIXI_BLEND_MAP: Record<BlendMode, string> = {
+const PIXI_BLEND_MAP: Record<BlendMode, BLEND_MODES> = {
   normal: 'normal',
   // Darken group
   darken: 'darken',
@@ -43,7 +44,7 @@ const PIXI_BLEND_MAP: Record<BlendMode, string> = {
   subtract: 'normal',      // custom shader
   divide: 'normal',        // custom shader
   // Component group
-  hue: 'hue',
+  hue: 'normal',           // PixiJS has no hue mode; Normal until the shader compositor (plan M2.4)
   saturation: 'saturation',
   color: 'color',
   luminosity: 'luminosity',
@@ -70,7 +71,6 @@ export class LayerCompositor {
   private cachedBackground: RenderTexture | null = null
   private cacheActiveLayerId: string = ''
   private cacheDirty = true
-  private cachedLayers: readonly Layer[] = []
 
   /** Get a sprite from the pool (or create one). */
   private acquireSprite(texture: RenderTexture): Sprite {
@@ -134,8 +134,6 @@ export class LayerCompositor {
   composite(layers: readonly Layer[]) {
     if (!this.app || !this.outputTexture) return
     PerfMonitor.mark('composite-start')
-
-    this.cachedLayers = layers
 
     // Find the active layer index (the one being painted on)
     const activeIdx = this.findActiveLayerIndex(layers)
@@ -573,7 +571,7 @@ export class LayerCompositor {
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    const imageData = new ImageData(blended, w, h)
+    const imageData = new ImageData(asClampedBytes(blended), w, h)
     ctx.putImageData(imageData, 0, 0)
 
     // Render canvas texture onto target
@@ -611,7 +609,6 @@ export class LayerCompositor {
     }
     this.spritePool = []
     this.spritePoolIdx = 0
-    this.cachedLayers = []
     this.app = null
   }
 }

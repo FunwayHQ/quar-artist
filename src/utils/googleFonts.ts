@@ -66,6 +66,13 @@ export const GOOGLE_FONTS_POPULAR = [
   'Zilla Slab',
 ] as const
 
+const GOOGLE_FONT_SET: ReadonlySet<string> = new Set(GOOGLE_FONTS_POPULAR)
+
+/** Whether `family` is one of the bundled Google Fonts. */
+export function isGoogleFont(family: string): boolean {
+  return GOOGLE_FONT_SET.has(family)
+}
+
 /** Check if user has given consent to load Google Fonts. */
 export function isGoogleFontsConsented(): boolean {
   try {

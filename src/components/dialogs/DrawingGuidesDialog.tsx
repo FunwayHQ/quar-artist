@@ -77,9 +77,7 @@ export function DrawingGuidesDialog({ open, onClose }: DrawingGuidesDialogProps)
   if (!open) return null
 
   return (
-    // eslint-disable-next-line jsx-a11y/no-static-element-interactions
     <div className={styles.overlay} onClick={onClose} onKeyDown={(e) => e.stopPropagation()}>
-      {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions, jsx-a11y/click-events-have-key-events */}
       <div className={styles.dialog} role="dialog" aria-modal="true" aria-label="Drawing Guides" onClick={(e) => e.stopPropagation()}>
         {/* Header */}
         <div className={styles.header}>

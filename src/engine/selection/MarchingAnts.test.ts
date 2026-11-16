@@ -23,9 +23,7 @@ describe('MarchingAnts', () => {
   beforeEach(() => {
     ma = new MarchingAnts()
     // Mock requestAnimationFrame
-    vi.stubGlobal('requestAnimationFrame', vi.fn((cb: () => void) => {
-      return 1
-    }))
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
     vi.stubGlobal('cancelAnimationFrame', vi.fn())
   })
 

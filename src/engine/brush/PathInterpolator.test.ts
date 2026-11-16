@@ -5,6 +5,7 @@ import type { StrokePoint, BrushPreset } from '../../types/brush.ts'
 const testPreset: BrushPreset = {
   id: 'test',
   name: 'Test',
+  category: 'draw',
   size: 20,
   minSize: 5,
   maxSize: 50,
@@ -15,6 +16,9 @@ const testPreset: BrushPreset = {
   pressureSizeEnabled: true,
   pressureOpacityEnabled: false,
   isEraser: false,
+  scatter: 0,
+  rotationJitter: 0,
+  usesSmudge: false,
 }
 
 function point(x: number, y: number, pressure = 0.5): StrokePoint {

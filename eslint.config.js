@@ -19,6 +19,21 @@ export default defineConfig([
       ecmaVersion: 2022,
       globals: globals.browser,
     },
+    rules: {
+      // Same convention TypeScript uses: a leading underscore marks an
+      // intentionally unused parameter or caught error.
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { argsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' },
+      ],
+    },
+  },
+  // Test doubles routinely need to bypass types; `any` stays banned in app code.
+  {
+    files: ['**/*.test.{ts,tsx}'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
+    },
   },
   // Architecture boundary: engine cannot import React
   {

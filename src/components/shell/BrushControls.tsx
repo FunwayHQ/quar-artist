@@ -8,7 +8,7 @@ import { useTextStore } from '@stores/textStore.ts'
 import { useTransformStore } from '@stores/transformStore.ts'
 import { useUIStore } from '@stores/uiStore.ts'
 import { exportBrushPreset, importBrushPreset } from '../../io/brushPresets.ts'
-import { loadGoogleFont, isGoogleFontsConsented, GOOGLE_FONTS_POPULAR } from '../../utils/googleFonts.ts'
+import { loadGoogleFont, isGoogleFontsConsented, isGoogleFont } from '../../utils/googleFonts.ts'
 import { ToolBar } from './ToolBar.tsx'
 import styles from './BrushControls.module.css'
 import type { SelectionToolType } from '@app-types/selection.ts'
@@ -430,7 +430,7 @@ export function BrushControls() {
                 const family = e.target.value
                 useTextStore.getState().setFontFamily(family)
                 // Pre-load Google Font when selected so it's ready for the textarea and rasterizer
-                if (isGoogleFontsConsented() && GOOGLE_FONTS_POPULAR.includes(family as any)) {
+                if (isGoogleFontsConsented() && isGoogleFont(family)) {
                   loadGoogleFont(family)
                 }
               }}

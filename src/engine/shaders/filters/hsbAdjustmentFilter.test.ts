@@ -6,9 +6,9 @@ vi.mock('pixi.js', () => {
     _hueApplied = 0
     _satApplied = 0
     _brightApplied = 1
-    hue(deg: number, multiply: boolean) { this._hueApplied = deg }
-    saturate(amount: number, multiply: boolean) { this._satApplied = amount }
-    brightness(b: number, multiply: boolean) { this._brightApplied = b }
+    hue(deg: number, _multiply: boolean) { this._hueApplied = deg }
+    saturate(amount: number, _multiply: boolean) { this._satApplied = amount }
+    brightness(b: number, _multiply: boolean) { this._brightApplied = b }
     reset() { this._hueApplied = 0; this._satApplied = 0; this._brightApplied = 1 }
   }
   return { ColorMatrixFilter: MockColorMatrixFilter, Filter: class {} }

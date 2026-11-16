@@ -3,6 +3,7 @@ import { TileManager } from './TileManager.ts'
 import type { LayerInfo, BlendMode } from '../../types/layer.ts'
 import { MAX_LAYERS } from '../../types/layer.ts'
 import { get2dContext } from '../../utils/canvas2d.ts'
+import { asClampedBytes } from '../../utils/typedArrays.ts'
 
 let nextId = 1
 function generateLayerId(): string {
@@ -364,7 +365,7 @@ export class LayerManager {
       canvas.height = thumbSize
       const ctx = get2dContext(canvas)
       const imageData = new ImageData(
-        new Uint8ClampedArray(pixels.pixels.buffer, pixels.pixels.byteOffset, pixels.pixels.byteLength),
+        asClampedBytes(pixels.pixels),
         thumbSize,
         thumbSize,
       )

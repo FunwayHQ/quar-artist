@@ -4,6 +4,8 @@
  * Falls back to passthrough if APIs are unavailable.
  */
 
+import { asBytes } from '../../utils/typedArrays.ts'
+
 const COMPRESSION_AVAILABLE = (() => {
   try {
     return (
@@ -24,7 +26,7 @@ const COMPRESSION_AVAILABLE = (() => {
 export async function compressSnapshot(data: Uint8Array): Promise<Uint8Array> {
   if (!COMPRESSION_AVAILABLE) return data
 
-  const stream = new Blob([data])
+  const stream = new Blob([asBytes(data)])
     .stream()
     .pipeThrough(new CompressionStream('gzip'))
 
@@ -40,7 +42,7 @@ export async function compressSnapshot(data: Uint8Array): Promise<Uint8Array> {
 export async function decompressSnapshot(data: Uint8Array): Promise<Uint8Array> {
   if (!COMPRESSION_AVAILABLE) return data
 
-  const stream = new Blob([data])
+  const stream = new Blob([asBytes(data)])
     .stream()
     .pipeThrough(new DecompressionStream('gzip'))
 

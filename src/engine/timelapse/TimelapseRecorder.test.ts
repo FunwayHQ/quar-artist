@@ -29,10 +29,13 @@ class MockMediaRecorder {
   ondataavailable: ((e: any) => void) | null = null
   onstop: (() => void) | null = null
 
-  constructor(
-    public stream: MediaStream,
-    public options?: MediaRecorderOptions,
-  ) {}
+  stream: MediaStream
+  options?: MediaRecorderOptions
+
+  constructor(stream: MediaStream, options?: MediaRecorderOptions) {
+    this.stream = stream
+    this.options = options
+  }
 
   start() {
     this.state = 'recording'

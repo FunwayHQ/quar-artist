@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { CANVAS_PRESETS } from './project.ts'
-import type { ProjectMeta, CanvasConfig, ExportOptions, QartManifest } from './project.ts'
+import type { ProjectMeta, CanvasConfig, ExportOptions } from './project.ts'
 
 describe('project types', () => {
   it('CANVAS_PRESETS has 6 entries', () => {

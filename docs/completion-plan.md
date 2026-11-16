@@ -27,8 +27,8 @@
 
 | Check | Result |
 |---|---|
-| `npm run build` | **Fails** with 50 TypeScript errors: 25 unused symbols, 23 type mismatches (14 of them PixiJS 8 typing issues) and 2 `erasableSyntaxOnly` errors. 15 of the 50 are in test files |
-| `npm run lint` | 84 errors in 35 files: 35 `no-explicit-any`, 29 unused variables, 13 accessibility, 7 React hooks rules |
+| `npm run build` | **Fails** with 50 TypeScript errors: 25 unused symbols, 23 type mismatches (11 from TypeScript 5.9's stricter typed-array types, 6 from PixiJS's `BLEND_MODES` type, 6 others) and 2 `erasableSyntaxOnly` errors. 15 of the 50 are in test files |
+| `npm run lint` | 84 errors in 35 files: 35 `no-explicit-any`, 29 unused variables, 13 `eslint-disable` comments naming rules of an accessibility plugin that isn't installed, 7 React hooks rules |
 | Unit tests | 1,150 of 1,151 pass; `TitleBar.test.tsx › shows project name` fails. Rendering tests mock PixiJS, so no test draws a pixel |
 | End-to-end tests | 10 Playwright smoke tests, Chromium only, with no pixel or visual assertions |
 | Initial download | About 276 KB of gzipped JavaScript against a 200 KB target: PixiJS 137 KB plus an app chunk of 132 KB |
@@ -153,9 +153,10 @@ flowchart LR
 - Going to the Gallery and back, and React StrictMode, no longer break the engine.
 - Every blend mode except Hue renders correctly.
 
-- [ ] **M0.1 Green build** · M · fixes F77
+- [x] **M0.1 Green build** · M · fixes F77
   - Fix the 50 TypeScript errors:
-    - PixiJS 8 typing changes: `render` and `extract` overloads in CanvasManager, LayerCompositor, LayerManager, FilterManager and TimelapseRecorder, and the `BLEND_MODES` typing.
+    - TypeScript 5.9 typed-array typing: views typed `ArrayBufferLike` passed to `new ImageData()` in CanvasManager, LayerCompositor, LayerManager, FilterManager and TimelapseRecorder. Fixed with the new helper `utils/typedArrays.ts`.
+    - The PixiJS `BLEND_MODES` typing in LayerCompositor.
     - `BlobPart` and `ArrayBuffer` typing in `engine/undo/compression.ts` and `io/persistence/AutoSave.ts`.
     - ag-psd types in `io/formats/psd/PsdExporter.ts`.
     - `stores/projectStore.ts:28` is missing `setLastSaved`.
@@ -166,6 +167,12 @@ flowchart LR
   - Fix the failing `TitleBar.test.tsx › shows project name`.
   - Add `npm run verify`, which runs type check, lint, unit tests and build in one command.
   - Done when `npm run verify` passes.
+  - **Done 2026-11-16.** Notes:
+    - `any` stays banned in app code. Test files may use it for test doubles (ESLint override).
+    - Parameters and caught errors that start with `_` count as intentionally unused, as in TypeScript.
+    - The 13 `jsx-a11y` comments were removed because that plugin was never installed. Adding it moves to M5.3.
+    - The hooks fixes are behaviour-preserving: the guide sync moved into `CanvasManager.applyGuideSettings`, the title bar keeps the menu anchor in state, and Canvas Size resets through a keyed remount.
+    - Fixing the guide sync revealed one more hooks error that the React Compiler had been masking: the Google Fonts consent check now runs in a lazy `useState` initializer.
 - [x] ~~**M0.2 Continuous integration**~~ · **Skipped** (decision 2026-11-16: no automated checks on GitHub)
   - Replaced by the local `npm run verify` script from M0.1, run before every commit.
 - [ ] **M0.3 Real-GPU test harness** · L · fixes F76
@@ -579,6 +586,11 @@ flowchart LR
     - Lucide icons at 1.5 px stroke and 22 px size;
     - fix the undefined `--color-amber` token.
   - axe-core checks run in Playwright.
+  - Add `eslint-plugin-jsx-a11y` (recommended rules). Review the sites whose stale `eslint-disable` comments M0.1 removed:
+    - the dialog backdrops (Canvas Size, Drawing Guides, QuickMenu settings, Timelapse export);
+    - the blend-mode menu backdrop;
+    - the canvas context-menu wrapper in `App.tsx`;
+    - the timelapse `<video>` preview, which has no captions.
 - [ ] **M5.4 Feedback and states** · S · fixes F70 (toast)
   - Toasts with actions, such as "Layer deleted — Undo".
   - Save status, and progress for open, import and export.

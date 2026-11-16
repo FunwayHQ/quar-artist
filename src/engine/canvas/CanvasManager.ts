@@ -11,7 +11,7 @@ import { getContentBounds } from '../utils/contentBounds.ts'
 import { FilterManager } from '../filters/FilterManager.ts'
 import { FloodFillTool } from '../tools/FloodFillTool.ts'
 import { EyedropperTool } from '../tools/EyedropperTool.ts'
-import { GuideManager } from '../guides/GuideManager.ts'
+import { GuideManager, type GuideSettings } from '../guides/GuideManager.ts'
 import { SymmetryEngine } from '../guides/SymmetryEngine.ts'
 import { QuickShape, type DetectedShape } from '../tools/QuickShape.ts'
 import { TextTool } from '../tools/TextTool.ts'
@@ -26,6 +26,7 @@ import type { SelectionUndoEntry } from '../undo/UndoManager.ts'
 import type { RGBAColor } from '../../types/color.ts'
 import type { TextProperties } from '../../types/text.ts'
 import { get2dContext } from '../../utils/canvas2d.ts'
+import { asClampedBytes } from '../../utils/typedArrays.ts'
 
 /**
  * Manages the two-canvas architecture:
@@ -168,17 +169,13 @@ export class CanvasManager {
     // Wire filter manager
     this.filterManager.setApp(this.app)
 
-    // Wire selection controller to overlay
-    if (this.overlayCtx) {
-      this.selectionController.setOverlayCtx(this.overlayCtx)
-    }
     this.selectionController.resize(artW, artH)
 
     // Wire input to tool routing
     this.inputManager.setStrokeCallbacks({
       onPointerDown: (ps) => this.handlePointerDown(ps),
       onPointerMove: (ps, coalesced, _predicted) => this.handlePointerMove(ps, coalesced),
-      onPointerUp: (ps) => this.handlePointerUp(ps),
+      onPointerUp: () => this.handlePointerUp(),
       onHover: (ps) => this.handleHover(ps),
     })
 
@@ -318,7 +315,7 @@ export class CanvasManager {
     canvas.height = h
     const ctx = get2dContext(canvas)
     const imageData = new ImageData(
-      new Uint8ClampedArray(data.buffer, data.byteOffset, expectedLen),
+      asClampedBytes(data, expectedLen),
       w,
       h,
     )
@@ -396,7 +393,7 @@ export class CanvasManager {
     srcCanvas.width = imgW
     srcCanvas.height = imgH
     const srcCtx = get2dContext(srcCanvas)
-    srcCtx.putImageData(new ImageData(pixels, imgW, imgH), 0, 0)
+    srcCtx.putImageData(new ImageData(asClampedBytes(pixels), imgW, imgH), 0, 0)
 
     // Scale down to fit within document bounds (maintain aspect ratio)
     let drawW = imgW
@@ -901,7 +898,7 @@ export class CanvasManager {
     }
   }
 
-  private handlePointerUp(ps: PointerState) {
+  private handlePointerUp() {
     // VP handle dragging finish
     if (this.draggingVP !== null) {
       this.draggingVP = null
@@ -993,7 +990,7 @@ export class CanvasManager {
     canvas.height = before.height
     const ctx = get2dContext(canvas)
     const imageData = new ImageData(
-      new Uint8ClampedArray(pixels.buffer, pixels.byteOffset, extracted.width * extracted.height * 4),
+      asClampedBytes(pixels, extracted.width * extracted.height * 4),
       before.width,
       before.height,
     )
@@ -1183,7 +1180,7 @@ export class CanvasManager {
       srcCanvas.height = result.height
       const srcCtx = get2dContext(srcCanvas)
       srcCtx.putImageData(
-        new ImageData(new Uint8ClampedArray(result.pixels.buffer, result.pixels.byteOffset, result.width * result.height * 4), result.width, result.height),
+        new ImageData(asClampedBytes(result.pixels, result.width * result.height * 4), result.width, result.height),
         0, 0,
       )
       const drawX = Math.round((docW - result.width) / 2)
@@ -1549,6 +1546,21 @@ export class CanvasManager {
   /** Whether QuickShape is enabled (set from React via guideStore sync). */
   quickShapeEnabled = false
 
+  /** Apply grid, perspective, symmetry and QuickShape settings from the UI. */
+  applyGuideSettings(s: GuideSettings) {
+    this.guideManager.applySettings(s)
+
+    const se = this.symmetryEngine
+    se.enabled = s.symmetryEnabled
+    se.type = s.symmetryType
+    se.axes = s.symmetryAxes
+    se.rotation = s.symmetryRotation
+    se.centerX = s.symmetryCenterX
+    se.centerY = s.symmetryCenterY
+
+    this.quickShapeEnabled = s.quickShapeEnabled
+  }
+
   /** Apply a detected QuickShape: undo freehand stroke, render clean shape. */
   private applyQuickShape(shape: DetectedShape) {
     const preset = this.brushEngine['activePreset']
@@ -1578,7 +1590,7 @@ export class CanvasManager {
       }
       this.brushEngine.beginStroke(firstPt)
       // Directly render all shape stamps via the brush engine
-      ;(this.brushEngine as any).renderStamps(stamps)
+      this.brushEngine.renderStamps(stamps)
       this.brushEngine.endStroke()
 
       this.recomposite()

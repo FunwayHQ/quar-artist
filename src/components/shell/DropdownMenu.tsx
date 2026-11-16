@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import styles from './DropdownMenu.module.css'
 
@@ -20,14 +20,11 @@ export function DropdownMenu({ items, onClose, anchorEl }: DropdownMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null)
   const [activeIndex, setActiveIndex] = useState(-1)
 
-  // Position below the anchor element
-  const [position, setPosition] = useState({ top: 0, left: 0 })
-
-  useEffect(() => {
-    if (anchorEl) {
-      const rect = anchorEl.getBoundingClientRect()
-      setPosition({ top: rect.bottom + 2, left: rect.left })
-    }
+  // Position below the anchor element (already mounted: it opened the menu)
+  const position = useMemo(() => {
+    if (!anchorEl) return { top: 0, left: 0 }
+    const rect = anchorEl.getBoundingClientRect()
+    return { top: rect.bottom + 2, left: rect.left }
   }, [anchorEl])
 
   // Close on outside click

@@ -1,5 +1,28 @@
 import type { VanishingPoint, SymmetryType, PerspectiveType } from '../../stores/guideStore.ts'
 
+/** Guide settings mirrored from the UI (the fields of guideStore). */
+export interface GuideSettings {
+  gridEnabled: boolean
+  gridSpacing: number
+  gridColor: string
+  gridOpacity: number
+  isometricEnabled: boolean
+  isometricSpacing: number
+  perspectiveEnabled: boolean
+  perspectiveType: PerspectiveType
+  vanishingPoints: VanishingPoint[]
+  horizonY: number
+  perspectiveLineCount: number
+  symmetryEnabled: boolean
+  symmetryType: SymmetryType
+  symmetryAxes: number
+  symmetryRotation: number
+  symmetryCenterX: number
+  symmetryCenterY: number
+  symmetryColor: string
+  quickShapeEnabled: boolean
+}
+
 /**
  * Orchestrates drawing guide overlays on the interactive canvas.
  * Called from CanvasManager.renderOverlay() in canvas-space
@@ -31,6 +54,28 @@ export class GuideManager {
   symmetryCenterX = 512
   symmetryCenterY = 384
   symmetryColor = '#F59E0B'
+
+  /** Copy overlay settings from the UI. */
+  applySettings(s: GuideSettings): void {
+    this.gridEnabled = s.gridEnabled
+    this.gridSpacing = s.gridSpacing
+    this.gridColor = s.gridColor
+    this.gridOpacity = s.gridOpacity
+    this.isometricEnabled = s.isometricEnabled
+    this.isometricSpacing = s.isometricSpacing
+    this.perspectiveEnabled = s.perspectiveEnabled
+    this.perspectiveType = s.perspectiveType
+    this.vanishingPoints = s.vanishingPoints
+    this.horizonY = s.horizonY
+    this.perspectiveLineCount = s.perspectiveLineCount
+    this.symmetryEnabled = s.symmetryEnabled
+    this.symmetryType = s.symmetryType
+    this.symmetryAxes = s.symmetryAxes
+    this.symmetryRotation = s.symmetryRotation
+    this.symmetryCenterX = s.symmetryCenterX
+    this.symmetryCenterY = s.symmetryCenterY
+    this.symmetryColor = s.symmetryColor
+  }
 
   /**
    * Main entry point — draws all enabled guides on the overlay canvas.
@@ -152,7 +197,7 @@ export class GuideManager {
       : this.vanishingPoints.slice(0, 1)
 
     for (const vp of points) {
-      this.drawRadialLines(ctx, vp, lineCount, docW, docH, zoom)
+      this.drawRadialLines(ctx, vp, lineCount, docW, docH)
     }
 
     // Draw VP handles
@@ -170,7 +215,6 @@ export class GuideManager {
     count: number,
     docW: number,
     docH: number,
-    zoom: number,
   ): void {
     ctx.beginPath()
 

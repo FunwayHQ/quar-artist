@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useCallback, lazy, Suspense, memo } from 'react'
+import { useRef, useState, useEffect, useCallback, lazy, Suspense } from 'react'
 import { TitleBar } from '@components/shell/TitleBar.tsx'
 import { BrushControls } from '@components/shell/BrushControls.tsx'
 import { CanvasViewport } from '@components/shell/CanvasViewport.tsx'
@@ -79,13 +79,12 @@ export default function App() {
   const projectName = useProjectStore((s) => s.currentProjectName)
 
   // Google Fonts consent state
-  const [showConsentBanner, setShowConsentBanner] = useState(false)
+  // Ask until the user has either consented or declined
+  const [showConsentBanner, setShowConsentBanner] = useState(
+    () => !isGoogleFontsConsented() && !isGoogleFontsDeclined(),
+  )
 
-  // Check consent status on mount
   useEffect(() => {
-    if (!isGoogleFontsConsented() && !isGoogleFontsDeclined()) {
-      setShowConsentBanner(true)
-    }
     // If already consented, preload fonts and update text store
     if (isGoogleFontsConsented()) {
       preloadGoogleFonts()
@@ -200,39 +199,7 @@ export default function App() {
   // Sync guide store to engine
   useEffect(() => {
     if (!manager) return
-    const syncGuides = () => {
-      const s = useGuideStore.getState()
-      const gm = manager.guideManager
-      const se = manager.symmetryEngine
-
-      gm.gridEnabled = s.gridEnabled
-      gm.gridSpacing = s.gridSpacing
-      gm.gridColor = s.gridColor
-      gm.gridOpacity = s.gridOpacity
-      gm.isometricEnabled = s.isometricEnabled
-      gm.isometricSpacing = s.isometricSpacing
-      gm.perspectiveEnabled = s.perspectiveEnabled
-      gm.perspectiveType = s.perspectiveType
-      gm.vanishingPoints = s.vanishingPoints
-      gm.horizonY = s.horizonY
-      gm.perspectiveLineCount = s.perspectiveLineCount
-      gm.symmetryEnabled = s.symmetryEnabled
-      gm.symmetryType = s.symmetryType
-      gm.symmetryAxes = s.symmetryAxes
-      gm.symmetryRotation = s.symmetryRotation
-      gm.symmetryCenterX = s.symmetryCenterX
-      gm.symmetryCenterY = s.symmetryCenterY
-      gm.symmetryColor = s.symmetryColor
-
-      se.enabled = s.symmetryEnabled
-      se.type = s.symmetryType
-      se.axes = s.symmetryAxes
-      se.rotation = s.symmetryRotation
-      se.centerX = s.symmetryCenterX
-      se.centerY = s.symmetryCenterY
-
-      manager.quickShapeEnabled = s.quickShapeEnabled
-    }
+    const syncGuides = () => manager.applyGuideSettings(useGuideStore.getState())
     syncGuides()
     const unsub = useGuideStore.subscribe(syncGuides)
     return unsub
@@ -329,7 +296,8 @@ export default function App() {
   }, [])
 
   // Gallery handlers
-  const handleOpenProject = useCallback((id: number) => {
+  // TODO(F03, plan M1.1): load the project with this id. Today it only switches view.
+  const handleOpenProject = useCallback((_id: number) => {
     useProjectStore.getState().setView('canvas')
   }, [])
 
@@ -662,7 +630,6 @@ export default function App() {
         )}
 
         {/* Center: Canvas */}
-        {/* eslint-disable-next-line jsx-a11y/no-static-element-interactions */}
         <div onContextMenu={handleCanvasContextMenu} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
           <CanvasViewport ref={containerRef} />
         </div>
@@ -691,7 +658,7 @@ export default function App() {
           </div>
         )}
       </div>
-      {fullscreen && <FullscreenHud manager={manager} />}
+      {fullscreen && <FullscreenHud />}
       <FilterDialogRouter onApply={handleFilterApply} onCancel={handleFilterCancel} />
       <ErrorBoundary>
       <Suspense fallback={null}>
@@ -701,7 +668,7 @@ export default function App() {
             projectName={projectName}
             width={canvasWidth}
             height={canvasHeight}
-            layerCount={manager?.layerManager.layers.length ?? 1}
+            layerCount={manager?.layerManager.count ?? 1}
             onClose={() => useUIStore.getState().setShowExportDialog(false)}
             onExport={handleExport}
           />

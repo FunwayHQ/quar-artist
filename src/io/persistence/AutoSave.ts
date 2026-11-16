@@ -91,10 +91,8 @@ export class AutoSave {
           this.projectId,
           entry.layerId,
           'full',
-          entry.pixels.buffer.slice(
-            entry.pixels.byteOffset,
-            entry.pixels.byteOffset + entry.pixels.byteLength,
-          ),
+          // Copy into a standalone ArrayBuffer (also narrows away SharedArrayBuffer)
+          new Uint8Array(entry.pixels).buffer,
         )
       }
 
