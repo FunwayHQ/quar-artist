@@ -180,15 +180,30 @@ export class CanvasManager {
     this.selectionController.resize(artW, artH)
 
     // Wire input to tool routing
+    // Tool previews, handles and guides follow the pointer, so every input
+    // event may change the overlay.
     this.inputManager.setStrokeCallbacks({
-      onPointerDown: (ps) => this.handlePointerDown(ps),
-      onPointerMove: (ps, coalesced, _predicted) => this.handlePointerMove(ps, coalesced),
-      onPointerUp: () => this.handlePointerUp(),
-      onHover: (ps) => this.handleHover(ps),
+      onPointerDown: (ps) => {
+        this.handlePointerDown(ps)
+        this.requestOverlayRender()
+      },
+      onPointerMove: (ps, coalesced, _predicted) => {
+        this.handlePointerMove(ps, coalesced)
+        this.requestOverlayRender()
+      },
+      onPointerUp: () => {
+        this.handlePointerUp()
+        this.requestOverlayRender()
+      },
+      onHover: (ps) => {
+        this.handleHover(ps)
+        this.requestOverlayRender()
+      },
     })
 
-    // Start overlay render loop (marching ants, tool previews)
-    this.startOverlayLoop()
+    // The overlay is drawn only when something on it changes (F62).
+    this.selectionController.setRedrawCallback(() => this.requestOverlayRender())
+    this.requestOverlayRender()
 
     // Watch for view transform changes to update PixiJS stage
     this.viewTransform.setChangeCallback(this.applyViewTransform)
@@ -360,6 +375,7 @@ export class CanvasManager {
       this.syncBrushToActiveLayer()
       this.recomposite()
     }
+    this.requestOverlayRender()
   }
 
   /** Fit document into the viewport, centering with padding. */
@@ -447,6 +463,7 @@ export class CanvasManager {
   setActiveTool(tool: ToolType) {
     const prevTool = this.activeTool
     this.activeTool = tool
+    this.requestOverlayRender()
 
     // Auto-commit transform when switching away from transform tool
     if (prevTool === 'transform' && tool !== 'transform' && this.transformState) {
@@ -475,6 +492,7 @@ export class CanvasManager {
   /** Set the selection sub-tool type. */
   setSelectionSubTool(subTool: SelectionToolType) {
     this.selectionController.setSubTool(subTool)
+    this.requestOverlayRender()
   }
 
   /** Set the selection combination mode. */
@@ -490,6 +508,7 @@ export class CanvasManager {
   /** Update constrain modifier state. */
   setSelectionConstrained(constrained: boolean) {
     this.selectionController.setConstrained(constrained)
+    this.requestOverlayRender()
   }
 
   // ── Selection actions ─────────────────────────────────────────────
@@ -991,6 +1010,7 @@ export class CanvasManager {
 
     // Start the transform controller
     this.transformController.begin(bounds)
+    this.requestOverlayRender()
 
     // Create a temporary canvas with the layer content for preview
     const canvas = document.createElement('canvas')
@@ -1105,6 +1125,7 @@ export class CanvasManager {
       this.transformState = null
     }
     this.transformController.cancel()
+    this.requestOverlayRender()
   }
 
   /** Flip the active layer horizontally. */
@@ -1411,14 +1432,20 @@ export class CanvasManager {
     }
   }
 
-  // ── Overlay render loop ───────────────────────────────────────────
+  // ── Overlay rendering ─────────────────────────────────────────────
 
-  private startOverlayLoop() {
-    const loop = () => {
+  /**
+   * Draw the overlay on the next animation frame. Everything that changes what
+   * the overlay shows calls this, and calls within one frame draw it once.
+   * While a selection is shown, its marching ants keep the overlay animating.
+   */
+  requestOverlayRender() {
+    if (this.overlayRafId !== null || this.destroyed) return
+    this.overlayRafId = requestAnimationFrame(() => {
+      this.overlayRafId = null
       this.renderOverlay()
-      this.overlayRafId = requestAnimationFrame(loop)
-    }
-    this.overlayRafId = requestAnimationFrame(loop)
+      if (this.selectionController.isAnimating()) this.requestOverlayRender()
+    })
   }
 
   private renderOverlay() {
@@ -1557,6 +1584,7 @@ export class CanvasManager {
   /** Apply grid, perspective, symmetry and QuickShape settings from the UI. */
   applyGuideSettings(s: GuideSettings) {
     this.guideManager.applySettings(s)
+    this.requestOverlayRender()
 
     const se = this.symmetryEngine
     se.enabled = s.symmetryEnabled
@@ -1617,6 +1645,7 @@ export class CanvasManager {
     stage.scale.set(state.zoom)
     stage.rotation = state.rotation
     this.onViewChange?.(state)
+    this.requestOverlayRender()
   }
 
   private handleResize = () => {
@@ -1638,6 +1667,8 @@ export class CanvasManager {
       if (this.overlayCtx) {
         this.overlayCtx.scale(dpr, dpr)
       }
+      // Resizing a canvas clears it.
+      this.requestOverlayRender()
     }
   }
 

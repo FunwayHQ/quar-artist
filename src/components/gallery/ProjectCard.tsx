@@ -2,7 +2,7 @@ import { memo } from 'react'
 import styles from './ProjectCard.module.css'
 
 interface ProjectCardProps {
-  id: number
+  id: string
   name: string
   width: number
   height: number

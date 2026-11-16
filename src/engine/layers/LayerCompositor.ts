@@ -3,8 +3,7 @@ import { RenderTexture, Sprite, Container, Texture, type Application, type BLEND
 import './blendModes.ts'
 import type { Layer } from './LayerManager.ts'
 import type { BlendMode } from '../../types/layer.ts'
-import { CUSTOM_BLEND_MODES } from '../shaders/blend/blendFilters.ts'
-import { cpuBlendLayers } from '../shaders/blend/cpuBlend.ts'
+import { CPU_BLEND_MODES, cpuBlendLayers } from '../shaders/blend/cpuBlend.ts'
 import { PerfMonitor } from '../perf/PerfMonitor.ts'
 import { asClampedBytes } from '../../utils/typedArrays.ts'
 import { readPixels } from '../utils/readback.ts'
@@ -180,7 +179,7 @@ export class LayerCompositor {
     // Check if any foreground layer uses a custom blend mode
     let hasFgCustom = false
     for (let i = activeIdx + 1; i < layers.length; i++) {
-      if (layers[i].info.visible && CUSTOM_BLEND_MODES.has(layers[i].info.blendMode) && !layers[i].info.clippingMask) {
+      if (layers[i].info.visible && CPU_BLEND_MODES.has(layers[i].info.blendMode) && !layers[i].info.clippingMask) {
         hasFgCustom = true
         break
       }
@@ -200,7 +199,7 @@ export class LayerCompositor {
         const layer = layers[i]
         if (!layer.info.visible) continue
 
-        if (CUSTOM_BLEND_MODES.has(layer.info.blendMode) && !layer.info.clippingMask) {
+        if (CPU_BLEND_MODES.has(layer.info.blendMode) && !layer.info.clippingMask) {
           // Flush any pending GPU layers
           if (this.compositeContainer.children.length > 0) {
             const w = this.outputTexture.width
@@ -296,7 +295,7 @@ export class LayerCompositor {
 
     // Check if any visible layer uses a custom blend mode
     const hasCustomBlend = layers.some(
-      l => l.info.visible && CUSTOM_BLEND_MODES.has(l.info.blendMode) && !l.info.clippingMask,
+      l => l.info.visible && CPU_BLEND_MODES.has(l.info.blendMode) && !l.info.clippingMask,
     )
 
     this.compositeContainer.removeChildren()
@@ -460,7 +459,7 @@ export class LayerCompositor {
       const layer = layers[i]
       if (!layer.info.visible) continue
 
-      if (CUSTOM_BLEND_MODES.has(layer.info.blendMode) && !layer.info.clippingMask) {
+      if (CPU_BLEND_MODES.has(layer.info.blendMode) && !layer.info.clippingMask) {
         // Flush pending GPU layers
         flushGpuBatch()
 

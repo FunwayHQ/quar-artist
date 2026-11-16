@@ -36,13 +36,12 @@ vi.mock('pixi.js', () => {
   }
 })
 
-import { LayerManager, _resetLayerIdCounter } from './LayerManager.ts'
+import { LayerManager } from './LayerManager.ts'
 
 describe('LayerManager', () => {
   let lm: LayerManager
 
   beforeEach(() => {
-    _resetLayerIdCounter()
     lm = new LayerManager()
     lm.setSize(1024, 768)
   })
@@ -82,6 +81,19 @@ describe('LayerManager', () => {
       expect(id).not.toBeNull()
       expect(lm.count).toBe(2)
       expect(lm.getActiveLayerId()).toBe(id)
+    })
+
+    it('gives layers ids that never repeat, even in a new session (F98)', () => {
+      lm.init()
+      lm.createLayer('Layer 2')
+      // A second manager stands in for the next page load, which used to restart at layer_1.
+      const next = new LayerManager()
+      next.setSize(1024, 768)
+      next.init()
+      next.createLayer('Layer 2')
+      const ids = [...lm.getLayerInfos(), ...next.getLayerInfos()].map((l) => l.id)
+      expect(new Set(ids).size).toBe(4)
+      for (const id of ids) expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
     })
 
     it('inserts above the active layer', () => {

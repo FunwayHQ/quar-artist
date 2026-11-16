@@ -25,7 +25,7 @@ function createMockData(): LayerDataSet {
 
 describe('AutoSave', () => {
   let metaDb: MetadataDB
-  let projectId: number
+  let projectId: string
 
   beforeEach(async () => {
     resetDB()
@@ -65,7 +65,7 @@ describe('AutoSave', () => {
     it('saveNow cancels pending debounced save', async () => {
       vi.useFakeTimers()
       const autoSave = new AutoSave(metaDb, 5000)
-      autoSave.setProjectId(999) // non-existent — won't actually save
+      autoSave.setProjectId('missing') // non-existent — won't actually save
       autoSave.setDataExtractor(() => null) // no data to save
 
       autoSave.scheduleSave()

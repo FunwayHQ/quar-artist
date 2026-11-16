@@ -17,8 +17,8 @@ describe('GalleryView', () => {
     vi.clearAllMocks()
     useProjectStore.setState({
       projects: [
-        { id: 1, name: 'My Painting', width: 1920, height: 1080, dpi: 72, createdAt: new Date('2025-01-01'), updatedAt: new Date('2025-06-15') },
-        { id: 2, name: 'Sketch', width: 2048, height: 2048, dpi: 150, createdAt: new Date('2025-03-01'), updatedAt: new Date('2025-06-10') },
+        { id: 'p1', name: 'My Painting', width: 1920, height: 1080, dpi: 72, createdAt: new Date('2025-01-01'), updatedAt: new Date('2025-06-15') },
+        { id: 'p2', name: 'Sketch', width: 2048, height: 2048, dpi: 150, createdAt: new Date('2025-03-01'), updatedAt: new Date('2025-06-10') },
       ],
     })
   })
@@ -62,7 +62,7 @@ describe('GalleryView', () => {
     const user = userEvent.setup()
     render(<GalleryView {...mockHandlers} />)
     await user.click(screen.getByTitle('Open My Painting'))
-    expect(mockHandlers.onOpenProject).toHaveBeenCalledWith(1)
+    expect(mockHandlers.onOpenProject).toHaveBeenCalledWith('p1')
   })
 
   it('calls onDeleteProject when delete button is clicked', async () => {
@@ -70,7 +70,7 @@ describe('GalleryView', () => {
     render(<GalleryView {...mockHandlers} />)
     const deleteButtons = screen.getAllByTitle('Delete')
     await user.click(deleteButtons[0])
-    expect(mockHandlers.onDeleteProject).toHaveBeenCalledWith(1)
+    expect(mockHandlers.onDeleteProject).toHaveBeenCalledWith('p1')
   })
 
   it('calls onDuplicateProject when duplicate button is clicked', async () => {
@@ -78,7 +78,7 @@ describe('GalleryView', () => {
     render(<GalleryView {...mockHandlers} />)
     const dupButtons = screen.getAllByTitle('Duplicate')
     await user.click(dupButtons[0])
-    expect(mockHandlers.onDuplicateProject).toHaveBeenCalledWith(1)
+    expect(mockHandlers.onDuplicateProject).toHaveBeenCalledWith('p1')
   })
 
   it('renders empty state with only new project button', () => {

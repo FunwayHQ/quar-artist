@@ -1,5 +1,6 @@
 import { getDB, type ProjectRecord, type LayerRecord, type TileRecord } from '../../db/schema.ts'
 import type { LayerInfo } from '../../types/layer.ts'
+import { createId } from '../../utils/id.ts'
 
 export class MetadataDB {
   // ── Projects ──────────────────────────────────────────────────────
@@ -9,10 +10,11 @@ export class MetadataDB {
     width: number,
     height: number,
     dpi: number,
-  ): Promise<number> {
+  ): Promise<string> {
     const db = await getDB()
     const now = new Date()
     return db.add('projects', {
+      id: createId(),
       name,
       width,
       height,
@@ -22,7 +24,7 @@ export class MetadataDB {
     })
   }
 
-  async getProject(id: number): Promise<ProjectRecord | undefined> {
+  async getProject(id: string): Promise<ProjectRecord | undefined> {
     const db = await getDB()
     return db.get('projects', id)
   }
@@ -33,14 +35,14 @@ export class MetadataDB {
     return all.reverse()
   }
 
-  async updateProject(id: number, changes: Partial<ProjectRecord>): Promise<void> {
+  async updateProject(id: string, changes: Partial<ProjectRecord>): Promise<void> {
     const db = await getDB()
     const existing = await db.get('projects', id)
     if (!existing) return
     await db.put('projects', { ...existing, ...changes, updatedAt: new Date() })
   }
 
-  async deleteProject(id: number): Promise<void> {
+  async deleteProject(id: string): Promise<void> {
     const db = await getDB()
     const tx = db.transaction(['projects', 'layers', 'tiles'], 'readwrite')
 
@@ -61,13 +63,14 @@ export class MetadataDB {
     await tx.done
   }
 
-  async duplicateProject(id: number, newName: string): Promise<number> {
+  async duplicateProject(id: string, newName: string): Promise<string> {
     const db = await getDB()
     const original = await db.get('projects', id)
     if (!original) throw new Error(`Project ${id} not found`)
 
     const now = new Date()
     const newId = await db.add('projects', {
+      id: createId(),
       name: newName,
       width: original.width,
       height: original.height,
@@ -110,7 +113,7 @@ export class MetadataDB {
 
   // ── Layers ────────────────────────────────────────────────────────
 
-  async saveLayers(projectId: number, layers: LayerInfo[]): Promise<void> {
+  async saveLayers(projectId: string, layers: LayerInfo[]): Promise<void> {
     const db = await getDB()
     const tx = db.transaction('layers', 'readwrite')
     const store = tx.objectStore('layers')
@@ -141,7 +144,7 @@ export class MetadataDB {
     await tx.done
   }
 
-  async loadLayers(projectId: number): Promise<LayerRecord[]> {
+  async loadLayers(projectId: string): Promise<LayerRecord[]> {
     const db = await getDB()
     const layers = await db.getAllFromIndex('layers', 'by-projectId', projectId)
     return layers.sort((a, b) => a.order - b.order)
@@ -150,7 +153,7 @@ export class MetadataDB {
   // ── Tiles ─────────────────────────────────────────────────────────
 
   async saveTile(
-    projectId: number,
+    projectId: string,
     layerId: string,
     key: string,
     data: ArrayBuffer,
@@ -166,7 +169,7 @@ export class MetadataDB {
   }
 
   async loadTile(
-    projectId: number,
+    projectId: string,
     layerId: string,
     key: string,
   ): Promise<ArrayBuffer | null> {
@@ -176,7 +179,7 @@ export class MetadataDB {
   }
 
   async loadAllTilesForLayer(
-    projectId: number,
+    projectId: string,
     layerId: string,
   ): Promise<TileRecord[]> {
     const db = await getDB()
@@ -188,7 +191,7 @@ export class MetadataDB {
     return db.getAllFromIndex('tiles', 'by-project-layer-key', range)
   }
 
-  async deleteLayerTiles(projectId: number, layerId: string): Promise<void> {
+  async deleteLayerTiles(projectId: string, layerId: string): Promise<void> {
     const db = await getDB()
     // Use compound index range to find only this layer's tiles
     const range = IDBKeyRange.bound(

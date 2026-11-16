@@ -1,7 +1,7 @@
 import type { BlendMode } from './layer.ts'
 
 export interface ProjectMeta {
-  id?: number
+  id: string
   name: string
   width: number
   height: number

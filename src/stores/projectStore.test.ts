@@ -31,9 +31,9 @@ describe('projectStore', () => {
   })
 
   it('setCurrentProject updates all project fields', () => {
-    useProjectStore.getState().setCurrentProject(1, 'My Art', 2048, 2048, 300)
+    useProjectStore.getState().setCurrentProject('p1', 'My Art', 2048, 2048, 300)
     const state = useProjectStore.getState()
-    expect(state.currentProjectId).toBe(1)
+    expect(state.currentProjectId).toBe('p1')
     expect(state.currentProjectName).toBe('My Art')
     expect(state.canvasWidth).toBe(2048)
     expect(state.canvasHeight).toBe(2048)
@@ -43,8 +43,8 @@ describe('projectStore', () => {
 
   it('setProjects updates the project list', () => {
     const projects = [
-      { id: 1, name: 'P1', width: 100, height: 100, dpi: 72, createdAt: new Date(), updatedAt: new Date() },
-      { id: 2, name: 'P2', width: 200, height: 200, dpi: 150, createdAt: new Date(), updatedAt: new Date() },
+      { id: 'p1', name: 'P1', width: 100, height: 100, dpi: 72, createdAt: new Date(), updatedAt: new Date() },
+      { id: 'p2', name: 'P2', width: 200, height: 200, dpi: 150, createdAt: new Date(), updatedAt: new Date() },
     ]
     useProjectStore.getState().setProjects(projects)
     expect(useProjectStore.getState().projects).toHaveLength(2)
@@ -74,7 +74,7 @@ describe('projectStore', () => {
   })
 
   it('clearCurrentProject returns to gallery', () => {
-    useProjectStore.getState().setCurrentProject(1, 'Test', 1920, 1080, 72)
+    useProjectStore.getState().setCurrentProject('p1', 'Test', 1920, 1080, 72)
     useProjectStore.getState().clearCurrentProject()
 
     const state = useProjectStore.getState()

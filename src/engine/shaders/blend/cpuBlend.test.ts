@@ -1,7 +1,15 @@
 import { describe, it, expect } from 'vitest'
-import { cpuBlendPixel, cpuBlendLayers } from './cpuBlend.ts'
+import { CPU_BLEND_MODES, cpuBlendPixel, cpuBlendLayers } from './cpuBlend.ts'
 
 describe('cpuBlend', () => {
+  describe('CPU_BLEND_MODES', () => {
+    it('holds the 9 modes the compositor blends on the CPU', () => {
+      expect([...CPU_BLEND_MODES].sort()).toEqual(
+        ['darkerColor', 'dissolve', 'divide', 'hardMix', 'lighterColor', 'linearLight', 'pinLight', 'subtract', 'vividLight'],
+      )
+    })
+  })
+
   describe('cpuBlendPixel', () => {
     // Test against known color pairs
     const white = [1, 1, 1] as const

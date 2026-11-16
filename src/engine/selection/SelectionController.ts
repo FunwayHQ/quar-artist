@@ -28,13 +28,26 @@ export class SelectionController {
 
   /** Callback to notify external state (e.g., Zustand store) of selection changes. */
   private onSelectionChange: ((hasSelection: boolean, bounds: BoundingBox | null) => void) | null = null
+  /** Called whenever the outline drawOverlay draws changes. */
+  private onRedraw: (() => void) | null = null
 
   constructor(width: number, height: number) {
     this.manager = new SelectionManager(width, height)
     this.manager.setChangeCallback((has, bounds) => {
       this.updateBoundary()
+      this.onRedraw?.()
       this.onSelectionChange?.(has, bounds)
     })
+  }
+
+  /** Set a callback for every change to the selection outline, so the overlay can redraw. */
+  setRedrawCallback(cb: (() => void) | null) {
+    this.onRedraw = cb
+  }
+
+  /** Whether drawOverlay animates: marching ants run while a selection is shown. */
+  isAnimating(): boolean {
+    return this.boundarySegments.length > 0
   }
 
   /** Resize the selection mask (clears selection). */

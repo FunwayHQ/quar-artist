@@ -5,7 +5,7 @@ export type AppView = 'gallery' | 'canvas'
 
 interface ProjectStore {
   view: AppView
-  currentProjectId: number | null
+  currentProjectId: string | null
   currentProjectName: string
   projects: ProjectRecord[]
   canvasWidth: number
@@ -16,7 +16,7 @@ interface ProjectStore {
   saveStatus: 'idle' | 'saving' | 'saved' | 'error'
 
   setView: (view: AppView) => void
-  setCurrentProject: (id: number, name: string, width: number, height: number, dpi: number) => void
+  setCurrentProject: (id: string, name: string, width: number, height: number, dpi: number) => void
   setProjects: (projects: ProjectRecord[]) => void
   setProjectName: (name: string) => void
   setSaveStatus: (status: 'idle' | 'saving' | 'saved' | 'error') => void

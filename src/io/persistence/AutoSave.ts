@@ -13,7 +13,7 @@ export class AutoSave {
   private metaDb: MetadataDB
   private debounceMs: number
   private timerId: ReturnType<typeof setTimeout> | null = null
-  private projectId: number | null = null
+  private projectId: string | null = null
   private saving = false
   private statusCallback: SaveStatusCallback | null = null
   private extractLayerData: (() => LayerDataSet | null) | null = null
@@ -23,7 +23,7 @@ export class AutoSave {
     this.debounceMs = debounceMs
   }
 
-  setProjectId(id: number) {
+  setProjectId(id: string) {
     this.projectId = id
   }
 

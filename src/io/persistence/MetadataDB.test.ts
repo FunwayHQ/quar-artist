@@ -14,9 +14,10 @@ describe('MetadataDB', () => {
   })
 
   describe('projects', () => {
-    it('creates a project and returns its id', async () => {
+    it('creates a project and returns its id, a UUID (D12)', async () => {
       const id = await meta.createProject('My Art', 1920, 1080, 72)
-      expect(id).toBeGreaterThan(0)
+      expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+      expect(await meta.createProject('My Art', 1920, 1080, 72)).not.toBe(id)
     })
 
     it('retrieves a project by id', async () => {
@@ -103,7 +104,7 @@ describe('MetadataDB', () => {
     })
 
     it('throws when duplicating non-existent project', async () => {
-      await expect(meta.duplicateProject(9999, 'Ghost')).rejects.toThrow()
+      await expect(meta.duplicateProject('missing', 'Ghost')).rejects.toThrow()
     })
   })
 
@@ -165,7 +166,7 @@ describe('MetadataDB', () => {
     })
 
     it('returns null for missing tile', async () => {
-      const result = await meta.loadTile(999, 'x', 'y')
+      const result = await meta.loadTile('missing', 'x', 'y')
       expect(result).toBeNull()
     })
 

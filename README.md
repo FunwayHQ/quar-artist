@@ -14,8 +14,10 @@
   <img src="https://img.shields.io/badge/React-19-61DAFB?style=flat-square" alt="React 19" />
   <img src="https://img.shields.io/badge/TypeScript-strict-3178C6?style=flat-square" alt="TypeScript" />
   <img src="https://img.shields.io/badge/WebGPU-primary-76B900?style=flat-square" alt="WebGPU" />
-  <img src="https://img.shields.io/badge/Tests-745_passing-brightgreen?style=flat-square" alt="Tests" />
+  <img src="https://img.shields.io/badge/Tests-Vitest_+_Playwright-brightgreen?style=flat-square" alt="Tests: Vitest and Playwright" />
 </p>
+
+> **In development.** Painting, layers and PNG/JPEG export work, but projects aren't saved between sessions yet. See [Status](#status) and the [completion plan](docs/completion-plan.md).
 
 ---
 
@@ -24,13 +26,13 @@
 ### Brush Engine
 - **Stamp-based rendering** — smooth strokes via Catmull-Rom spline interpolation
 - **12 brush presets** across 5 categories: Draw, Paint, Sketch, Blend, Utility
-- **Procedural textures** — 12 shape textures + 4 grain textures, deterministically generated
-- **Pressure sensitivity** — opacity and size respond to pen pressure and tilt
+- **Procedural textures** — 12 shape textures + 4 grain textures are generated, but strokes don't use them yet: every brush stamps a round tip
+- **Pressure sensitivity** — opacity and size respond to pen pressure (tilt isn't used yet)
 - **Configurable smoothing** — per-brush stroke smoothing with exponential filter
 
 ### Layers
 - Up to 20 layers with full compositing pipeline
-- 8 blend modes: Normal, Multiply, Screen, Overlay, Soft Light, Add, Color, Luminosity
+- 26 blend modes (Hue and Dissolve still draw as Normal)
 - Per-layer opacity, visibility, lock, alpha lock, and clipping masks
 - Drag-and-drop reorder, duplicate, merge down
 - Live thumbnail previews
@@ -45,29 +47,24 @@
 ### Selection & Transform
 - Rectangle, ellipse, freehand lasso, and magic wand selection tools
 - Selection modes: new, add, subtract, intersect (via Shift/Alt modifiers)
-- Feather radius and magic wand tolerance controls
+- Magic wand tolerance control (the Feather slider isn't connected yet)
 - Marching ants animation overlay
-- Bilinear interpolation for smooth transforms
 
 ### Canvas Navigation
 - Two-canvas architecture: PixiJS static canvas + HTML overlay
 - Pinch-zoom, two-finger rotate, pan (Space+drag)
 - Ctrl+wheel zoom, Shift+wheel horizontal scroll
-- Coalesced and predicted pointer events for low-latency input
+- Coalesced pointer events, so fast pen strokes keep every sample
 
 ### Export & Persistence
-- **Auto-save** to IndexedDB — debounced 5s after each stroke
-- **Manual save** — Ctrl+S for immediate persistence
 - **PNG** export — full-resolution composite
 - **JPEG** export — with quality slider (Low/Medium/High/Max)
-- **PSD** export — layers preserved with blend mode mapping via ag-psd
-- **.qart** format — portable ZIP archive with manifest + per-layer pixel data
-- **.qart** import — restore projects from exported files
-- **Gallery view** — project grid with thumbnails, create/open/delete/duplicate
+- **PSD** and **.qart** (ZIP archive with a manifest and per-layer pixel data): the writers exist but aren't connected to the Export dialog yet
+- **Saving:** auto-save, Ctrl+S and the Gallery are not connected yet, so a project lasts only until the page closes
 
 ### Undo/Redo
 - Full-layer snapshot undo with 50-state history
-- Supports both layer (stroke) and selection undo entries
+- Supports both layer (stroke) and selection undo entries; deleting, merging and reordering layers can't be undone yet
 - Keyboard shortcuts: Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y
 
 ---
@@ -98,14 +95,20 @@ npm install
 # Start dev server
 npm run dev
 
-# Run tests
-npx vitest run
+# Run unit tests
+npm test
 
 # Run a single test file
 npx vitest run src/engine/brush/BrushEngine.test.ts
 
-# Type check
-npx tsc --noEmit
+# Type check, lint, unit tests and production build in one go
+npm run verify
+
+# End-to-end and real-GPU pixel tests in Chromium, Firefox and WebKit
+# (first run: npx playwright install)
+npm run e2e
+npm run e2e:gpu      # only the GPU pixel tests
+npm run e2e:webgpu   # the GPU pixel tests on WebGPU in Chromium
 
 # Build for production
 npm run build
@@ -123,8 +126,8 @@ src/
 │   ├── input/         # InputManager (pointer, gesture, keyboard)
 │   ├── layers/        # LayerManager, LayerCompositor, TileManager
 │   ├── selection/     # SelectionManager, SelectionController, tool implementations
-│   ├── transform/     # TransformManager with bilinear interpolation
-│   ├── shaders/       # GLSL ES 3.0 + WGSL blend mode shaders
+│   ├── transform/     # TransformManager, TransformController
+│   ├── shaders/       # CPU blend modes, GLSL ES 3.0 + WGSL filter shaders
 │   ├── undo/          # UndoManager (layer + selection entries)
 │   └── renderer.ts    # PixiJS init (WebGPU → WebGL fallback)
 ├── components/        # React UI components
@@ -165,7 +168,7 @@ src/
 |----------|--------|
 | Ctrl+Z | Undo |
 | Ctrl+Shift+Z / Ctrl+Y | Redo |
-| Ctrl+S | Save |
+| Ctrl+S | Save (not connected yet) |
 | Ctrl+A | Select All |
 | Ctrl+D | Deselect |
 | Ctrl+Shift+I | Invert Selection |
@@ -176,19 +179,23 @@ src/
 
 ---
 
-## Sprint Progress
+## Status
 
-| Sprint | Status | Focus |
-|--------|--------|-------|
-| 1 — Scaffolding & Canvas | Done | Vite, PixiJS, two-canvas, gestures |
-| 2 — Brush Engine | Done | Stamp rendering, smoothing, interpolation, undo |
-| 3 — Layer System | Done | Layer CRUD, compositing, blend modes |
-| 4 — Brushes & Color | Done | 12 presets, HSB picker, harmony, palettes |
-| 5 — Selection & Transform | Done | Rect/ellipse/lasso/wand, marching ants, bilinear |
-| 6 — Export & Persistence | Done | IndexedDB, PNG/JPEG/PSD/.qart, gallery |
-| 7 — Filters | Planned | Blur, sharpen, HSB adjust, curves |
-| 8 — Performance | Planned | WASM, tile streaming, WebWorkers |
-| 9 — Polish | Planned | Onboarding, accessibility, PWA |
+QUAR Artist is not ready for real work yet. The remaining work for the MVP and v1.0 is planned in [docs/completion-plan.md](docs/completion-plan.md), which also lists every known bug (Appendix A) with the work package that fixes it.
+
+| Area | Where it stands |
+|------|-----------------|
+| Painting | Works: 12 brush presets, pressure, smoothing. Every brush stamps a plain round tip, strokes end up to one stamp short of where the pen lifts, and opacity builds up like flow (M3) |
+| Pen and touch | Pressure, pinch-zoom, two-finger rotate and pan work. The first finger of a pinch leaves a dab, and there's no palm rejection (M3.1, M3.2) |
+| Layers | Works: up to 20 layers, opacity, visibility, lock, reorder, duplicate, merge down. Clipping masks and alpha lock follow only the red channel, Merge Down ignores blend modes, and deleting, merging or reordering layers can't be undone (M2, M3) |
+| Blend modes | 24 of 26 match the reference over opaque layers. Hue and Dissolve draw as Normal, and most modes are wrong over transparent areas (M2.4) |
+| Colour | Works: colour disc, harmonies, palettes, recent colours. Palettes aren't saved yet (M1.9) |
+| Selection and transform | The tools work, but brush strokes and transforms ignore the selection, Feather does nothing, and transform handles misbehave after a rotation (M4.1–M4.3) |
+| Filters | Gaussian blur, sharpen, HSB adjustment, curves. Strokes made while a filter dialog is open are lost (M4.10) |
+| Saving | Not yet: nothing is saved between sessions, and the Gallery stays empty (M1) |
+| Export | PNG and JPEG work. PSD and .qart aren't connected yet (M1.6, M1.7) |
+| Rendering | WebGPU, or WebGL 2 where WebGPU isn't available |
+| Tests | Vitest unit tests, plus Playwright end-to-end and real-GPU pixel tests in Chromium (WebGPU and WebGL 2), Firefox and WebKit |
 
 ---
 

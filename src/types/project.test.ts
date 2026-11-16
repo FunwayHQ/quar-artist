@@ -24,6 +24,7 @@ describe('project types', () => {
 
   it('ProjectMeta type is structurally valid', () => {
     const meta: ProjectMeta = {
+      id: 'p1',
       name: 'Test',
       width: 1920,
       height: 1080,
@@ -32,7 +33,7 @@ describe('project types', () => {
       updatedAt: new Date(),
     }
     expect(meta.name).toBe('Test')
-    expect(meta.id).toBeUndefined()
+    expect(meta.id).toBe('p1')
   })
 
   it('CanvasConfig has required fields', () => {

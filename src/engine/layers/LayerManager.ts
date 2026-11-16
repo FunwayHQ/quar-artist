@@ -5,11 +5,7 @@ import { MAX_LAYERS } from '../../types/layer.ts'
 import { get2dContext } from '../../utils/canvas2d.ts'
 import { asClampedBytes } from '../../utils/typedArrays.ts'
 import { readPixels } from '../utils/readback.ts'
-
-let nextId = 1
-function generateLayerId(): string {
-  return `layer_${nextId++}`
-}
+import { createId } from '../../utils/id.ts'
 
 export interface Layer {
   info: LayerInfo
@@ -101,7 +97,7 @@ export class LayerManager {
   createLayer(name?: string): string | null {
     if (this.layers.length >= MAX_LAYERS) return null
 
-    const id = generateLayerId()
+    const id = createId()
     const texture = RenderTexture.create({
       width: this.canvasWidth,
       height: this.canvasHeight,
@@ -165,7 +161,7 @@ export class LayerManager {
     if (sourceIdx < 0) return null
 
     const source = this.layers[sourceIdx]
-    const newId = generateLayerId()
+    const newId = createId()
     const texture = RenderTexture.create({
       width: this.canvasWidth,
       height: this.canvasHeight,
@@ -397,9 +393,4 @@ export class LayerManager {
   private notifyStructuralChange() {
     this.onStructuralChange?.()
   }
-}
-
-/** Reset the id counter (for testing). */
-export function _resetLayerIdCounter() {
-  nextId = 1
 }

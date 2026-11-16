@@ -28,6 +28,7 @@ const TimelapseExportDialog = lazy(() => import('@components/dialogs/TimelapseEx
 const QuickMenuSettingsDialog = lazy(() => import('@components/dialogs/QuickMenuSettingsDialog.tsx').then(m => ({ default: m.QuickMenuSettingsDialog })))
 import { useEngine } from '@hooks/useEngine.ts'
 import { getBackend } from '@engine/renderer.ts'
+import { createId } from './utils/id.ts'
 import { useKeyboardShortcuts } from '@hooks/useKeyboardShortcuts.ts'
 import { useGlobalErrorToasts } from '@hooks/useGlobalErrorToasts.ts'
 import { useBrushStore } from '@stores/brushStore.ts'
@@ -286,7 +287,7 @@ export default function App() {
 
   // New project handler
   const handleNewProject = useCallback((name: string, width: number, height: number, dpi: number) => {
-    useProjectStore.getState().setCurrentProject(Date.now(), name, width, height, dpi)
+    useProjectStore.getState().setCurrentProject(createId(), name, width, height, dpi)
     useUIStore.getState().setShowNewProjectDialog(false)
     // Engine reinit will happen via the view change
   }, [])
@@ -300,7 +301,7 @@ export default function App() {
 
   // Gallery handlers
   // TODO(F03, plan M1.1): load the project with this id. Today it only switches view.
-  const handleOpenProject = useCallback((_id: number) => {
+  const handleOpenProject = useCallback((_id: string) => {
     useProjectStore.getState().setView('canvas')
   }, [])
 

@@ -134,7 +134,7 @@ flowchart LR
   M6 --> M10
 ```
 
-**Immediate next steps:** M0.1 → M0.3 → M0.4 → M0.5 → M0.6 (M0.2 skipped).
+**Immediate next steps:** M0 is done (M0.2 skipped). Next is M1, starting with M1.1.
 
 ---
 
@@ -233,11 +233,18 @@ flowchart LR
     - F07 is fixed on Chromium and WebKit. On Firefox, semi-transparent colours still shift slightly, because its 2D canvas rounds premultiplied colour up and undo, redo and export all pass through one (F103, found here; M1.8 and M2.2). Measured: +2 levels per undo at 50% alpha, +4 in an exported PNG at 25% alpha.
     - The harness decodes exported PNGs in Node instead of through a 2D canvas, so the export tests check the file to within 1 level. Known-bug markers can also be limited to particular browsers.
     - New e2e tests: right- and middle-button drags don't paint; a pen lifting to zero pressure tapers the stroke.
-- [ ] **M0.6 Housekeeping** · S · fixes F55, F62, F80, F98
+- [x] **M0.6 Housekeeping** · S · fixes F55, F62, F80, F98, F11 (colliding ids)
   - Unique ids for projects and layers (D12).
   - The overlay canvas redraws only when something changed, not on every frame.
   - Remove dead code: `TransformManager.applyToPixels` and `createBlendFilter`.
   - Make the README status table match reality and link to this plan.
+  - **Done 2026-11-16.** Notes:
+    - Projects and layers get UUIDs from `utils/id.ts` (D12). `crypto.randomUUID` only exists in secure contexts, so `createId` falls back to `crypto.getRandomValues` elsewhere, for example on the dev server opened from a tablet over plain HTTP.
+    - Layer ids no longer restart at `layer_1` on every page load (F98). The .qart writer names each layer's file after its id, so two layers can no longer end up in one file (the colliding-ids part of F11).
+    - The IndexedDB schema is now version 2: projects are keyed by their UUID instead of an auto-incremented number. Upgrading from version 1 gives each project a UUID and points its layers and tiles at it. Layers and tiles whose project no longer exists are dropped. Unit tests run the upgrade on a version 1 database.
+    - The overlay is drawn on demand (F62). `CanvasManager.requestOverlayRender()` draws it once on the next frame, however many times it is called in between. Pointer input, view changes, resizes, tool, guide and selection changes and transforms call it. A shown selection keeps it animating for the marching ants; otherwise an idle canvas no longer redraws 60 times a second.
+    - Dead code removed (F55): `TransformManager.applyToPixels` and `bilinearSample`, and `engine/shaders/blend/blendFilters.ts` (`createBlendFilter`) with its HSL helpers. The list of modes the compositor blends on the CPU moved to `cpuBlend.ts` as `CPU_BLEND_MODES`.
+    - README (F80): a Status section by area, linked to this plan and its findings, replaces the sprint table. The feature list no longer claims what doesn't work yet: saving, PSD and .qart export, tilt, brush textures, Feather and predicted pointer events. M6.7 rewrites it for the release.
 
 ### M1 — Never lose work
 

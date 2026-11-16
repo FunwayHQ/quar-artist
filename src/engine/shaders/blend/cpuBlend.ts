@@ -6,6 +6,23 @@ import type { BlendMode } from '../../../types/layer.ts'
  * All functions operate on straight (non-premultiplied) RGBA [0-1] values.
  */
 
+/**
+ * Modes the compositor blends on the CPU, with cpuBlendLayers. LayerCompositor
+ * draws them as Normal through PixiJS and checks this set to blend them here
+ * instead. The shader compositor (plan M2.4) moves them to the GPU.
+ */
+export const CPU_BLEND_MODES: ReadonlySet<BlendMode> = new Set<BlendMode>([
+  'vividLight',
+  'linearLight',
+  'pinLight',
+  'hardMix',
+  'subtract',
+  'divide',
+  'darkerColor',
+  'lighterColor',
+  'dissolve',
+])
+
 function clamp01(v: number): number {
   return Math.max(0, Math.min(1, v))
 }

@@ -258,6 +258,58 @@ describe('CanvasManager', () => {
     })
   })
 
+  describe('overlay rendering (F62)', () => {
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame'] })
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('draws once after start-up, then waits for a change', async () => {
+      await cm.init(container)
+      expect(vi.getTimerCount()).toBe(1)
+      vi.advanceTimersToNextFrame()
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('draws once more when the view changes, however often it changes in a frame', async () => {
+      await cm.init(container)
+      vi.advanceTimersToNextFrame()
+
+      cm.viewTransform.pan(10, 0)
+      cm.viewTransform.pan(10, 0)
+      expect(vi.getTimerCount()).toBe(1)
+      vi.advanceTimersToNextFrame()
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('keeps animating the marching ants while a selection is shown', async () => {
+      await cm.init(container)
+      vi.advanceTimersToNextFrame()
+
+      cm.selectAll()
+      for (let frame = 0; frame < 3; frame++) {
+        vi.advanceTimersToNextFrame()
+        expect(vi.getTimerCount()).toBe(1)
+      }
+
+      cm.deselectAll()
+      vi.advanceTimersToNextFrame()
+      expect(vi.getTimerCount()).toBe(0)
+    })
+
+    it('stops drawing when destroyed', async () => {
+      await cm.init(container)
+      cm.selectAll()
+      cm.destroy()
+      expect(vi.getTimerCount()).toBe(0)
+      cm.requestOverlayRender()
+      expect(vi.getTimerCount()).toBe(0)
+    })
+  })
+
   describe('destroy', () => {
     it('removes canvases from DOM', async () => {
       await cm.init(container)
