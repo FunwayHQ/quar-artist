@@ -22,7 +22,9 @@ export function GalleryView({
   return (
     <div className={styles.gallery}>
       <header className={styles.header}>
-        <h1 className={styles.title}>QUAR Artist</h1>
+        <h1 className={styles.title}>
+          <img src="/logo.svg" alt="QUAR Artist" className={styles.logo} />
+        </h1>
         <p className={styles.subtitle}>Your Projects</p>
       </header>
       <div className={styles.grid}>

@@ -23,9 +23,11 @@ describe('GalleryView', () => {
     })
   })
 
-  it('renders the gallery title', () => {
+  it('shows the logo as the gallery title', () => {
     render(<GalleryView {...mockHandlers} />)
-    expect(screen.getByText('QUAR Artist')).toBeInTheDocument()
+    const logo = screen.getByAltText('QUAR Artist')
+    expect(logo).toHaveAttribute('src', '/logo.svg')
+    expect(logo.closest('h1')).not.toBeNull()
   })
 
   it('renders the subtitle', () => {

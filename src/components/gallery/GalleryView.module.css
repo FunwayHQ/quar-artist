@@ -12,13 +12,13 @@
 }
 
 .title {
-  font-family: var(--font-family-ui);
-  font-size: 28px;
-  font-weight: var(--font-weight-bold);
-  color: var(--color-accent-primary);
-  letter-spacing: 2px;
-  text-transform: uppercase;
   margin: 0;
+  line-height: 0;
+}
+
+.logo {
+  height: 64px;
+  width: auto;
 }
 
 .subtitle {
