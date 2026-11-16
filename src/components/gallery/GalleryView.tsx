@@ -6,6 +6,7 @@ import type { GallerySort } from '../../types/project.ts'
 import { ProjectCard } from './ProjectCard.tsx'
 import { StackCard } from './StackCard.tsx'
 import { MoveToStackDialog } from './MoveToStackDialog.tsx'
+import { StorageUsage } from './StorageUsage.tsx'
 import { sortProjects, stackEntries, unstackedProjects } from './gallerySort.ts'
 import styles from './GalleryView.module.css'
 
@@ -103,6 +104,7 @@ export function GalleryView({ actions }: { actions: GalleryActions }) {
           )}
         </div>
         <div className={styles.toolbarEnd}>
+          <StorageUsage refreshKey={projects} />
           <label className={styles.sortLabel}>
             Sort
             <select

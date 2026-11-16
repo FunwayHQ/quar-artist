@@ -4,7 +4,7 @@ import { resetDB } from '../../db/schema.ts'
 import type { LayerInfo } from '../../types/layer.ts'
 import { IdbTileBackend } from './IdbTileBackend.ts'
 import { serveDocumentStore, type ServedStore, type StorePort } from './storeProtocol.ts'
-import { TileStore } from './TileStore.ts'
+import { TileStore, isStaleSave } from './TileStore.ts'
 import { WorkerDocumentStore, type WorkerLike } from './WorkerDocumentStore.ts'
 import { sameBytes } from '../../test/bytes.ts'
 
@@ -123,6 +123,26 @@ describe('WorkerDocumentStore', () => {
     expect(local).not.toHaveBeenCalled()
   })
 
+  it('moves the pixels of changed tiles to the worker too, and lists stored projects through it (plan M1.3)', async () => {
+    const worker = new LoopbackWorker(idbStore())
+    const store = new WorkerDocumentStore(() => worker, idbStore)
+    const first = await store.save('p', { width: 300, height: 20, layers: [{ info, pixels: opaque(300, 20) }] })
+
+    const tile = opaque(44, 20, 90)
+    const report = await store.save('p', {
+      width: 300,
+      height: 20,
+      base: first.seq,
+      layers: [{ info, pixels: null, tiles: [{ x: 1, y: 0, pixels: tile }] }],
+    })
+    expect(report).toMatchObject({ seq: 2, written: 1, kept: 1 })
+    expect(tile.byteLength).toBe(0)
+    const doc = (await store.load('p'))!
+    expect(doc.seq).toBe(2)
+    expect(doc.layers[0].pixels![(10 * 300 + 280) * 4]).toBe(90)
+    expect(await store.storedProjects()).toEqual(['p'])
+  })
+
   it("keeps an error's name across the worker, so a full storage is reported as one", async () => {
     const inner = idbStore()
     vi.spyOn(inner, 'save').mockRejectedValue(new DOMException('no room', 'QuotaExceededError'))
@@ -131,6 +151,12 @@ describe('WorkerDocumentStore', () => {
       name: 'QuotaExceededError',
       message: 'no room',
     })
+  })
+
+  it('keeps a refused save recognisable across the worker', async () => {
+    const store = new WorkerDocumentStore(() => new LoopbackWorker(idbStore()), idbStore)
+    const stale = store.save('never', { width: 1, height: 1, base: 1, layers: [{ info, pixels: null, tiles: [] }] })
+    await expect(stale).rejects.toSatisfy(isStaleSave)
   })
 
   it('answers calls in any order', async () => {

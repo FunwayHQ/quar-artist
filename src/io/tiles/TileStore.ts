@@ -1,6 +1,7 @@
 import { getDB } from '../../db/schema.ts'
 import { inTransaction } from '../../db/transaction.ts'
 import type { LayerInfo, StoredLayer } from '../../types/layer.ts'
+import { tileBounds, type TilePixels } from '../../utils/tiles.ts'
 import { IdbTileBackend } from './IdbTileBackend.ts'
 import { OpfsTileBackend, openOpfsRoot } from './OpfsTileBackend.ts'
 import { withDocumentLock } from './locks.ts'
@@ -14,6 +15,7 @@ import {
   placeTile,
   savedLayerInfo,
   tileColumns,
+  tileFromPixels,
   tileRows,
   type DocumentManifest,
   type ManifestLayer,
@@ -21,10 +23,17 @@ import {
   type TileEntry,
 } from './tileFormat.ts'
 
-/** A layer to save. Pixels are straight RGBA8 at document size; null keeps what was saved for it last time. */
+/**
+ * A layer to save. `pixels` is the whole layer, straight RGBA8 at document
+ * size. Without them (null), the layer is what was saved for it, with
+ * `tiles` changed on top: in the save the document names as its `base`, or
+ * else in the last save.
+ */
 export interface SaveLayer {
   info: LayerInfo
   pixels: Uint8Array | null
+  /** With null pixels: the tiles changed since, each the straight RGBA8 of its part of the document (`tileBounds`). */
+  tiles?: TilePixels[]
 }
 
 export interface DocumentToSave {
@@ -32,10 +41,32 @@ export interface DocumentToSave {
   height: number
   /** Bottom first. */
   layers: SaveLayer[]
+  /**
+   * The save (its `seq`) that layers without pixels build on (plan M1.3).
+   * If the project's last save is another one, say from another tab, or of
+   * another size, the save is refused with a StaleSaveError: the caller
+   * saves whole layers instead, so what is saved is what it shows.
+   */
+  base?: number
+}
+
+/** A save built on a save that is no longer the last one. Nothing was written: save whole layers. */
+export class StaleSaveError extends Error {
+  constructor() {
+    super('the project was saved elsewhere since')
+    this.name = 'StaleSaveError'
+  }
+}
+
+/** Whether an error, maybe from across the worker, is a StaleSaveError. */
+export function isStaleSave(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'StaleSaveError'
 }
 
 export interface SaveReport {
   backend: TileBackendKind
+  /** The save's number: the `base` for the next save that builds on it. */
+  seq: number
   /** Tiles written, and tiles kept from the last save because they didn't change. */
   written: number
   kept: number
@@ -44,6 +75,8 @@ export interface SaveReport {
 }
 
 export interface SavedDocument {
+  /** The save's number, to build the next save on. */
+  seq: number
   width: number
   height: number
   /** Bottom first. A layer without pixels has none. */
@@ -66,6 +99,8 @@ export interface DocumentStore {
   copy(fromProjectId: string, toProjectId: string): Promise<boolean>
   /** Remove a project's saved document. Nothing to remove is fine. */
   delete(projectId: string): Promise<void>
+  /** The projects that have something saved: a manifest, or tiles in any backend. */
+  storedProjects(): Promise<string[]>
 }
 
 interface Backends {
@@ -140,13 +175,19 @@ export class TileStore implements DocumentStore {
     return withDocumentLock(projectId, 'exclusive', async () => {
       const { write, read } = await this.backends
       const previous = await readManifest(projectId)
+      if (doc.base !== undefined && doc.layers.some((l) => l.pixels === null)) {
+        const usable =
+          previous?.format === TILE_FORMAT && previous.seq === doc.base &&
+          previous.width === doc.width && previous.height === doc.height
+        if (!usable) throw new StaleSaveError()
+      }
       // Tiles of another format are never mixed in. Only a newer version writes one, and this one can't open it.
       const before = previous?.format === TILE_FORMAT ? tilesByLayer(previous) : null
       // Tiles kept from the last save have to be where this save writes.
       const sameStore = previous?.backend === write.kind
 
       const writer = write.begin(projectId)
-      const report: SaveReport = { backend: write.kind, written: 0, kept: 0, bytes: 0 }
+      const report: SaveReport = { backend: write.kind, seq: 0, written: 0, kept: 0, bytes: 0 }
       const layers: ManifestLayer[] = []
       let manifest: DocumentManifest
       try {
@@ -178,16 +219,50 @@ export class TileStore implements DocumentStore {
                 report.bytes += data.byteLength
               }
             }
-          } else if (!old) {
-            // Nothing saved for it yet.
-            tiles = []
-          } else if (sameStore) {
-            tiles = [...old.values()]
-            report.kept += tiles.length
           } else {
-            const source = read[previous!.backend]
-            if (!source) throw new Error(`the saved layer “${info.name}” can't be read here`)
-            tiles = await moveTiles(source, writer, projectId, info, [...old.values()], report, this.onProgress)
+            // What was saved for it (nothing, for a new layer), with the changed tiles on top.
+            const result = new Map(old ?? [])
+            const written = new Set<string>()
+            for (const changed of layer.tiles ?? []) {
+              this.onProgress?.()
+              const key = positionKey(changed.x, changed.y)
+              const bounds = tileBounds(changed.x, changed.y, doc.width, doc.height)
+              if (
+                !Number.isInteger(changed.x) || !Number.isInteger(changed.y) || changed.x < 0 || changed.y < 0 ||
+                bounds.width <= 0 || bounds.height <= 0 || changed.pixels.length !== bounds.width * bounds.height * 4
+              ) {
+                throw new Error(`a changed tile of layer “${info.name}” doesn't fit the document`)
+              }
+              const tile = tileFromPixels(changed.pixels, bounds.width, bounds.height)
+              if (isEmptyTile(tile)) {
+                result.delete(key)
+                continue
+              }
+              const hash = await hashTile(tile)
+              const last = sameStore ? old?.get(key) : undefined
+              if (last?.hash === hash) {
+                result.set(key, last)
+                continue
+              }
+              const { codec, data } = await encodeTile(tile)
+              result.set(key, { x: changed.x, y: changed.y, hash, codec, ref: await writer.put(info.id, changed.x, changed.y, data) })
+              written.add(key)
+              report.written++
+              report.bytes += data.byteLength
+            }
+            const unchanged = [...result].filter(([key]) => !written.has(key)).map(([, entry]) => entry)
+            if (sameStore || unchanged.length === 0) {
+              report.kept += unchanged.length
+            } else {
+              // The rest are in the backend the last save used: move them here.
+              const source = read[previous!.backend]
+              if (!source) throw new Error(`the saved layer “${info.name}” can't be read here`)
+              for (const entry of unchanged) result.delete(positionKey(entry.x, entry.y))
+              for (const entry of await moveTiles(source, writer, projectId, info, unchanged, report, this.onProgress)) {
+                result.set(positionKey(entry.x, entry.y), entry)
+              }
+            }
+            tiles = [...result.values()].sort((a, b) => a.y - b.y || a.x - b.x)
           }
           layers.push({ info, tiles })
         }
@@ -211,6 +286,7 @@ export class TileStore implements DocumentStore {
 
       // The save counts from here. Removing what it replaced can fail without harm: the next save sweeps.
       await this.removeReplaced(projectId, previous, manifest).catch(() => this.swept.delete(projectId))
+      report.seq = manifest.seq
       return report
     })
   }
@@ -243,7 +319,7 @@ export class TileStore implements DocumentStore {
         }
         layers.push({ info, pixels: new Uint8Array(pixels.buffer) })
       }
-      return { width, height, layers, unreadableTiles }
+      return { seq: manifest.seq, width, height, layers, unreadableTiles }
     })
   }
 
@@ -257,7 +333,7 @@ export class TileStore implements DocumentStore {
         if (!from) throw new Error("its layers are kept in storage this browser can't open now")
 
         const writer = write.begin(toProjectId)
-        const report: SaveReport = { backend: write.kind, written: 0, kept: 0, bytes: 0 }
+        const report: SaveReport = { backend: write.kind, seq: 1, written: 0, kept: 0, bytes: 0 }
         const layers: ManifestLayer[] = []
         for (const { info, tiles } of source.layers) {
           layers.push({ info, tiles: await moveTiles(from, writer, fromProjectId, info, tiles, report, this.onProgress, true) })
@@ -283,6 +359,14 @@ export class TileStore implements DocumentStore {
       }
       this.swept.delete(projectId)
     })
+  }
+
+  async storedProjects(): Promise<string[]> {
+    const ids = new Set((await (await getDB()).getAllKeys('documents')) as string[])
+    for (const backend of Object.values((await this.backends).read)) {
+      for (const id of await backend.listProjects()) ids.add(id)
+    }
+    return [...ids]
   }
 
   /** Remove the tiles a commit replaced, and the layers it dropped. */

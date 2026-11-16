@@ -1,25 +1,41 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 
 vi.mock('pixi.js', () => {
   class BufferImageSource {
     options: Record<string, unknown>
     constructor(options: Record<string, unknown>) { this.options = options }
   }
+  class Rectangle {
+    x: number
+    y: number
+    width: number
+    height: number
+    constructor(x: number, y: number, width: number, height: number) {
+      this.x = x
+      this.y = y
+      this.width = width
+      this.height = height
+    }
+  }
   class Texture {
     source: BufferImageSource
+    frame: Rectangle | undefined
     destroy = vi.fn()
-    constructor({ source }: { source: BufferImageSource }) { this.source = source }
+    constructor({ source, frame }: { source: BufferImageSource; frame?: Rectangle }) {
+      this.source = source
+      this.frame = frame
+    }
   }
   class Sprite {
     texture: Texture
     destroy = vi.fn()
     constructor(texture: Texture) { this.texture = texture }
   }
-  return { RendererType: { WEBGL: 1, WEBGPU: 2, CANVAS: 4 }, BufferImageSource, Texture, Sprite }
+  return { RendererType: { WEBGL: 1, WEBGPU: 2, CANVAS: 4 }, BufferImageSource, Rectangle, Texture, Sprite }
 })
 
-import type { Renderer, RenderTexture } from 'pixi.js'
-import { premultiply, readPixels, unpremultiply, writePixels } from './readback.ts'
+import { Texture, type Renderer, type RenderTexture } from 'pixi.js'
+import { premultiply, readPixels, readRegions, unpremultiply, writePixels } from './readback.ts'
 
 describe('unpremultiply', () => {
   it('restores straight colour from premultiplied pixels', () => {
@@ -103,3 +119,79 @@ describe('writePixels', () => {
   })
 })
 
+describe('readRegions (plan M1.3)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllGlobals()
+  })
+
+  it('reads each rectangle on WebGL through a view of the layer, then lets the view go', () => {
+    const getPixels = vi.fn((_view: Texture) => ({ pixels: new Uint8ClampedArray([128, 0, 0, 128]), width: 1, height: 1 }))
+    const renderer = { type: 1, texture: { getPixels } }
+    const layer = new Texture({ source: { id: 'layer' } as never })
+
+    const read = readRegions(renderer as never, layer, [
+      { x: 256, y: 0, width: 1, height: 1 },
+      { x: 0, y: 512, width: 1, height: 1 },
+    ])
+
+    // Straight alpha, as from readPixels.
+    expect(read.map((pixels) => [...pixels])).toEqual([[255, 0, 0, 128], [255, 0, 0, 128]])
+    const views = getPixels.mock.calls.map(([view]) => view)
+    expect(views.map((v) => v.source)).toEqual([layer.source, layer.source])
+    expect(views.map((v) => ({ ...v.frame }))).toEqual([
+      { x: 256, y: 0, width: 1, height: 1 },
+      { x: 0, y: 512, width: 1, height: 1 },
+    ])
+    // Without the layer's texture source, which stays.
+    expect(views.map((v) => vi.mocked(v.destroy).mock.calls)).toEqual([[[false]], [[false]]])
+  })
+
+  it('copies just the rectangle on WebGPU, through canvases made for reading', () => {
+    vi.stubGlobal('GPUTextureUsage', { COPY_SRC: 1, COPY_DST: 2 })
+    const configure = vi.fn()
+    const unconfigure = vi.fn()
+    const current = { id: 'canvas texture' }
+    const webgpu = { configure, unconfigure, getCurrentTexture: () => current }
+    const canvas2d = { width: 0, height: 0 }
+    const getImageData = vi.fn((_x: number, _y: number, w: number, h: number) => ({ data: new Uint8ClampedArray(w * h * 4).fill(9) }))
+    const context2d = { canvas: canvas2d, clearRect: vi.fn(), drawImage: vi.fn(), getImageData }
+    const contextOptions: unknown[] = []
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(function (this: HTMLCanvasElement, kind: string, options?: unknown) {
+      if (kind === '2d') {
+        contextOptions.push(options)
+        return context2d as never
+      }
+      return webgpu as never
+    })
+    const copyTextureToTexture = vi.fn()
+    const submit = vi.fn()
+    const device = {
+      createCommandEncoder: () => ({ copyTextureToTexture, finish: () => 'commands' }),
+      queue: { submit },
+    }
+    const gpuSource = { format: 'bgra8unorm' }
+    const renderer = { type: 2, gpu: { device }, texture: { getGpuSource: () => gpuSource } }
+
+    const [pixels] = readRegions(renderer as never, new Texture({ source: {} as never }), [{ x: 512, y: 256, width: 3, height: 2 }])
+
+    expect(pixels).toHaveLength(3 * 2 * 4)
+    expect(contextOptions).toEqual([{ willReadFrequently: true }])
+    expect(configure).toHaveBeenCalledWith(expect.objectContaining({ device, format: 'bgra8unorm', alphaMode: 'premultiplied' }))
+    expect(copyTextureToTexture).toHaveBeenCalledWith(
+      { texture: gpuSource, origin: { x: 512, y: 256 } },
+      { texture: current },
+      { width: 3, height: 2 },
+    )
+    expect(submit).toHaveBeenCalledWith(['commands'])
+    expect(getImageData).toHaveBeenCalledWith(0, 0, 3, 2)
+    expect(unconfigure).toHaveBeenCalled()
+  })
+
+  it('renders the rectangle out with PixiJS on WebGPU when no canvas takes the texture format', () => {
+    const extract = vi.fn(() => ({ pixels: new Uint8ClampedArray(4), width: 1, height: 1 }))
+    const renderer = { type: 2, extract: { pixels: extract }, texture: { getGpuSource: () => ({ format: 'r8unorm' }) } }
+    readRegions(renderer as never, new Texture({ source: {} as never }), [{ x: 1, y: 2, width: 1, height: 1 }])
+    expect(extract).toHaveBeenCalledWith(expect.objectContaining({ frame: { x: 1, y: 2, width: 1, height: 1 }, resolution: 1 }))
+  })
+})

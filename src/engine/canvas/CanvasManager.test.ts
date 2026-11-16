@@ -411,6 +411,92 @@ describe('CanvasManager', () => {
       expect(cm.getDocumentSize()).toEqual({ width: 4, height: 4 })
     })
 
+    it('records the tiles each change touched, for the next save to read (M1.3)', () => {
+      const snapshot = (value: number) => ({ width: 4, height: 4, data: new Uint8Array(64).fill(value) })
+      const bottom = cm.getActiveLayerId()
+      const ink = cm.layerManager.createLayer('Ink')!
+      cm.brushEngine.undoManager.pushEntry({ type: 'layer', layerId: ink, before: snapshot(0), after: snapshot(9) })
+      cm.brushEngine.undoManager.pushEntry({ type: 'layer', layerId: bottom, before: snapshot(1), after: snapshot(1) })
+
+      expect(cm.takeChanges()).toEqual(new Map([[ink, new Set(['0_0'])], [bottom, new Set()]]))
+      // Taken: a new record starts.
+      expect(cm.takeChanges()).toEqual(new Map())
+
+      // A layer changed throughout stays so; a deleted one drops out.
+      const copy = cm.layerManager.duplicateLayer(ink)!
+      cm.brushEngine.undoManager.pushEntry({ type: 'layer', layerId: copy, before: snapshot(0), after: snapshot(5) })
+      const gone = cm.layerManager.createLayer('Gone')!
+      cm.layerManager.deleteLayer(gone)
+      expect(cm.takeChanges()).toEqual(new Map([[copy, 'all']]))
+    })
+
+    it('records undo and redo as changing the whole layer once it changed outside the history (review of M1.3)', async () => {
+      const snapshot = (value: number) => ({ width: 4, height: 4, data: new Uint8Array(64).fill(value) })
+      const bottom = cm.getActiveLayerId()
+      cm.brushEngine.undoManager.pushEntry({ type: 'layer', layerId: bottom, before: snapshot(1), after: snapshot(1) })
+      const top = cm.layerManager.createLayer('Top')!
+      expect(cm.layerManager.mergeDown(top)).toBe(true)
+      cm.takeChanges()
+      // Restoring pixels needs a GPU: only what gets recorded matters here.
+      vi.spyOn(cm as unknown as { restoreLayerSnapshot: () => void }, 'restoreLayerSnapshot').mockImplementation(() => {})
+
+      expect(await cm.performUndo()).toBe(true)
+      expect(cm.takeChanges()).toEqual(new Map([[bottom, 'all']]))
+      expect(await cm.performRedo()).toBe(true)
+      expect(cm.takeChanges()).toEqual(new Map([[bottom, 'all']]))
+    })
+
+    it("drops the brush's snapshot of a layer whenever something else changes it (review of M1.3)", () => {
+      const snapshot = (value: number) => ({ width: 4, height: 4, data: new Uint8Array(64).fill(value) })
+      const clear = vi.spyOn(cm.brushEngine, 'clearSnapshotCache')
+      // A fill, a filter or a transform: a step the brush didn't take.
+      cm.brushEngine.undoManager.pushEntry({ type: 'layer', layerId: cm.getActiveLayerId(), before: snapshot(0), after: snapshot(3) })
+      expect(clear).toHaveBeenCalledTimes(1)
+      cm.layerManager.duplicateLayer(cm.getActiveLayerId())
+      expect(clear).toHaveBeenCalledTimes(2)
+    })
+
+    it('starts a new record when a document is loaded', () => {
+      cm.layerManager.createLayer('Ink')
+      cm.loadDocument([{ info: info('a', 'Sky'), pixels: null }], 'a')
+      expect(cm.takeChanges()).toEqual(new Map())
+    })
+
+    it('reads tiles from before a preview, and none from a snapshot compressed since', () => {
+      const id = cm.getActiveLayerId()
+      const committed = { width: 4, height: 4, data: new Uint8Array(64).fill(7), compressed: false }
+      vi.spyOn(FilterManager.prototype, 'isActive').mockReturnValue(true)
+      vi.spyOn(FilterManager.prototype, 'committedPixels').mockImplementation((layerId) => (layerId === id ? committed : null))
+
+      const [tile] = cm.getLayerTiles(id, [{ x: 0, y: 0 }])!
+      expect([tile.x, tile.y]).toEqual([0, 0])
+      expect(tile.pixels).toEqual(committed.data)
+      expect(tile.pixels.buffer).not.toBe(committed.data.buffer)
+
+      committed.compressed = true
+      expect(cm.getLayerTiles(id, [{ x: 0, y: 0 }])).toBeNull()
+      expect(cm.getLayerTiles('missing', [{ x: 0, y: 0 }])).toBeNull()
+    })
+
+    it('says whether a stroke is being drawn', () => {
+      expect(cm.isDrawing()).toBe(false)
+      vi.spyOn(cm.brushEngine, 'isStroking').mockReturnValue(true)
+      expect(cm.isDrawing()).toBe(true)
+    })
+
+    it('ends a stroke still being drawn when the tool changes to one its pointer up would go to', () => {
+      const stroking = vi.spyOn(cm.brushEngine, 'isStroking').mockReturnValue(true)
+      const end = vi.spyOn(cm.brushEngine, 'endStroke').mockImplementation(() => stroking.mockReturnValue(false))
+      cm.setActiveTool('brush')
+      cm.setActiveTool('eraser')
+      // The eraser ends brush strokes too: the stroke goes on.
+      expect(end).not.toHaveBeenCalled()
+      cm.setActiveTool('selection')
+      expect(end).toHaveBeenCalledTimes(1)
+      cm.setActiveTool('move')
+      expect(end).toHaveBeenCalledTimes(1)
+    })
+
     it('stops reporting once destroyed', () => {
       const onChange = vi.fn()
       cm.setDocumentChangeCallback(onChange)

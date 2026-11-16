@@ -2,7 +2,8 @@
  * The tile store in the real app (plan M1.2): saves land as 256 × 256 tiles,
  * in OPFS where the browser lets the persistence worker write it, otherwise
  * in IndexedDB; unchanged tiles aren't written again; and projects saved the
- * old way, as whole layers, move to tiles at their next save.
+ * old way, as whole layers, move to tiles at their next save. Saves after the
+ * first read back and write only the tiles that changed (plan M1.3).
  */
 import { test, expect, type Page } from '@playwright/test'
 import { STROKE_PIXELS, canvasShot, changedPixels, drawStroke, waitForEngine } from './support/app.ts'
@@ -139,6 +140,35 @@ test('a save stores the painted tiles only, and the next keeps the ones that did
   expect(second.layers).toHaveLength(2)
   expect(second.layers.find((l) => l.id === layer.id)!.refs).toEqual(layer.refs)
   expect(second.stored).toEqual(expectedStored(second))
+})
+
+test('a change is saved by itself, on top of the last save, and opens again as painted (plan M1.3)', async ({ page }) => {
+  await page.goto('/')
+  await waitForEngine(page)
+  let shot = await canvasShot(page)
+  await drawStroke(page, { x: 0.5, y: 0.35 })
+  await expect.poll(async () => changedPixels(page, shot, await canvasShot(page))).toBeGreaterThan(STROKE_PIXELS)
+  await saveNow(page, 'Untitled Project')
+  const first = (await storedDocument(page, 'Untitled Project'))!
+
+  // Another stroke, lower down, saved a moment later on its own.
+  shot = await canvasShot(page)
+  await drawStroke(page, { x: 0.5, y: 0.75 })
+  await expect.poll(async () => changedPixels(page, shot, await canvasShot(page))).toBeGreaterThan(STROKE_PIXELS)
+  await expect.poll(async () => (await storedDocument(page, 'Untitled Project'))!.seq, { timeout: 15000 }).toBe(first.seq + 1)
+  const second = (await storedDocument(page, 'Untitled Project'))!
+  const [before] = first.layers
+  const [after] = second.layers
+  // The first stroke's tiles are kept, and the second's are added.
+  expect(after.refs).toEqual(expect.arrayContaining(before.refs))
+  expect(after.refs.length).toBeGreaterThan(before.refs.length)
+  expect(second.stored).toEqual(expectedStored(second))
+
+  const painted = await canvasShot(page)
+  await page.reload()
+  await page.getByRole('button', { name: 'Continue Untitled Project' }).click()
+  await waitForEngine(page)
+  await expect.poll(async () => changedPixels(page, painted, await canvasShot(page))).toBeLessThan(40)
 })
 
 test('a project saved before the tile store opens, and moves to tiles at its next save', async ({ page }) => {

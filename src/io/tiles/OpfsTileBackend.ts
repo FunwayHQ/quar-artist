@@ -116,6 +116,19 @@ export class OpfsTileBackend implements TileBackend {
     }
   }
 
+  async listProjects(): Promise<string[]> {
+    const ids: string[] = []
+    for (const [name, handle] of await listEntries(this.root)) {
+      if (handle.kind !== 'directory' || !name.startsWith('p-')) continue
+      try {
+        ids.push(decodeURIComponent(name.slice(2)))
+      } catch {
+        // Not a name this app gave.
+      }
+    }
+    return ids
+  }
+
   private async projectDir(projectId: string): Promise<FileSystemDirectoryHandle | null> {
     return childDir(this.root, projectDirName(projectId))
   }

@@ -78,6 +78,21 @@ describe('ExportDialog', () => {
     expect(screen.getByText('3')).toBeInTheDocument()
   })
 
+  it.each([
+    ['PSD', 'PSD'],
+    ['QART', '.qart'],
+  ])("says %s export isn't available yet, and doesn't offer it", async (tab, name) => {
+    const user = userEvent.setup()
+    render(<ExportDialog {...defaultProps} />)
+    expect(screen.queryByRole('note')).toBeNull()
+    await user.click(screen.getByText(tab))
+    expect(screen.getByRole('note')).toHaveTextContent(`${name} export isn't available yet.`)
+    const exportButton = screen.getByRole('button', { name: `Export ${tab}` })
+    expect(exportButton).toBeDisabled()
+    await user.click(exportButton)
+    expect(defaultProps.onExport).not.toHaveBeenCalled()
+  })
+
   it('calls onExport with PNG format', async () => {
     const user = userEvent.setup()
     render(<ExportDialog {...defaultProps} />)

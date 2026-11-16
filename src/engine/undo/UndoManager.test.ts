@@ -1,9 +1,16 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { UndoManager } from './UndoManager.ts'
-import type { LayerSnapshot } from './UndoManager.ts'
+import type { LayerSnapshot, LayerUndoEntry } from './UndoManager.ts'
 
 function snapshot(data: number[]): LayerSnapshot {
   return { width: 1, height: Math.ceil(data.length / 4) || 1, data: new Uint8Array(data) }
+}
+
+/** A 600 × 300 layer (3 × 2 tiles) with an opaque pixel at each point given. */
+function layerSnapshot(points: [number, number][] = []): LayerSnapshot {
+  const data = new Uint8Array(600 * 300 * 4)
+  for (const [x, y] of points) data.set([255, 0, 0, 255], (y * 600 + x) * 4)
+  return { width: 600, height: 300, data }
 }
 
 describe('UndoManager', () => {
@@ -247,6 +254,84 @@ describe('UndoManager', () => {
       undo.clear()
       expect(undo.canUndo).toBe(false)
       expect(undo.canRedo).toBe(false)
+    })
+  })
+  describe('changed tiles (plan M1.3)', () => {
+    it('reports the tiles an operation changed, once it commits', () => {
+      const onPixelChange = vi.fn()
+      undo.setPixelChangeCallback(onPixelChange)
+      undo.beginOperation(layerSnapshot([[10, 10]]), 'ink')
+      expect(onPixelChange).not.toHaveBeenCalled()
+      undo.commitOperation(layerSnapshot([[10, 10], [300, 10], [599, 299]]))
+      expect(onPixelChange).toHaveBeenCalledWith('ink', new Set(['1_0', '2_1']))
+    })
+
+    it('compares against the pixels given for a snapshot compressed since', () => {
+      const onPixelChange = vi.fn()
+      undo.setPixelChangeCallback(onPixelChange)
+      const before = layerSnapshot([[10, 10]])
+      const pixels = before.data
+      const compressed: LayerSnapshot = { ...before, data: new Uint8Array([1, 2, 3]), compressed: true }
+
+      undo.beginOperation(compressed, 'ink', pixels)
+      undo.commitOperation(layerSnapshot([[10, 10], [10, 280]]))
+      expect(onPixelChange).toHaveBeenLastCalledWith('ink', new Set(['0_1']))
+
+      // Without them, the whole layer counts as changed.
+      undo.beginOperation(compressed, 'ink')
+      undo.commitOperation(layerSnapshot([[10, 10], [10, 280]]))
+      expect(onPixelChange).toHaveBeenLastCalledWith('ink', 'all')
+    })
+
+    it('counts the whole layer as changed by any step of a layer changed outside the history (review of M1.3)', async () => {
+      undo.pushEntry({ type: 'layer', layerId: 'ink', before: layerSnapshot([[10, 10]]), after: layerSnapshot([[10, 10], [300, 10]]) })
+      undo.pushEntry({ type: 'layer', layerId: 'ink', before: layerSnapshot([[10, 10], [300, 10]]), after: layerSnapshot([[10, 280]]) })
+      undo.pushEntry({ type: 'layer', layerId: 'paper', before: layerSnapshot([]), after: layerSnapshot([[10, 10]]) })
+      const undone = await undo.undo()
+      expect(undone?.type === 'layer' && undone.tiles).toEqual(new Set(['0_0']))
+
+      undo.forgetTiles('ink')
+      const tiles = [...(undo as unknown as { undoStack: LayerUndoEntry[] }).undoStack].map((e) => e.tiles)
+      expect(tiles).toEqual(['all', 'all'])
+      // Undone steps too, for redo.
+      undo.forgetTiles('paper')
+      const redone = await undo.redo()
+      expect(redone?.type === 'layer' && redone.tiles).toBe('all')
+    })
+
+    it('counts the whole layer as changed when the sizes differ', () => {
+      const onPixelChange = vi.fn()
+      undo.setPixelChangeCallback(onPixelChange)
+      undo.beginOperation(snapshot([0, 0, 0, 0]), 'ink')
+      undo.commitOperation(layerSnapshot())
+      expect(onPixelChange).toHaveBeenCalledWith('ink', 'all')
+    })
+
+    it('works out the tiles of an entry pushed whole, before compressing it, and keeps any it was given', () => {
+      const onPixelChange = vi.fn()
+      undo.setPixelChangeCallback(onPixelChange)
+      undo.pushEntry({ type: 'layer', layerId: 'ink', before: layerSnapshot(), after: layerSnapshot([[520, 260]]) })
+      expect(onPixelChange).toHaveBeenLastCalledWith('ink', new Set(['2_1']))
+
+      undo.pushEntry({ type: 'layer', layerId: 'ink', before: layerSnapshot(), after: layerSnapshot(), tiles: 'all' })
+      expect(onPixelChange).toHaveBeenLastCalledWith('ink', 'all')
+    })
+
+    it('counts the whole layer as changed by an operation cancelled part-way', () => {
+      const onPixelChange = vi.fn()
+      undo.setPixelChangeCallback(onPixelChange)
+      undo.cancelOperation()
+      expect(onPixelChange).not.toHaveBeenCalled()
+      undo.beginOperation(layerSnapshot(), 'ink')
+      undo.cancelOperation()
+      expect(onPixelChange).toHaveBeenCalledWith('ink', 'all')
+    })
+
+    it('reports nothing for selection entries', () => {
+      const onPixelChange = vi.fn()
+      undo.setPixelChangeCallback(onPixelChange)
+      undo.pushEntry({ type: 'selection', before: new Uint8Array(4), after: new Uint8Array(4) })
+      expect(onPixelChange).not.toHaveBeenCalled()
     })
   })
 })

@@ -548,6 +548,179 @@ describe('ProjectService', () => {
     })
   })
 
+  describe('saving (plan M1.3)', () => {
+    afterEach(() => {
+      Reflect.deleteProperty(navigator, 'storage')
+    })
+
+    it('saves only the changed tiles of a project it opened, on top of the save it opened', async () => {
+      const id = await seedProject('Painting')
+      await service.start()
+      const { engine } = await openAndAttach(id)
+      const save = vi.spyOn(tiles, 'save')
+
+      engine.paint(77)
+      await vi.waitFor(() => expect(store().saveStatus).toBe('saved'))
+      expect(save).toHaveBeenCalledTimes(1)
+      const [, doc] = save.mock.calls[0]
+      expect(doc.base).toBe(1)
+      expect(doc.layers.map((l) => [l.pixels, l.tiles?.map((t) => [t.x, t.y])])).toEqual([[null, [[0, 0]]], [null, []]])
+      expect(await firstByte(id, 'bg')).toBe(77)
+      expect(await firstByte(id, 'ink')).toBe(2)
+    })
+
+    it('saves whole layers for a project opened with tiles it could not read', async () => {
+      const id = await seedProject('Painting')
+      const [record] = await (await getDB()).getAll('tileData')
+      await (await getDB()).delete('tileData', [record.projectId, record.layerId, record.key])
+      await service.start()
+      const { engine } = await openAndAttach(id)
+      const save = vi.spyOn(tiles, 'save')
+
+      engine.paint(77)
+      await vi.waitFor(() => expect(store().saveStatus).toBe('saved'))
+      const [, doc] = save.mock.calls[0]
+      expect(doc.base).toBeUndefined()
+      expect(doc.layers.every((l) => l.pixels !== null)).toBe(true)
+    })
+
+    it('reloads a restarted engine once a save of the old one is done, and builds on that save', async () => {
+      const id = await seedProject('Painting')
+      await service.start()
+      const { engine, detach } = await openAndAttach(id)
+      const save = tiles.save.bind(tiles)
+      let release: () => void = () => {}
+      const held = new Promise<void>((resolve) => (release = resolve))
+      const spy = vi.spyOn(tiles, 'save').mockImplementationOnce(async (...args) => {
+        await held
+        return save(...args)
+      })
+      engine.paint(42)
+      const saving = service.saveNow()
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1))
+      detach()
+
+      const restarted = new FakeDocumentEngine()
+      service.attachEngine(restarted)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(restarted.loads).toHaveLength(0)
+      release()
+      await saving
+      await vi.waitFor(() => expect(restarted.following).toBe(true))
+      expect(restarted.loads[0].layers[0].pixels?.[0]).toBe(42)
+
+      restarted.paint(43)
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(2))
+      expect(spy.mock.calls[1][1].base).toBe(2)
+    })
+
+    it('saves when the page is hidden or put away, and asks before leaving with changes not saved', async () => {
+      service = new ProjectService(db, { debounceMs: 60_000, store: tiles })
+      const id = await seedProject('Painting')
+      await service.start()
+      const { engine } = await openAndAttach(id)
+      const win = new EventTarget()
+      const page = Object.assign(new EventTarget(), { visibilityState: 'visible' as DocumentVisibilityState })
+      const stop = service.watchPage(win as never, page as never)
+      const leave = () => {
+        const event = new Event('beforeunload', { cancelable: true })
+        win.dispatchEvent(event)
+        return event.defaultPrevented
+      }
+
+      expect(leave()).toBe(false)
+      engine.paint(5)
+      // Asks, and saves meanwhile.
+      expect(leave()).toBe(true)
+      await vi.waitFor(async () => expect(await firstByte(id, 'bg')).toBe(5))
+      await vi.waitFor(() => expect(service.hasUnsavedChanges).toBe(false))
+      expect(leave()).toBe(false)
+
+      engine.paint(6)
+      page.visibilityState = 'hidden'
+      page.dispatchEvent(new Event('visibilitychange'))
+      await vi.waitFor(async () => expect(await firstByte(id, 'bg')).toBe(6))
+
+      engine.paint(7)
+      win.dispatchEvent(new Event('pagehide'))
+      await vi.waitFor(async () => expect(await firstByte(id, 'bg')).toBe(7))
+
+      stop()
+      engine.paint(8)
+      win.dispatchEvent(new Event('pagehide'))
+      expect(leave()).toBe(false)
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      expect(await firstByte(id, 'bg')).toBe(7)
+    })
+
+    it('asks the browser to keep its storage once a save has worked, and only once', async () => {
+      const persist = vi.fn(async () => true)
+      const persisted = vi.fn(async () => false)
+      Object.defineProperty(navigator, 'storage', { value: { persist, persisted }, configurable: true })
+      const id = await seedProject('Painting')
+      await service.start()
+      const { engine } = await openAndAttach(id)
+      expect(persisted).not.toHaveBeenCalled()
+
+      engine.paint(5)
+      await vi.waitFor(() => expect(persist).toHaveBeenCalledTimes(1))
+      engine.paint(6)
+      await vi.waitFor(async () => expect(await firstByte(id, 'bg')).toBe(6))
+      await vi.waitFor(() => expect(store().saveStatus).toBe('saved'))
+      expect(persisted).toHaveBeenCalledTimes(1)
+      expect(persist).toHaveBeenCalledTimes(1)
+    })
+
+    it('does not ask again when the storage is kept already', async () => {
+      const persist = vi.fn(async () => true)
+      Object.defineProperty(navigator, 'storage', { value: { persist, persisted: async () => true }, configurable: true })
+      const id = await seedProject('Painting')
+      await service.start()
+      const { engine } = await openAndAttach(id)
+      engine.paint(5)
+      await vi.waitFor(() => expect(store().saveStatus).toBe('saved'))
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(persist).not.toHaveBeenCalled()
+    })
+
+    it('says how to keep the work and make room when the storage is full', async () => {
+      const id = await seedProject('Painting')
+      await service.start()
+      const { engine } = await openAndAttach(id)
+      vi.spyOn(tiles, 'save').mockRejectedValue(new DOMException('no room', 'QuotaExceededError'))
+
+      engine.paint(5)
+      await vi.waitFor(() => expect(store().saveStatus).toBe('error'))
+      const [full] = useUIStore.getState().toasts
+      expect(full.message).toBe(
+        "The browser's storage is full: “Painting” isn't being saved. Export it to keep a copy, and make room by deleting projects you don't need from the Gallery in another tab.",
+      )
+      expect(full.action?.label).toBe('Export…')
+      full.action!.run()
+      expect(useUIStore.getState().showExportDialog).toBe(true)
+
+      // It can't close either: it stays open, with the same way out.
+      expect(await service.goToGallery()).toBe(false)
+      const stuck = useUIStore.getState().toasts.at(-1)!
+      expect(stuck.message).toContain("“Painting” can't be saved, so it stays open")
+      expect(stuck.action?.label).toBe('Export…')
+    })
+
+    it('removes saved documents whose project is gone at start-up, and keeps every other', async () => {
+      const kept = await seedProject('Painting')
+      // Deleted, with its Undo still open: its record keeps it.
+      const deleted = await seedProject('Deleted')
+      await deletedElsewhere(deleted, 150)
+      await tiles.save('orphan', { width: 2, height: 2, layers: [{ info: layerInfo('bg', 'Background'), pixels: filled(3) }] })
+
+      await service.start()
+      expect((await tiles.storedProjects()).sort()).toEqual([kept, deleted].sort())
+      expect(await firstByte(kept, 'bg')).toBe(1)
+      // Once its Undo has gone, the delete is made final as before.
+      await vi.waitFor(async () => expect(await tiles.storedProjects()).toEqual([kept]), { timeout: 3000 })
+    })
+  })
+
   describe('Gallery', () => {
     it('renames a project without marking it modified', async () => {
       const id = await seedProject('A')

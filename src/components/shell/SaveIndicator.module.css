@@ -1,0 +1,42 @@
+.indicator {
+  /* Beside the project name: closer to it than the title bar's gap. */
+  margin-left: calc(var(--space-sm) - var(--space-lg));
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  font-family: var(--font-family-ui);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  user-select: none;
+  transition: color var(--duration-normal) var(--easing-default);
+  -webkit-app-region: no-drag;
+}
+
+.indicator[data-status='saving'] {
+  color: var(--color-text-secondary);
+}
+
+.indicator[data-status='error'],
+.indicator[data-status='unavailable'] {
+  color: var(--color-accent-error);
+}
+
+.retry {
+  font: inherit;
+  color: var(--color-accent-primary);
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-xs);
+  padding: 2px 6px;
+  cursor: pointer;
+  transition: background var(--duration-fast) var(--easing-default);
+}
+
+.retry:hover {
+  background: var(--color-bg-hover);
+}
+
+.retry:focus-visible {
+  outline: 1px solid var(--color-border-focus);
+}

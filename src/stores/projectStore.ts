@@ -3,6 +3,8 @@ import type { ProjectRecord, StackRecord } from '../db/schema.ts'
 import type { ColorSpace, GallerySort } from '../types/project.ts'
 import { createId } from '../utils/id.ts'
 
+export type SaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
+
 /** Loading: deciding where to start, or reading a project before it opens. */
 export type AppView = 'loading' | 'gallery' | 'canvas'
 
@@ -36,7 +38,8 @@ interface ProjectStore {
   colorSpace: ColorSpace
   isSaving: boolean
   lastSaved: Date | null
-  saveStatus: 'idle' | 'saving' | 'saved' | 'error'
+  /** How saving the open project goes: pending while changes wait for the next save. */
+  saveStatus: SaveStatus
 
   setView: (view: AppView) => void
   setCurrentProject: (id: string, name: string, width: number, height: number, dpi: number) => void
@@ -45,7 +48,7 @@ interface ProjectStore {
   setProjects: (projects: ProjectRecord[]) => void
   setStacks: (stacks: StackRecord[]) => void
   setProjectName: (name: string) => void
-  setSaveStatus: (status: 'idle' | 'saving' | 'saved' | 'error') => void
+  setSaveStatus: (status: SaveStatus) => void
   setLastSaved: (date: Date) => void
   setCanvasSize: (width: number, height: number) => void
   setGallerySort: (sort: GallerySort) => void

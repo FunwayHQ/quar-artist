@@ -24,6 +24,8 @@ export interface TileBackend {
   removeLayer(projectId: string, layerId: string): Promise<void>
   /** Remove the project's tiles `keep` doesn't refer to: all of them when it is null. */
   sweep(projectId: string, keep: DocumentManifest | null): Promise<void>
+  /** The projects that have tiles here. */
+  listProjects(): Promise<string[]>
 }
 
 /** The bytes as a standalone ArrayBuffer, copied only when they are a view into a larger buffer. */

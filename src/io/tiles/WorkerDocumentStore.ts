@@ -106,7 +106,9 @@ export class WorkerDocumentStore implements DocumentStore {
 
   /** The pixel buffers are handed over: don't use them after calling. */
   save(projectId: string, doc: DocumentToSave): Promise<SaveReport> {
-    return this.call('save', [projectId, doc], () => buffersOf(doc.layers.map((l) => l.pixels)))
+    return this.call('save', [projectId, doc], () =>
+      buffersOf(doc.layers.flatMap((l) => [l.pixels, ...(l.tiles ?? []).map((t) => t.pixels)])),
+    )
   }
 
   load(projectId: string): Promise<SavedDocument | null> {
@@ -119,6 +121,10 @@ export class WorkerDocumentStore implements DocumentStore {
 
   delete(projectId: string): Promise<void> {
     return this.call('delete', [projectId])
+  }
+
+  storedProjects(): Promise<string[]> {
+    return this.call('storedProjects', [])
   }
 
   private async call<T>(method: StoreMethod, args: unknown[], transfer: () => ArrayBuffer[] = () => []): Promise<T> {

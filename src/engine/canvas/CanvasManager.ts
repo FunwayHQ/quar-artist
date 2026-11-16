@@ -28,7 +28,8 @@ import type { RGBAColor } from '../../types/color.ts'
 import type { TextProperties } from '../../types/text.ts'
 import { get2dContext } from '../../utils/canvas2d.ts'
 import { asClampedBytes } from '../../utils/typedArrays.ts'
-import { readPixels, writePixels } from '../utils/readback.ts'
+import { readPixels, readRegions, writePixels } from '../utils/readback.ts'
+import { cutTiles, splitRun, tileRuns, type TileChanges, type TilePixels, type TilePosition } from '../../utils/tiles.ts'
 import { strokePressure } from '../input/pressure.ts'
 
 /**
@@ -101,6 +102,8 @@ export class CanvasManager {
   private onDocumentChange: (() => void) | null = null
   /** True while loadDocument runs, so loading isn't reported as a change. */
   private loadingDocument = false
+  /** The tiles changed since `takeChanges` last ran, by layer (plan M1.3). */
+  private changes = new Map<string, Set<string> | 'all'>()
   private resizeObserver: ResizeObserver | null = null
   private container: HTMLElement | null = null
 
@@ -121,6 +124,35 @@ export class CanvasManager {
       this.onLayerChange?.(layers, activeId)
       this.notifyDocumentChange()
     })
+    // And where the pixels changed, so a save reads back only those tiles.
+    // A change the brush didn't make leaves its snapshot of the layer out of
+    // date (a stroke's own commit sets the snapshot again right after).
+    this.brushEngine.undoManager.setPixelChangeCallback((id, tiles) => {
+      this.brushEngine.clearSnapshotCache()
+      this.recordChange(id, tiles)
+    })
+    this.layerManager.setPixelChangeCallback((id, change) => {
+      this.brushEngine.clearSnapshotCache()
+      if (change === 'removed') this.changes.delete(id)
+      else if (change === 'empty') this.changes.set(id, new Set())
+      else {
+        // Changed outside the history: its steps no longer say what undoing them changes.
+        this.brushEngine.undoManager.forgetTiles(id)
+        this.recordChange(id, 'all')
+      }
+    })
+  }
+
+  private recordChange(layerId: string, tiles: TileChanges) {
+    const known = this.changes.get(layerId)
+    if (known === 'all') return
+    if (tiles === 'all') {
+      this.changes.set(layerId, 'all')
+      return
+    }
+    const set = known ?? new Set<string>()
+    for (const key of tiles) set.add(key)
+    this.changes.set(layerId, set)
   }
 
   private notifyDocumentChange() {
@@ -280,9 +312,52 @@ export class CanvasManager {
     return new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength)
   }
 
+  /**
+   * What changed since the last call, by layer: the 256 × 256 tiles that
+   * changes touched ("column_row"), or 'all' for a layer changed throughout,
+   * and an empty set for a layer that was made empty. Layers missing from it
+   * haven't changed. Starts a new record: the caller saves these changes.
+   */
+  takeChanges(): Map<string, TileChanges> {
+    const changes = this.changes
+    this.changes = new Map()
+    return changes
+  }
+
+  /**
+   * Some of a layer's tiles, straight RGBA, each in a buffer of its own and
+   * cut at the document's edges (`tileBounds`). Like `getLayerPixels`, the
+   * pixels from before a preview. Null when they can't be read now.
+   */
+  getLayerTiles(id: string, tiles: readonly TilePosition[]): TilePixels[] | null {
+    if (!this.app) return null
+    this.checkPixelsReadable()
+    const layer = this.layerManager.getLayerById(id)
+    if (!layer) return null
+    const width = this.documentWidth
+    const height = this.documentHeight
+    const committed = this.transformState?.layerId === id
+      ? this.transformState.beforeSnapshot
+      : this.filterManager.committedPixels(id)
+    if (committed) return committed.compressed ? null : cutTiles(committed.data, width, height, tiles)
+    // A row of adjacent tiles is one readback.
+    const runs = tileRuns(tiles, width, height)
+    const pixels = readRegions(
+      this.app.renderer,
+      layer.texture,
+      runs.map((run) => ({ x: run.left, y: run.top, width: run.width, height: run.height })),
+    )
+    return runs.flatMap((run, i) => splitRun(run, pixels[i], width, height))
+  }
+
   /** Whether a filter or transform preview is on screen. */
   isPreviewing(): boolean {
     return this.transformState !== null || this.filterManager.isActive()
+  }
+
+  /** Whether a stroke is being drawn. */
+  isDrawing(): boolean {
+    return this.brushEngine.isStroking()
   }
 
   /**
@@ -333,6 +408,8 @@ export class CanvasManager {
       this.layerManager.updateThumbnails()
     } finally {
       this.loadingDocument = false
+      // The document as loaded is the one saved: nothing has changed yet.
+      this.changes.clear()
     }
   }
 
@@ -404,6 +481,7 @@ export class CanvasManager {
     if (!layer) return false
 
     this.restoreLayerSnapshot(layer.texture, entry.before)
+    this.recordChange(entry.layerId, entry.tiles ?? 'all')
     this.compositor.invalidateCache()
     this.recomposite()
     this.layerManager.updateThumbnails()
@@ -426,6 +504,7 @@ export class CanvasManager {
     if (!layer) return false
 
     this.restoreLayerSnapshot(layer.texture, entry.after)
+    this.recordChange(entry.layerId, entry.tiles ?? 'all')
     this.compositor.invalidateCache()
     this.recomposite()
     this.layerManager.updateThumbnails()
@@ -555,6 +634,9 @@ export class CanvasManager {
   /** Set the active tool (called from React when toolStore changes). */
   setActiveTool(tool: ToolType) {
     const prevTool = this.activeTool
+    // A stroke still being drawn ends here, as its pointer up would: that goes
+    // to the new tool, and the stroke would stay open (plan M1.3).
+    if (this.brushEngine.isStroking() && tool !== 'brush' && tool !== 'eraser') this.handleStrokeEnd()
     this.activeTool = tool
     this.requestOverlayRender()
 

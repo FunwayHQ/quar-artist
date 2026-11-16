@@ -134,7 +134,7 @@ flowchart LR
   M6 --> M10
 ```
 
-**Immediate next steps:** M0 is done (M0.2 skipped), and so are M1.1 and M1.2. Next is M1.3, autosave v2.
+**Immediate next steps:** M0 is done (M0.2 skipped), and so are M1.1, M1.2 and M1.3. Next is M1.4, the load path.
 
 ---
 
@@ -325,8 +325,8 @@ flowchart LR
     - Not yet: each save still reads every layer back whole. Reading back only the tiles an operation changed needs M1.3's changed-tile reports.
     - Q1: the PRD and CLAUDE.md now name `idb` instead of Dexie. `agents/` and `sprints/` still describe Dexie: they are the original prompts, kept as written.
     - Tests: unit tests for the tile format and codec, the store on both backends (an in-memory OPFS stands in for the real one), saves and commits that fail part-way, Web Locks (a fake that grants them as browsers do), the worker client with a loopback worker (start-up failures, a stalled worker, an unreadable answer), and the services on top. A review of the change for ways to lose work found the commit order, backend moves, the old layout and the pixel conversions sound; its other findings are fixed above. `e2e/tiles.spec.ts` checks in Chromium, Firefox and WebKit that a save stores exactly the tiles its manifest names, that an unchanged layer keeps its tiles, and that a project saved the old way opens and moves to tiles.
-- [ ] **M1.3 Autosave v2** · M · fixes F01, F08, F14
-  - Saves are incremental: each operation reports which tiles it changed, and the save reads back only those.
+- [x] **M1.3 Autosave v2** · M · fixes F01, F08, F14, F106
+  - Saves are incremental: each operation reports which tiles it changed, and the save reads back only those. On WebGPU, read them without PixiJS's `getPixels`, which copies the whole texture through two canvases (F106).
   - Timing and ordering:
     - a save starts 2 s after the last change, and never more than 30 s apart;
     - saves for a project run in a queue that records the project id when the save is queued;
@@ -341,6 +341,32 @@ flowchart LR
     - show the storage estimate in Settings;
     - recover from crashes when a project opens by detecting a half-written manifest (since M1.2 a manifest is one IndexedDB write, so what's left to detect is a save that never committed);
     - delete tiles that nothing refers to (M1.2 sweeps each project's at its first save after the page loads; still to do: the tiles of projects that no longer exist).
+  - **Done 2026-11-17.** Notes:
+    - Changed tiles: each history step records the tiles it changed, found by comparing the layer before and after it tile by tile (`utils/tiles.ts`). Undo and redo report the same tiles. Changes outside the history report themselves: a new layer starts empty, a cleared one is empty, and a duplicated, merged-onto or resized layer counts as changed throughout. The engine keeps the record until a save takes it (`takeChanges`).
+    - A save reads back just those tiles (`getLayerTiles`; a row of adjacent tiles is one readback) and writes them on top of the save it last made or loaded. The store knows that save by its number, and refuses the new one if its last save is another by then (another tab saved the project meanwhile); the session then saves whole layers. Whole layers are also saved where there is nothing to build on: a new project, one saved before the tile store, one opened with tiles that couldn't be read, and a layer whose changes aren't known by tile.
+    - Readback (F106): on WebGPU, a texture is read by copying just the rectangle needed into a WebGPU canvas of that size, drawing it onto a 2D canvas made for reading (`willReadFrequently`), and reading that. Both canvases are kept for the next read, and whole-layer reads go the same way. `copyTextureToBuffer` with `mapAsync` is asynchronous, so it comes with the asynchronous readback of D3 (M2.2): a save reads synchronously, so it gets the document as it is at that moment.
+    - Timing: a save starts 2 s after the last change, and no later than 30 s after the first change it saves, however often changes come. A save that can wait (not a flush or Ctrl+S) waits for the stroke being drawn to end, so that reading back doesn't stall it, but not once a change has waited 30 s. The Gallery thumbnail is brought up to date at most every 30 s, and at every flush (closing, the Gallery, Ctrl+S) and every capture. The queue and the project id were done in M1.1: each session saves one project, and a save asked for while one runs runs after it.
+    - Leaving the page: when the page is hidden (`visibilitychange`, `pagehide`) and on `beforeunload`, what isn't saved is read at once, even while a save runs. Such a read waits for the running save and is written right after it, on top of whatever that save left; changes made after it was read get saves of their own. `beforeunload` asks to stay only when there are changes not saved.
+    - The root error boundary saves the same way when the app crashes, before it offers Retry and Reload, and says whether the work was saved. It runs before React takes the canvas down, so the pixels can still be read.
+    - The title bar shows Edited while changes wait, Saving…, Saved (with the time on hover), and Not saved with a Retry button; Not saving when the browser can't store anything.
+    - A full storage is reported in a toast that says how to keep a copy and make room, with an Export… button. A project that can't be saved can't close, so the toast points to the Gallery in another tab. Until M1.5 to M1.7 wire in .qart and PSD export, the Export dialog makes PNG and JPEG only, which flatten the layers: it now says so for PSD and .qart instead of closing without a file.
+    - Storage safety:
+      - persistent storage is asked for after the first save that works, once per page load, unless the browser has granted it already;
+      - the Gallery shows the storage used against the quota, and warns from 80% (there is no Settings view yet, M5);
+      - crash recovery comes from M1.2's atomic commits: a save that never committed leaves the last save as it was, and its tiles are swept at the next save, so there is nothing left to detect when a project opens;
+      - at start-up, documents whose project record is gone are removed. Records are always made before their tiles and removed after them, so a document without a record can only be left over.
+    - Fixed on the way:
+      - A stroke started from the snapshot the last one left, which the undo manager compresses in the background, so it couldn't be compared tile by tile and every stroke after the first counted as changing its whole layer. The brush keeps the pixels it read alongside its snapshot.
+      - Switching from the brush or eraser to another tool while drawing left the stroke open, because its pointer up went to the new tool. The stroke now ends when the tool changes.
+    - Fixed after a review, before the commit:
+      - A readback that threw part-way through a save (the thumbnail's, the largest, out of memory) lost the changes already read for it: the next save built on the base without them, and said Saved. Changes now leave the record only once every read has worked, and a thumbnail that can't be read leaves the last one.
+      - A change made after a capture's queued read, while the save before it still ran, counted as saved by that read. It now gets a save of its own.
+      - After a change outside the history (Merge Down onto a layer, a canvas resize), undoing or redoing an older step of that layer restores more than the tiles the step recorded. Such a layer's steps now count the whole layer as changed.
+      - The brush's snapshot of a layer outlived a fill, a filter or a transform on it, so its next stroke was compared, and would be undone, against the layer from before them (undoing the stroke also took the fill away). Every change the brush doesn't make now drops the snapshot.
+      - Switching the active layer while drawing (a shortcut, or a finger on the Layers panel while the pen draws) moved the rest of the stroke to the new layer, recorded as a step of the old one. The stroke now ends on the layer it began on, or is dropped if that layer was deleted.
+      - Tiles that can't be read when a save runs (not reachable today) no longer count as saved: the save after reads them. Closing stops after five saves rather than going on for ever.
+      - A capture whose read fails tries again after the debounce instead of waiting for the next change.
+    - Tests: unit tests for the tile grid and the tile diff, the changes recorded by history steps and by layer changes, the brush when its layer changes mid-stroke, tile reads (WebGL and WebGPU readback mocked), saves on top of a base on both backends and refused saves, the worker client, the timing with fake timers, captures during a save, sessions (incremental saves, failures part-way, waiting for strokes, thumbnails), the service (bases from loads, page events, persistent storage, full storage, the orphan sweep), the title bar status, the storage readout, the crash save and the Export dialog. A review of the change for ways to lose work proved each of its findings with a test; they are fixed above, and the tests kept. `e2e/gpu/tiles.spec.ts` checks on WebGL and WebGPU that tiles read back match a whole-layer read, edge tiles and rows included, and that strokes and undo record exactly the tiles they touched. `e2e/tiles.spec.ts` checks that a second save keeps the first one's tiles and the project reopens as painted; `e2e/projects.spec.ts` checks the title bar status, the prompt on leaving and the save it starts, and the storage readout, in Chromium, Firefox and WebKit.
 - [ ] **M1.4 Load path** · M
   - Opening a project reads the manifest, creates the layers and streams tiles to the GPU with a progress indicator.
   - It then restores the view, guides, symmetry settings, active layer and document settings.
@@ -1043,6 +1069,7 @@ All findings from the 2026-11-16 code review. Paths are relative to `src/`. Seve
 | F103 | L | On Firefox, semi-transparent colours shift each time pixels pass through a 2D canvas, because Firefox rounds premultiplied colour up when it stores them. Flood fill, transforms, CPU blending and image import upload through a 2D canvas, and PNG export encodes from one. Measured: +2 levels per undo at 50% alpha, +4 in an exported PNG at 25% alpha (found in M0.5). Undo, redo, opening a project and filter restores upload straight from buffers since M1.1 | `io/formats/image/ImageExporter.ts:25-27`, the 2D canvas uploads in `engine/canvas/CanvasManager.ts` and `engine/layers/LayerCompositor.ts` | M1.8, M2.2 |
 | F104 | M | Soft Light is wrong on WebGPU: PixiJS 8's WGSL passes the two halves of the formula to `select` in the wrong order, so every channel takes the other branch (found in M0.5) | PixiJS `advanced-blend-modes/SoftLightBlend`; worked around in `engine/layers/blendModes.ts` | M0.5 |
 | F105 | M | A lost GPU context (on an iPad when switching apps, or after a driver reset) takes every layer's pixels with it, and nothing brings them back. Since M1.1 a save refuses to read a lost context, so the last save is kept, but changes since then are lost and the page has to be reloaded (found in M1.1) | `engine/canvas/CanvasManager.ts` (`watchForContextLoss`) | M2.2 |
+| F106 | L | On WebGPU, PixiJS 8 reads a texture back by drawing it onto a WebGPU canvas and that onto a 2D canvas, then `getImageData` without `willReadFrequently`: every save copies each layer twice more than it needs to, and Chrome warns about repeated readbacks (found in M1.2's post-deploy check). Since M1.3, readbacks copy only the rectangle they need, through canvases of their own made for reading | PixiJS `GpuTextureSystem.getPixels`, called by `engine/utils/readback.ts` | M1.3 |
 
 ## Appendix B — PRD traceability
 
@@ -1117,7 +1144,7 @@ All findings from the 2026-11-16 code review. Paths are relative to `src/`. Seve
 | 7.2 #8 Text with the Font Access API | v1.0 | Partial | M7.5 |
 | 7.2 #10 Plugin API | v1.0 | Missing | M9 |
 | 7.2 #14 Cloud save and shareable links | v1.0 | Missing | M10.6 |
-| 8 Platform-limitation mitigations: iOS memory, latency, missing coalesced events, background suspension, storage eviction, maximum texture size | — | Mostly missing | M1.3, M1.10, M2.2, M3.1, M3.9 |
+| 8 Platform-limitation mitigations: iOS memory, latency, missing coalesced events, background suspension, storage eviction, maximum texture size | — | Mostly missing; persistent storage is requested and the page saves when hidden (M1.3) | M1.10, M2.2, M3.1, M3.9 |
 | 10.1 MVP metrics: latency, compositing, PSD fidelity, browser coverage | MVP | Not measured | M1.7, M6.1, M6.4 |
 
 **Extra features beyond the PRD, from the review's recommendations:**

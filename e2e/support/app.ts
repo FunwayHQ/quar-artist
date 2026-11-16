@@ -51,12 +51,12 @@ export async function changedPixels(page: Page, a: Buffer, b: Buffer, threshold 
   )
 }
 
-/** Drag a wavy mouse stroke across the middle of the canvas. */
-export async function drawStroke(page: Page) {
+/** Drag a wavy mouse stroke across the canvas, centred on `at` (fractions of its width and height; the middle by default). */
+export async function drawStroke(page: Page, at = { x: 0.5, y: 0.5 }) {
   const box = await page.locator(CANVAS).boundingBox()
   if (!box) throw new Error('Canvas not found')
-  const cx = box.x + box.width / 2
-  const cy = box.y + box.height / 2
+  const cx = box.x + box.width * at.x
+  const cy = box.y + box.height * at.y
   await page.mouse.move(cx - 80, cy)
   await page.mouse.down()
   for (let i = -80; i <= 80; i += 8) {

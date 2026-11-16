@@ -153,6 +153,19 @@
   padding: var(--space-xs) var(--space-lg);
 }
 
-.exportBtn:hover {
+.exportBtn:hover:not(:disabled) {
   opacity: 0.9;
+}
+
+.exportBtn:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.notYet {
+  margin: 0;
+  font-family: var(--font-family-ui);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+  color: var(--color-text-secondary);
 }

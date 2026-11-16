@@ -5,9 +5,10 @@
  * lets a save skip the tiles that haven't changed since the last one.
  */
 import { premultiplyInto, unpremultiplyInto } from '../../utils/alpha.ts'
+import { TILE_SIZE, tileColumns, tileRows } from '../../utils/tiles.ts'
 import { ALL_BLEND_MODES, type LayerInfo } from '../../types/layer.ts'
 
-export const TILE_SIZE = 256
+export { TILE_SIZE, tileColumns, tileRows }
 export const TILE_BYTES = TILE_SIZE * TILE_SIZE * 4
 /** The tile layout, recorded in each manifest. */
 export const TILE_FORMAT = 'rgba8-premultiplied-256'
@@ -68,14 +69,6 @@ export function savedLayerInfo(info: LayerInfo): LayerInfo {
   }
 }
 
-export function tileColumns(width: number): number {
-  return Math.ceil(width / TILE_SIZE)
-}
-
-export function tileRows(height: number): number {
-  return Math.ceil(height / TILE_SIZE)
-}
-
 /** Copy the tile at column `x`, row `y` out of a straight-alpha layer, premultiplied and padded. */
 export function cutTile(pixels: ArrayLike<number>, width: number, height: number, x: number, y: number): Uint8Array {
   const tile = new Uint8Array(TILE_BYTES)
@@ -86,6 +79,16 @@ export function cutTile(pixels: ArrayLike<number>, width: number, height: number
   for (let row = 0; row < h; row++) {
     premultiplyInto(pixels, ((top + row) * width + left) * 4, tile, row * TILE_SIZE * 4, w)
   }
+  return tile
+}
+
+/**
+ * A tile from the straight-alpha pixels of its part of a layer, `width` ×
+ * `height` (less than 256 at the right and bottom edges): premultiplied and padded.
+ */
+export function tileFromPixels(pixels: ArrayLike<number>, width: number, height: number): Uint8Array {
+  const tile = new Uint8Array(TILE_BYTES)
+  for (let row = 0; row < height; row++) premultiplyInto(pixels, row * width * 4, tile, row * TILE_SIZE * 4, width)
   return tile
 }
 

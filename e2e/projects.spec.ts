@@ -95,6 +95,58 @@ test('changes are saved a moment after the last one, without leaving the canvas'
   await expectCanvas(page, painted)
 })
 
+test('the title bar says when changes wait to be saved, and when they are (plan M1.3)', async ({ page }) => {
+  await page.goto('/')
+  await waitForEngine(page)
+  const status = page.getByTestId('save-status')
+  // Every status it shows, in order.
+  await page.evaluate(() => {
+    const seen: string[] = []
+    Object.assign(window, { __saveStatuses: seen })
+    new MutationObserver(() => {
+      const shown = document.querySelector<HTMLElement>('[data-testid="save-status"]')?.dataset.status
+      if (shown && seen.at(-1) !== shown) seen.push(shown)
+    }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-status'] })
+  })
+  await expect(status).toHaveCount(0)
+
+  await paint(page)
+  await expect(status).toHaveText('Saved', { timeout: 15000 })
+  const seen = await page.evaluate(() => (window as unknown as { __saveStatuses: string[] }).__saveStatuses)
+  expect(seen[0]).toBe('pending')
+  expect(seen.at(-1)).toBe('saved')
+  expect(seen).not.toContain('error')
+})
+
+test('leaving with changes not saved yet asks first, and saves them at once (plan M1.3)', async ({ page }) => {
+  await page.goto('/')
+  await waitForEngine(page)
+  /** Fire beforeunload as leaving the page does: whether the app asks to stay, and when. */
+  const leave = () =>
+    page.evaluate(() => {
+      const event = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(event)
+      return { asks: event.defaultPrevented, at: performance.now() }
+    })
+  expect((await leave()).asks).toBe(false)
+  await page.evaluate(() => {
+    new MutationObserver((_, observer) => {
+      if (document.querySelector<HTMLElement>('[data-testid="save-status"]')?.dataset.status !== 'saved') return
+      Object.assign(window, { __savedAt: performance.now() })
+      observer.disconnect()
+    }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['data-status'] })
+  })
+
+  await page.locator('[data-testid="add-layer-btn"]').click()
+  const left = await leave()
+  expect(left.asks).toBe(true)
+  await expect(page.getByTestId('save-status')).toHaveText('Saved', { timeout: 15000 })
+  // Well before the two seconds a save otherwise waits after the last change.
+  const savedAt = await page.evaluate(() => (window as unknown as { __savedAt: number }).__savedAt)
+  expect(savedAt - left.at).toBeLessThan(1500)
+  expect((await leave()).asks).toBe(false)
+})
+
 test('opening a project and leaving it unchanged keeps its modified date', async ({ page }) => {
   await page.goto('/')
   await waitForEngine(page)
@@ -248,6 +300,14 @@ test('projects go into stacks and back out', async ({ page }) => {
   await expect(page.getByRole('article', { name: 'Stack Studies' })).toHaveCount(0)
   await expect(page.getByRole('article', { name: 'Untitled Project copy' })).toBeVisible()
   expect((await storedProjects(page)).some((p) => p.stacked)).toBe(false)
+})
+
+test('the Gallery shows how much storage the projects use (plan M1.3)', async ({ page }) => {
+  await page.goto('/')
+  await waitForEngine(page)
+  await paint(page)
+  await goToGallery(page)
+  await expect(page.getByTestId('storage-usage')).toHaveText(/^\d+(\.\d)? [KMGT]?B of \d+(\.\d)? [KMGT]?B$/)
 })
 
 test('the Gallery sorts by name and remembers it', async ({ page }) => {

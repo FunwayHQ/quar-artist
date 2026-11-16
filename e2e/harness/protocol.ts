@@ -82,6 +82,21 @@ export interface SelectionState {
   bounds: BoundingBox | null
 }
 
+/** A tile by column and row, 256 × 256 document pixels each. */
+export interface TileAt {
+  x: number
+  y: number
+}
+
+/** A tile as an incremental save reads it back, and as a whole-layer save would (plan M1.3). */
+export interface ReadTile extends TileAt {
+  read: EncodedPixels
+  whole: EncodedPixels
+}
+
+/** What changed since the last call, by layer id: the tiles touched ("x_y", sorted), or 'all'. */
+export type ChangedTiles = Record<string, string[] | 'all'>
+
 /** The API the harness page exposes as `window.__quar`. */
 export interface QuarHarness {
   readonly info: HarnessInfo
@@ -120,6 +135,15 @@ export interface QuarHarness {
    * project does (M1.1): the round trip a saved document makes.
    */
   reopen(): void
+
+  /**
+   * Read tiles of a layer back as an incremental save does, each with the
+   * same tile cut from the layer read whole (plan M1.3). Cut at the
+   * document's edges, straight alpha.
+   */
+  readTiles(layerId: string, tiles: TileAt[]): ReadTile[]
+  /** The tiles changed since the last call, by layer, as saves take them (plan M1.3). */
+  takeChanges(): ChangedTiles
 
   /** Read back a layer's texture. */
   readLayer(layerId: string): EncodedPixels

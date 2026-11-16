@@ -438,5 +438,49 @@ describe('LayerManager', () => {
       expect(onChange).toHaveBeenCalledWith([info('a', 'Sky')], 'a')
     })
   })
+  describe('pixel changes outside the history (plan M1.3)', () => {
+    const withApp = () => {
+      lm.setApp({ renderer: { render: vi.fn() } } as never)
+      const changes: [string, string][] = []
+      lm.setPixelChangeCallback((id, change) => changes.push([id, change]))
+      return changes
+    }
+
+    it('reports a new layer as empty, and a deleted one as removed', () => {
+      lm.init()
+      const changes = withApp()
+      const id = lm.createLayer('Ink')!
+      expect(lm.deleteLayer(id)).toBe(true)
+      // The last layer stays, with nothing to report.
+      lm.deleteLayer(lm.getActiveLayerId())
+      expect(changes).toEqual([[id, 'empty'], [id, 'removed']])
+    })
+
+    it('reports a duplicate as changed throughout', () => {
+      lm.init()
+      const changes = withApp()
+      const copy = lm.duplicateLayer(lm.getActiveLayerId())!
+      expect(changes).toEqual([[copy, 'all']])
+    })
+
+    it('reports a merge as the layer below changed throughout, and the one merged gone', () => {
+      lm.init()
+      const below = lm.getActiveLayerId()
+      lm.createLayer('Top')
+      const top = lm.getActiveLayerId()
+      const changes = withApp()
+      expect(lm.mergeDown(top)).toBe(true)
+      expect(changes).toEqual([[below, 'all'], [top, 'removed']])
+    })
+
+    it('reports every layer as changed throughout after a resize', () => {
+      lm.init()
+      lm.createLayer('Top')
+      const ids = lm.getLayerInfos().map((l) => l.id)
+      const changes = withApp()
+      lm.resizeAllLayers(2048, 1024)
+      expect(changes).toEqual(ids.map((id) => [id, 'all']))
+    })
+  })
 })
 

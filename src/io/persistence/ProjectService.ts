@@ -1,7 +1,7 @@
 import { useProjectStore } from '../../stores/projectStore.ts'
 import { useUIStore, type ToastOptions } from '../../stores/uiStore.ts'
 import { MetadataDB } from './MetadataDB.ts'
-import { DocumentSession, type DocumentEngine } from './DocumentSession.ts'
+import { DocumentSession, type DocumentEngine, type SavedBase } from './DocumentSession.ts'
 import type { DocumentStore, SaveLayer } from '../tiles/TileStore.ts'
 import { createDocumentStore } from '../tiles/WorkerDocumentStore.ts'
 import { TILE_SIZE, savedLayerInfo } from '../tiles/tileFormat.ts'
@@ -55,10 +55,15 @@ function q(name: string): string {
   return `\u201c${name}\u201d`
 }
 
+/** Whether an error says the browser's storage is full. */
+function isStorageFull(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'QuotaExceededError'
+}
+
 /** An error as toasts show it. DOMExceptions aren't Errors everywhere, so any message will do. */
 function describe(err: unknown): string {
-  const { name, message } = (typeof err === 'object' && err !== null ? err : {}) as { name?: unknown; message?: unknown }
-  if (name === 'QuotaExceededError') return "the browser's storage is full"
+  const { message } = (typeof err === 'object' && err !== null ? err : {}) as { message?: unknown }
+  if (isStorageFull(err)) return "the browser's storage is full"
   if (typeof message === 'string' && message) return message
   return String(err)
 }
@@ -88,6 +93,8 @@ interface LoadedDocument {
   activeLayerId: string | null
   /** Tiles that couldn't be read, which show as transparent. */
   unreadableTiles: number
+  /** The save it is (`SaveReport.seq`), or null for one saved before the tile store. */
+  seq: number | null
 }
 
 /** A document waiting for its engine. */
@@ -95,6 +102,23 @@ interface PendingDocument {
   sessionId: string
   layers: StoredLayer[]
   activeLayerId: string | null
+  base: SavedBase | null
+}
+
+/**
+ * The save a loaded document is, for its next saves to build on (plan M1.3).
+ * None for one saved before the tile store, or with tiles that couldn't be
+ * read: they show as transparent, so its next save writes whole layers and
+ * saves what it shows.
+ */
+function baseOf(doc: LoadedDocument): SavedBase | null {
+  if (doc.seq === null || doc.unreadableTiles > 0) return null
+  return {
+    seq: doc.seq,
+    width: doc.project.width,
+    height: doc.project.height,
+    layers: new Set(doc.layers.map((l) => l.info.id)),
+  }
 }
 
 /**
@@ -122,6 +146,8 @@ export class ProjectService {
   private reporting = 0
   /** A save failure was shown, and no save has worked since: further failures stay quiet. */
   private saveErrorShown = false
+  /** Whether the browser was asked to keep this site's storage (once a save worked). */
+  private persistAsked = false
 
   constructor(db = new MetadataDB(), options: { debounceMs?: number; store?: DocumentStore } = {}) {
     this.db = db
@@ -179,6 +205,7 @@ export class ProjectService {
         } else {
           await this.createAndOpen(DEFAULT_PROJECT)
         }
+        await this.sweepOrphans().catch((err) => console.warn('[QUAR] Saved documents without a project could not be removed:', err))
       } catch (err) {
         console.error('[QUAR] Project storage is unavailable:', err)
         this.unsaved = true
@@ -308,6 +335,7 @@ export class ProjectService {
     }
     const ok = await this.reported(() => session.saveNow())
     if (ok) this.toast(`Saved ${name}`, 'success')
+    else if (isStorageFull(session.lastError)) this.storageFull(name)
     else this.toast(`Couldn't save ${name}: ${describe(session.lastError)}`, 'error')
     return ok
   }
@@ -315,6 +343,48 @@ export class ProjectService {
   /** Whether the open project has changes not saved yet. */
   get hasUnsavedChanges(): boolean {
     return this.session?.hasUnsavedChanges ?? (this.unsaved && this.unsavedChanged)
+  }
+
+  /**
+   * Save the open project's unsaved changes, reading them now: for when its
+   * canvas may go any moment (the page is hidden, or the app crashed).
+   * Resolves true when nothing is left unsaved.
+   */
+  capture(): Promise<boolean> {
+    if (this.session) return this.session.capture()
+    return Promise.resolve(!(this.unsaved && this.unsavedChanged))
+  }
+
+  /**
+   * Save when the page is hidden or put away, and ask before leaving it with
+   * changes not saved yet (plan M1.3). Returns the function that stops it.
+   */
+  watchPage(
+    win: Pick<Window, 'addEventListener' | 'removeEventListener'> = window,
+    doc: Pick<Document, 'addEventListener' | 'removeEventListener' | 'visibilityState'> = document,
+  ): () => void {
+    const save = () => {
+      void this.capture()
+    }
+    const onVisibility = () => {
+      if (doc.visibilityState === 'hidden') save()
+    }
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!this.hasUnsavedChanges) return
+      // Save meanwhile: the browser asks whether to leave, and the save may be done by then.
+      save()
+      event.preventDefault()
+      // Browsers from before preventDefault asked want this too.
+      event.returnValue = true
+    }
+    doc.addEventListener('visibilitychange', onVisibility)
+    win.addEventListener('pagehide', save)
+    win.addEventListener('beforeunload', onBeforeUnload)
+    return () => {
+      doc.removeEventListener('visibilitychange', onVisibility)
+      win.removeEventListener('pagehide', save)
+      win.removeEventListener('beforeunload', onBeforeUnload)
+    }
   }
 
   /**
@@ -340,6 +410,7 @@ export class ProjectService {
     const pending = this.pending
     if (pending && pending.sessionId === this.store.getState().sessionId) {
       engine.loadDocument(pending.layers, pending.activeLayerId)
+      session.setBase(pending.base)
       this.pending = null
       session.attach(engine)
     } else if (session.isNewEngine(engine)) {
@@ -364,6 +435,9 @@ export class ProjectService {
    * If that fails, the project is left as saved: saving the empty engine would wipe it.
    */
   private async reloadInto(session: DocumentSession, engine: DocumentEngine) {
+    if (this.session !== session || this.engine !== engine) return
+    // A save of what the old engine had may still be running: load what it leaves.
+    await session.settled()
     if (this.session !== session || this.engine !== engine) return
     const name = q(this.store.getState().currentProjectName)
     let doc: LoadedDocument | null = null
@@ -398,6 +472,7 @@ export class ProjectService {
       return
     }
     engine.loadDocument(doc.layers, doc.activeLayerId)
+    session.setBase(baseOf(doc))
     session.attach(engine)
     this.reportUnreadable(doc)
   }
@@ -426,7 +501,7 @@ export class ProjectService {
 
   private beginSession(
     project: Pick<ProjectRecord, 'id' | 'name' | 'width' | 'height' | 'dpi' | 'colorSpace'>,
-    doc: Omit<PendingDocument, 'sessionId'> | null,
+    doc: LoadedDocument | null,
   ) {
     this.saveErrorShown = false
     this.session = new DocumentSession(
@@ -445,7 +520,8 @@ export class ProjectService {
       colorSpace: project.colorSpace ?? 'srgb',
     })
     const sessionId = this.store.getState().sessionId
-    this.pending = doc && sessionId ? { sessionId, ...doc } : null
+    this.pending =
+      doc && sessionId ? { sessionId, layers: doc.layers, activeLayerId: doc.activeLayerId, base: baseOf(doc) } : null
   }
 
   private openUnsaved(config: NewProjectConfig) {
@@ -461,7 +537,8 @@ export class ProjectService {
     if (!session) return true
     if (!(await this.reported(() => session.close()))) {
       const name = q(this.store.getState().currentProjectName)
-      this.toast(`Couldn't save ${name}, so it stays open: ${describe(session.lastError)}`, 'error')
+      if (isStorageFull(session.lastError)) this.storageFull(name, true)
+      else this.toast(`Couldn't save ${name}, so it stays open: ${describe(session.lastError)}`, 'error')
       return false
     }
     this.session = null
@@ -472,10 +549,15 @@ export class ProjectService {
 
   private onSaveStatus(status: SaveStatus, error: unknown) {
     this.store.getState().setSaveStatus(status)
-    if (status === 'saved') this.saveErrorShown = false
+    if (status === 'saved') {
+      this.saveErrorShown = false
+      this.askToPersist()
+    }
     if (status !== 'error') return
     if (!this.saveErrorShown && this.reporting === 0) {
-      this.toast(`Couldn't save ${q(this.store.getState().currentProjectName)}: ${describe(error)}`, 'error')
+      const name = q(this.store.getState().currentProjectName)
+      if (isStorageFull(error)) this.storageFull(name)
+      else this.toast(`Couldn't save ${name}: ${describe(error)}`, 'error')
     }
     this.saveErrorShown = true
   }
@@ -489,14 +571,59 @@ export class ProjectService {
       const saved = await this.tiles.load(id)
       if (saved) {
         // The saved document's size wins over the record's, which a failed save may not have updated.
-        const { width, height, layers, unreadableTiles } = saved
-        return { project: { ...project, width, height }, layers, activeLayerId, unreadableTiles }
+        const { width, height, layers, unreadableTiles, seq } = saved
+        return { project: { ...project, width, height }, layers, activeLayerId, unreadableTiles, seq }
       }
       // Saved before the tile store, as whole layers: its next save moves it to tiles.
       const layers = await this.db.loadLegacyLayers(id, project.width, project.height)
-      if (layers) return { project, layers, activeLayerId, unreadableTiles: 0 }
+      if (layers) return { project, layers, activeLayerId, unreadableTiles: 0, seq: null }
     }
     throw new Error('another tab kept saving it while it opened')
+  }
+
+  /**
+   * Saving stopped because the browser's storage is full: say how to keep
+   * the work and make room. `staysOpen` for a project that couldn't close.
+   */
+  private storageFull(name: string, staysOpen = false) {
+    const what = staysOpen ? `${name} can't be saved, so it stays open` : `${name} isn't being saved`
+    this.toast(
+      `The browser's storage is full: ${what}. Export it to keep a copy, and make room by deleting projects you don't need from the Gallery in another tab.`,
+      'error',
+      { durationMs: 20000, action: { label: 'Export…', run: () => useUIStore.getState().setShowExportDialog(true) } },
+    )
+  }
+
+  /**
+   * Ask the browser to keep this site's storage rather than clear it when
+   * space runs low (Safari also clears it after 7 days without a visit), once
+   * a save has worked: by then there is work worth keeping (plan M1.3).
+   */
+  private askToPersist() {
+    if (this.persistAsked) return
+    this.persistAsked = true
+    const storage = typeof navigator === 'undefined' ? undefined : navigator.storage
+    if (!storage?.persist || !storage.persisted) return
+    storage
+      .persisted()
+      .then((already) => already || storage.persist())
+      .catch(() => false)
+  }
+
+  /**
+   * Remove saved documents whose project record is gone: left by a delete,
+   * import or duplicate that stopped halfway (plan M1.3). The documents are
+   * listed before the records: a project gets its record before anything is
+   * saved for it, so one made meanwhile is never taken for an orphan.
+   */
+  private async sweepOrphans() {
+    const stored = await this.tiles.storedProjects()
+    if (stored.length === 0) return
+    const known = new Set((await this.db.getAllProjects()).map((p) => p.id))
+    for (const id of stored) {
+      if (known.has(id)) continue
+      await this.tiles.delete(id).catch((err) => console.warn('[QUAR] A saved document without a project could not be removed:', err))
+    }
   }
 
   /** Remove a project and its saved document. */

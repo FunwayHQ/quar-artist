@@ -30,8 +30,13 @@ export class BrushEngine {
   private strokeActive = false
   private color: RGBAColor = { r: 1, g: 1, b: 1, a: 1 }
 
-  /** Cached post-stroke snapshot per layer — avoids redundant GPU readbacks. */
-  private lastSnapshot = new Map<string, LayerSnapshot>()
+  /**
+   * Cached post-stroke snapshot per layer — avoids redundant GPU readbacks.
+   * With its pixels as read: the undo manager compresses the snapshot in the
+   * background, and the next stroke needs them uncompressed to tell which
+   * tiles it changes (plan M1.3).
+   */
+  private lastSnapshot = new Map<string, { snapshot: LayerSnapshot; pixels: Uint8Array }>()
 
   /** Symmetry engine — when set, stamps are mirrored across symmetry axes. */
   symmetryEngine: SymmetryEngine | null = null
@@ -58,7 +63,16 @@ export class BrushEngine {
     return this.color
   }
 
+  /**
+   * Paint on this texture from now on. A stroke being drawn ends first, on
+   * the layer it began on (or is dropped if that layer is gone): its undo
+   * step and the tiles it changed belong to that layer (plan M1.3).
+   */
   setActiveLayerTexture(texture: RenderTexture) {
+    if (this.strokeActive && texture !== this.activeLayerTexture) {
+      if (this.activeLayerTexture?.destroyed) this.cancelStroke()
+      else this.endStroke()
+    }
     this.activeLayerTexture = texture
   }
 
@@ -85,6 +99,11 @@ export class BrushEngine {
     this.eraserMode = enabled
   }
 
+  /** Whether a stroke is being drawn: begun and not ended or cancelled yet. */
+  isStroking(): boolean {
+    return this.strokeActive
+  }
+
   /** Called on pointerdown — begin a new stroke. */
   beginStroke(point: StrokePoint) {
     if (!this.activePreset || !this.activeLayerTexture || !this.app) return
@@ -99,14 +118,14 @@ export class BrushEngine {
     const cached = this.lastSnapshot.get(this.activeLayerId)
     let beforeSnapshot: LayerSnapshot | null
     if (cached) {
-      beforeSnapshot = cached
+      beforeSnapshot = cached.snapshot
     } else {
       PerfMonitor.mark('snapshot-extract-start')
       beforeSnapshot = this.extractFullLayerSnapshot()
       PerfMonitor.measure('gpu-readback', 'snapshot-extract-start')
     }
     if (beforeSnapshot) {
-      this.undoManager.beginOperation(beforeSnapshot, this.activeLayerId)
+      this.undoManager.beginOperation(beforeSnapshot, this.activeLayerId, cached?.pixels)
     }
 
     this.tileManager.markDirty(point.x, point.y, this.activePreset.size / 2)
@@ -143,9 +162,11 @@ export class BrushEngine {
     const afterSnapshot = this.extractFullLayerSnapshot()
     PerfMonitor.measure('gpu-readback', 'snapshot-extract-start')
     if (afterSnapshot) {
+      // As read, before the undo manager starts compressing them.
+      const pixels = afterSnapshot.data
       this.undoManager.commitOperation(afterSnapshot)
       // Cache for next stroke's "before" snapshot
-      this.lastSnapshot.set(this.activeLayerId, afterSnapshot)
+      this.lastSnapshot.set(this.activeLayerId, { snapshot: afterSnapshot, pixels })
     }
 
     this.tileManager.reset()

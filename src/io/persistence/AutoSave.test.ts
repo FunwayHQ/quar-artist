@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import 'fake-indexeddb/auto'
-import { AutoSave, type LayerDataSet, type SaveStatus } from './AutoSave.ts'
+import { AutoSave, SAVE_DEBOUNCE_MS, SAVE_MAX_WAIT_MS, type LayerDataSet, type SaveStatus } from './AutoSave.ts'
 import { MetadataDB } from './MetadataDB.ts'
 import { resetDB } from '../../db/schema.ts'
 import { IdbTileBackend } from '../tiles/IdbTileBackend.ts'
-import { TileStore } from '../tiles/TileStore.ts'
+import { StaleSaveError, TileStore, type SaveReport } from '../tiles/TileStore.ts'
 import { layerInfo } from '../../test/fakeDocumentEngine.ts'
 
 /** A one-pixel document; opaque pixels load back exactly. */
@@ -244,7 +244,7 @@ describe('AutoSave', () => {
       autoSave.scheduleSave()
 
       expect(await autoSave.flush()).toBe(false)
-      expect(statuses).toEqual(['error'])
+      expect(statuses).toEqual(['pending', 'error'])
       expect(autoSave.lastError).toBe(outOfMemory)
       expect(autoSave.hasUnsavedChanges).toBe(true)
 
@@ -252,7 +252,7 @@ describe('AutoSave', () => {
       extract.mockImplementation(() => createMockData())
       expect(await autoSave.flush()).toBe(true)
       expect(extract).toHaveBeenCalledTimes(2)
-      expect(statuses).toEqual(['error', 'saving', 'saved'])
+      expect(statuses).toEqual(['pending', 'error', 'saving', 'saved'])
       expect(autoSave.hasUnsavedChanges).toBe(false)
       expect((await savedPixels()).get('layer-1')).toEqual([1, 2, 3, 255])
       autoSave.destroy()
@@ -371,6 +371,317 @@ describe('AutoSave', () => {
       } finally {
         vi.useRealTimers()
       }
+    })
+  })
+  describe('timing and capture (plan M1.3)', () => {
+    function started(debounceMs = 60_000) {
+      const autoSave = new AutoSave(metaDb, store, debounceMs)
+      autoSave.setProjectId(projectId)
+      autoSave.setDataExtractor(() => createMockData())
+      return autoSave
+    }
+
+    /** Make the next store save wait for `release`. */
+    function holdNextSave() {
+      const hold: { release: () => void; started: boolean } = { release: () => {}, started: false }
+      const save = store.save.bind(store)
+      vi.spyOn(store, 'save').mockImplementationOnce((...args) => {
+        hold.started = true
+        return new Promise<SaveReport>((resolve, reject) => {
+          hold.release = () => save(...args).then(resolve, reject)
+        })
+      })
+      return hold
+    }
+
+    it('saves two seconds after the last change, and no later than thirty seconds after the first', async () => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+      try {
+        const autoSave = new AutoSave(metaDb, store)
+        autoSave.setProjectId(projectId)
+        // Count the reads; nothing to write.
+        const extract = vi.fn((_urgent: boolean, _queued: boolean): LayerDataSet | null => null)
+        autoSave.setDataExtractor(extract)
+
+        autoSave.scheduleSave()
+        await vi.advanceTimersByTimeAsync(SAVE_DEBOUNCE_MS - 1)
+        expect(extract).not.toHaveBeenCalled()
+        await vi.advanceTimersByTimeAsync(1)
+        expect(extract).toHaveBeenCalledTimes(1)
+        expect(extract).toHaveBeenLastCalledWith(false, false)
+
+        // A change every second: the debounce never passes, the longest wait does.
+        extract.mockClear()
+        for (let t = 0; t < SAVE_MAX_WAIT_MS; t += 1000) {
+          autoSave.scheduleSave()
+          await vi.advanceTimersByTimeAsync(1000)
+        }
+        expect(extract).toHaveBeenCalledTimes(1)
+        autoSave.destroy()
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('reports changes waiting for a save as pending, once', async () => {
+      const autoSave = started()
+      const statuses: SaveStatus[] = []
+      autoSave.setStatusCallback((s) => statuses.push(s))
+      autoSave.scheduleSave()
+      autoSave.scheduleSave()
+      expect(statuses).toEqual(['pending'])
+      expect(await autoSave.flush()).toBe(true)
+      expect(statuses).toEqual(['pending', 'saving', 'saved'])
+      autoSave.destroy()
+    })
+
+    it('reports changes made during a save as still pending once it is done', async () => {
+      const autoSave = started()
+      const statuses: SaveStatus[] = []
+      autoSave.setStatusCallback((s) => statuses.push(s))
+      const hold = holdNextSave()
+      const first = autoSave.saveNow()
+      await vi.waitFor(() => expect(hold.started).toBe(true))
+      autoSave.scheduleSave()
+      hold.release()
+      expect(await first).toBe(true)
+      expect(statuses).toEqual(['saving', 'pending'])
+      expect(await autoSave.flush()).toBe(true)
+      expect(statuses).toEqual(['saving', 'pending', 'saving', 'saved'])
+      autoSave.destroy()
+    })
+
+    it('waits for a running save to settle', async () => {
+      const autoSave = started()
+      await autoSave.settled()
+      const hold = holdNextSave()
+      const running = autoSave.saveNow()
+      await vi.waitFor(() => expect(hold.started).toBe(true))
+      let settled = false
+      const waiting = autoSave.settled().then(() => (settled = true))
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(settled).toBe(false)
+      hold.release()
+      await waiting
+      expect(await running).toBe(true)
+      autoSave.destroy()
+    })
+
+    it('captures by reading at once when no save is running, and saves unchanged only when asked', async () => {
+      const autoSave = started()
+      const extract = vi.fn((_urgent: boolean, _queued: boolean) => createMockData())
+      autoSave.setDataExtractor(extract)
+      expect(await autoSave.capture()).toBe(true)
+      expect(extract).not.toHaveBeenCalled()
+      expect(await autoSave.capture(true)).toBe(true)
+      expect(extract).toHaveBeenLastCalledWith(true, false)
+
+      autoSave.scheduleSave()
+      const capturing = autoSave.capture()
+      // Read before it returns: what it reads from can go right after.
+      expect(extract).toHaveBeenCalledTimes(2)
+      expect(await capturing).toBe(true)
+      expect(autoSave.hasPendingSave).toBe(false)
+      autoSave.destroy()
+    })
+
+    it('reads at once while a save runs, and writes what it read right after it, on the save it left', async () => {
+      const autoSave = started()
+      const order: string[] = []
+      let version = 1
+      autoSave.setDataExtractor((_urgent, queued) => {
+        const data = createMockData([version, 0, 0, 255])
+        order.push(queued ? 'read queued' : 'read')
+        if (!queued) return { ...data, settled: (report) => order.push(report ? 'saved' : 'failed') }
+        return {
+          ...data,
+          base: () => {
+            order.push('base')
+            return 1
+          },
+          settled: (report) => order.push(report ? 'queued saved' : 'queued failed'),
+        }
+      })
+      const hold = holdNextSave()
+      const running = autoSave.saveNow()
+      await vi.waitFor(() => expect(hold.started).toBe(true))
+
+      version = 2
+      autoSave.scheduleSave()
+      const captured = autoSave.capture()
+      expect(order).toEqual(['read', 'read queued'])
+      hold.release()
+      expect(await captured).toBe(true)
+      expect(order).toEqual(['read', 'read queued', 'saved', 'base', 'queued saved'])
+      expect((await savedPixels()).get('layer-1')).toEqual([2, 0, 0, 255])
+      expect(autoSave.hasUnsavedChanges).toBe(false)
+      expect(await running).toBe(true)
+      autoSave.destroy()
+    })
+
+    it('keeps one queued read: a later capture replaces it, and the first hears it was not saved', async () => {
+      const autoSave = started()
+      const outcomes: string[] = []
+      let version = 1
+      autoSave.setDataExtractor((_urgent, queued) => {
+        const read = version
+        return { ...createMockData([read, 0, 0, 255]), settled: (r) => outcomes.push(`${queued ? 'queued ' : ''}${read} ${r ? 'saved' : 'not saved'}`) }
+      })
+      const hold = holdNextSave()
+      void autoSave.saveNow()
+      await vi.waitFor(() => expect(hold.started).toBe(true))
+      version = 2
+      autoSave.scheduleSave()
+      void autoSave.capture()
+      version = 3
+      autoSave.scheduleSave()
+      const last = autoSave.capture()
+      hold.release()
+      expect(await last).toBe(true)
+      expect(outcomes).toEqual(['queued 2 not saved', '1 saved', 'queued 3 saved'])
+      expect((await savedPixels()).get('layer-1')).toEqual([3, 0, 0, 255])
+      autoSave.destroy()
+    })
+
+    it('saves a change made after a queued read with a read of its own, when its save comes meanwhile (review of M1.3)', async () => {
+      const autoSave = started(5)
+      let version = 1
+      autoSave.setDataExtractor(() => createMockData([version, 0, 0, 255]))
+      const statuses: SaveStatus[] = []
+      autoSave.setStatusCallback((s) => statuses.push(s))
+      const hold = holdNextSave()
+      const running = autoSave.saveNow()
+      await vi.waitFor(() => expect(hold.started).toBe(true))
+      // Hidden: what isn't saved is read and queued.
+      version = 2
+      autoSave.scheduleSave()
+      void autoSave.capture()
+      // Shown again, and painted on: its save comes due while the first still runs.
+      version = 3
+      autoSave.scheduleSave()
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      hold.release()
+
+      expect(await running).toBe(true)
+      expect((await savedPixels()).get('layer-1')).toEqual([3, 0, 0, 255])
+      expect(autoSave.hasUnsavedChanges).toBe(false)
+      expect(statuses.at(-1)).toBe('saved')
+      autoSave.destroy()
+    })
+
+    it('leaves a change made after a queued read waiting for a save of its own (review of M1.3)', async () => {
+      const autoSave = started()
+      let version = 1
+      autoSave.setDataExtractor(() => createMockData([version, 0, 0, 255]))
+      const statuses: SaveStatus[] = []
+      autoSave.setStatusCallback((s) => statuses.push(s))
+      const hold = holdNextSave()
+      const running = autoSave.saveNow()
+      await vi.waitFor(() => expect(hold.started).toBe(true))
+      version = 2
+      autoSave.scheduleSave()
+      void autoSave.capture()
+      version = 3
+      autoSave.scheduleSave()
+      hold.release()
+
+      expect(await running).toBe(true)
+      expect((await savedPixels()).get('layer-1')).toEqual([2, 0, 0, 255])
+      expect(autoSave.hasUnsavedChanges).toBe(true)
+      expect(autoSave.hasPendingSave).toBe(true)
+      expect(statuses.at(-1)).toBe('pending')
+      expect(await autoSave.flush()).toBe(true)
+      expect((await savedPixels()).get('layer-1')).toEqual([3, 0, 0, 255])
+      autoSave.destroy()
+    })
+
+    it("tries again later when a capture can't read (review of M1.3)", async () => {
+      const autoSave = started(10)
+      const hold = holdNextSave()
+      void autoSave.saveNow()
+      await vi.waitFor(() => expect(hold.started).toBe(true))
+      let failing = true
+      autoSave.setDataExtractor((_urgent, queued) => {
+        if (queued && failing) throw new Error('out of memory')
+        return createMockData([7, 0, 0, 255])
+      })
+      autoSave.scheduleSave()
+      const captured = autoSave.capture()
+      failing = false
+      hold.release()
+      expect(await captured).toBe(false)
+      // Not stuck: the change gets its save once the debounce passes.
+      await vi.waitFor(async () => expect((await savedPixels()).get('layer-1')).toEqual([7, 0, 0, 255]))
+      await vi.waitFor(() => expect(autoSave.hasUnsavedChanges).toBe(false))
+      autoSave.destroy()
+    })
+
+    it('says when a change has waited for its save as long as any should', async () => {
+      let now = 1_000_000
+      vi.spyOn(Date, 'now').mockImplementation(() => now)
+      const autoSave = new AutoSave(metaDb, store, 60_000, 90_000)
+      autoSave.setProjectId(projectId)
+      autoSave.setDataExtractor(() => createMockData())
+      expect(autoSave.overdue).toBe(false)
+      autoSave.scheduleSave()
+      now += 89_999
+      autoSave.scheduleSave()
+      expect(autoSave.overdue).toBe(false)
+      now += 1
+      expect(autoSave.overdue).toBe(true)
+      expect(await autoSave.saveNow()).toBe(true)
+      expect(autoSave.overdue).toBe(false)
+      vi.restoreAllMocks()
+      autoSave.destroy()
+    })
+
+    it('saves again with a fresh read, at once, when the store refuses a save built on an old one', async () => {
+      const autoSave = started()
+      const extract = vi.fn((_urgent: boolean, _queued: boolean) => createMockData())
+      autoSave.setDataExtractor(extract)
+      const statuses: SaveStatus[] = []
+      autoSave.setStatusCallback((s) => statuses.push(s))
+      vi.spyOn(store, 'save').mockRejectedValueOnce(new StaleSaveError())
+
+      expect(await autoSave.saveNow()).toBe(true)
+      expect(extract.mock.calls).toEqual([[true, false], [true, false]])
+      expect(statuses).toEqual(['saving', 'saving', 'saved'])
+      autoSave.destroy()
+    })
+
+    it('treats a queued read with nothing left to build on as refused, and reads again', async () => {
+      const autoSave = started()
+      const reads: boolean[] = []
+      autoSave.setDataExtractor((_urgent, queued) => {
+        reads.push(queued)
+        return queued
+          ? {
+              ...createMockData([5, 0, 0, 255]),
+              base: () => {
+                throw new StaleSaveError()
+              },
+            }
+          : createMockData([6, 0, 0, 255])
+      })
+      const hold = holdNextSave()
+      void autoSave.saveNow()
+      await vi.waitFor(() => expect(hold.started).toBe(true))
+      autoSave.scheduleSave()
+      const captured = autoSave.capture()
+      hold.release()
+      expect(await captured).toBe(true)
+      expect(reads).toEqual([false, true, false])
+      expect((await savedPixels()).get('layer-1')).toEqual([6, 0, 0, 255])
+      autoSave.destroy()
+    })
+
+    it('gives up when the save is refused again', async () => {
+      const autoSave = started()
+      vi.spyOn(store, 'save').mockRejectedValue(new StaleSaveError())
+      expect(await autoSave.saveNow()).toBe(false)
+      expect(autoSave.hasUnsavedChanges).toBe(true)
+      expect(autoSave.lastError).toBeInstanceOf(StaleSaveError)
+      autoSave.destroy()
     })
   })
 })

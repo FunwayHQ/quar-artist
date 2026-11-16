@@ -64,6 +64,22 @@ export class IdbTileBackend implements TileBackend {
       }
     })
   }
+
+  listProjects(): Promise<string[]> {
+    return listIdbProjects()
+  }
+}
+
+export async function listIdbProjects(): Promise<string[]> {
+  const ids: string[] = []
+  const tx = (await getDB()).transaction('tileData')
+  await inTransaction(tx, async () => {
+    // Skip from each project to the next: [id, []] sorts after every key of project id.
+    for (let c = await tx.store.openKeyCursor(); c; c = await c.continue([c.primaryKey[0], []] as never)) {
+      ids.push(c.primaryKey[0])
+    }
+  })
+  return ids
 }
 
 class IdbTileWriter implements TileWriter {

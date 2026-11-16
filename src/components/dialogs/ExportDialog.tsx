@@ -14,6 +14,9 @@ interface ExportDialogProps {
 
 type ExportFormat = ExportOptions['format']
 
+/** Formats the app can't write yet: PSD export comes with plan M1.7, .qart with M1.5 and M1.6. */
+const NOT_YET: Partial<Record<ExportFormat, string>> = { psd: 'PSD', qart: '.qart' }
+
 const JPEG_PRESETS = [
   { label: 'Low', value: 0.3 },
   { label: 'Medium', value: 0.6 },
@@ -35,8 +38,9 @@ export function ExportDialog({
 
   if (!open) return null
 
+  const notYet = NOT_YET[format]
   const handleExport = () => {
-    onExport({ format, jpegQuality })
+    if (!notYet) onExport({ format, jpegQuality })
   }
 
   return (
@@ -75,6 +79,12 @@ export function ExportDialog({
           )}
         </div>
 
+        {notYet && (
+          <p className={styles.notYet} role="note">
+            {notYet} export isn't available yet. PNG keeps the picture with its transparency, as one layer.
+          </p>
+        )}
+
         {format === 'jpeg' && (
           <div className={styles.qualitySection}>
             <span className={styles.qualityLabel}>
@@ -107,7 +117,7 @@ export function ExportDialog({
 
         <div className={styles.footer}>
           <button className={styles.cancelBtn} onClick={onClose} type="button">Cancel</button>
-          <button className={styles.exportBtn} onClick={handleExport} type="button">
+          <button className={styles.exportBtn} onClick={handleExport} type="button" disabled={notYet !== undefined}>
             Export {format.toUpperCase()}
           </button>
         </div>

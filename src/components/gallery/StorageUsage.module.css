@@ -1,0 +1,36 @@
+.usage {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.numbers {
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+}
+
+.meter {
+  position: relative;
+  width: 48px;
+  height: 3px;
+  background: var(--color-border-strong);
+  overflow: hidden;
+}
+
+.fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--color-text-tertiary);
+  transition: width var(--duration-normal) var(--easing-default);
+}
+
+.usage[data-full] {
+  color: var(--color-accent-warning);
+}
+
+.usage[data-full] .fill {
+  background: var(--color-accent-warning);
+}

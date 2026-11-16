@@ -16,6 +16,11 @@ export interface Layer {
 
 export type LayerChangeCallback = (layers: LayerInfo[], activeId: string) => void
 export type StructuralChangeCallback = () => void
+/**
+ * A layer's pixels changed outside the undo history: throughout ('all'), or
+ * it is new and empty ('empty'), or it is gone ('removed').
+ */
+export type LayerPixelChangeCallback = (layerId: string, change: 'all' | 'empty' | 'removed') => void
 
 /**
  * Manages multiple painting layers, each backed by a PixiJS RenderTexture.
@@ -29,6 +34,7 @@ export class LayerManager {
   private canvasHeight = 768
   private onChange: LayerChangeCallback | null = null
   private onStructuralChange: StructuralChangeCallback | null = null
+  private onPixelChange: LayerPixelChangeCallback | null = null
 
   setApp(app: Application) {
     this.app = app
@@ -68,6 +74,7 @@ export class LayerManager {
       layer.texture = newTexture
       layer.sprite.texture = newTexture
       oldTexture.destroy(true)
+      this.onPixelChange?.(layer.info.id, 'all')
     }
 
     copySprite.destroy?.()
@@ -84,6 +91,11 @@ export class LayerManager {
   /** Set callback for structural changes (layer add/remove/reorder/visibility/opacity/blend/active change). */
   setStructuralChangeCallback(cb: StructuralChangeCallback) {
     this.onStructuralChange = cb
+  }
+
+  /** Called when layers' pixels change outside the undo history (for saving only what changed, plan M1.3). */
+  setPixelChangeCallback(cb: LayerPixelChangeCallback | null) {
+    this.onPixelChange = cb
   }
 
   /** Initialize with a single default layer. */
@@ -114,6 +126,7 @@ export class LayerManager {
     const insertIdx = activeIdx >= 0 ? activeIdx + 1 : this.layers.length
     this.layers.splice(insertIdx, 0, layer)
     this.activeLayerId = id
+    this.onPixelChange?.(id, 'empty')
     this.notifyStructuralChange()
     this.notifyChange()
     return id
@@ -173,6 +186,7 @@ export class LayerManager {
 
     const [removed] = this.layers.splice(idx, 1)
     removed.texture.destroy(true)
+    this.onPixelChange?.(id, 'removed')
 
     if (this.activeLayerId === id) {
       // Select the layer below, or the first remaining
@@ -220,6 +234,7 @@ export class LayerManager {
 
     this.layers.splice(sourceIdx + 1, 0, newLayer)
     this.activeLayerId = newId
+    this.onPixelChange?.(newId, 'all')
     this.notifyStructuralChange()
     this.notifyChange()
     return newId
@@ -261,6 +276,8 @@ export class LayerManager {
     // Remove source layer
     this.layers.splice(idx, 1)
     source.texture.destroy(true)
+    this.onPixelChange?.(target.info.id, 'all')
+    this.onPixelChange?.(source.info.id, 'removed')
 
     this.activeLayerId = target.info.id
     this.notifyStructuralChange()

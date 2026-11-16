@@ -13,6 +13,7 @@ import type { LayerInfo } from '../../src/types/layer.ts'
 import type { ToolType } from '../../src/types/engine.ts'
 import type {
   BrushOptions,
+  ChangedTiles,
   HarnessInfo,
   LayerProps,
   PointerOptions,
@@ -21,6 +22,7 @@ import type {
   RendererPreference,
   RGBA,
   SelectionState,
+  TileAt,
 } from '../harness/protocol.ts'
 import { Pixels, channelDistance, formatColor } from './pixels.ts'
 import { decodePng } from './png.ts'
@@ -123,6 +125,17 @@ export class Quar {
 
   reopen(): Promise<void> {
     return this.page.evaluate(() => window.__quar!.reopen())
+  }
+
+  /** Tiles of a layer as an incremental save reads them, each with the same tile from a whole-layer read. */
+  async readTiles(layerId: string, tiles: TileAt[]): Promise<{ x: number; y: number; read: Pixels; whole: Pixels }[]> {
+    const read = await this.page.evaluate(([i, t]) => window.__quar!.readTiles(i, t), [layerId, tiles] as const)
+    return read.map((t) => ({ x: t.x, y: t.y, read: Pixels.decode(t.read), whole: Pixels.decode(t.whole) }))
+  }
+
+  /** The tiles changed since the last call, by layer. */
+  takeChanges(): Promise<ChangedTiles> {
+    return this.page.evaluate(() => window.__quar!.takeChanges())
   }
 
   async readLayer(layerId: string): Promise<Pixels> {

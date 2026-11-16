@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { TILE_BYTES, TILE_SIZE, cutTile, hashTile, isEmptyTile, placeTile, tileColumns, tileRows } from './tileFormat.ts'
+import { TILE_BYTES, TILE_SIZE, cutTile, hashTile, isEmptyTile, placeTile, tileColumns, tileFromPixels, tileRows } from './tileFormat.ts'
+import { cutTiles } from '../../utils/tiles.ts'
 import { decodeTile, encodeTile } from './tileCodec.ts'
 import { sameBytes } from '../../test/bytes.ts'
 
@@ -46,6 +47,20 @@ describe('tiles', () => {
     // Premultiplied colour is what the GPU holds: it survives the round trip byte for byte.
     const again = cutAll(restored, width, height)
     expect(again.every((tile, n) => sameBytes(tile, tiles[n]))).toBe(true)
+  })
+
+  it('makes the same tile from a tile read back on its own as from the whole layer (plan M1.3)', () => {
+    const width = 300
+    const height = 260
+    const pixels = varied(width, height)
+    // The edge tile: 44 × 256 of the document, read back as straight alpha.
+    const [read] = cutTiles(pixels, width, height, [{ x: 1, y: 0 }])
+    const tile = tileFromPixels(read.pixels, 44, 256)
+    expect(tile).toHaveLength(TILE_BYTES)
+    expect(sameBytes(tile, cutTile(pixels, width, height, 1, 0))).toBe(true)
+    // The corner one, 44 × 4.
+    const [corner] = cutTiles(pixels, width, height, [{ x: 1, y: 1 }])
+    expect(sameBytes(tileFromPixels(corner.pixels, 44, 4), cutTile(pixels, width, height, 1, 1))).toBe(true)
   })
 
   it('keeps opaque pixels exactly as they were', () => {

@@ -15,6 +15,7 @@ import { CanvasManager } from '@engine/canvas/CanvasManager.ts'
 import { getBackend } from '@engine/renderer.ts'
 import { DEFAULT_PRESETS } from '@engine/brush/BrushParams.ts'
 import { exportImage } from '../../src/io/formats/image/ImageExporter.ts'
+import { cutTiles, tileBounds, tileKey } from '../../src/utils/tiles.ts'
 import type {
   BrushOptions,
   EncodedPixels,
@@ -219,6 +220,25 @@ function createHarness(manager: CanvasManager, overlay: HTMLCanvasElement, info:
         return { info, pixels: pixels && new Uint8Array(pixels) }
       })
       manager.loadDocument(saved, manager.getActiveLayerId())
+    },
+
+    readTiles(layerId, tiles) {
+      const read = manager.getLayerTiles(layerId, tiles)
+      const pixels = manager.getLayerPixels(layerId)
+      if (!read || !pixels) throw new Error(`harness: the tiles of ${layerId} can't be read now`)
+      const whole = new Map(cutTiles(pixels, info.width, info.height, tiles).map((t) => [tileKey(t.x, t.y), t.pixels]))
+      return read.map(({ x, y, pixels: tile }) => {
+        const { width: w, height: h } = tileBounds(x, y, info.width, info.height)
+        const cut = whole.get(tileKey(x, y))
+        if (!cut) throw new Error(`harness: tile ${tileKey(x, y)} was read but not asked for`)
+        return { x, y, read: encode(tile, w, h, false), whole: encode(cut, w, h, false) }
+      })
+    },
+
+    takeChanges() {
+      const changes: Record<string, string[] | 'all'> = {}
+      for (const [id, change] of manager.takeChanges()) changes[id] = change === 'all' ? 'all' : [...change].sort()
+      return changes
     },
 
     readLayer: (layerId) => read(layerById(layerId).texture),

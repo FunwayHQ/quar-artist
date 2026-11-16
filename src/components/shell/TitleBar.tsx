@@ -7,6 +7,7 @@ import { useTimelapseStore } from '@stores/timelapseStore.ts'
 import type { CanvasManager } from '@engine/canvas/CanvasManager.ts'
 import type { FilterType } from '@app-types/filter.ts'
 import { projectService } from '../../io/persistence/ProjectService.ts'
+import { SaveIndicator } from './SaveIndicator.tsx'
 import styles from './TitleBar.module.css'
 
 interface TitleBarProps {
@@ -177,6 +178,7 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, 
         }}
         spellCheck={false}
       />
+      <SaveIndicator />
       {recordingState === 'recording' && (
         <div className={styles.recordIndicator} data-testid="record-indicator">
           <span className={styles.recordDot} />

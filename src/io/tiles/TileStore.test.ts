@@ -8,8 +8,9 @@ import { FakeDirectory } from '../../test/fakeOpfs.ts'
 import { FakeLocks } from '../../test/fakeLocks.ts'
 import { IdbTileBackend } from './IdbTileBackend.ts'
 import { OpfsTileBackend, openOpfsRoot } from './OpfsTileBackend.ts'
-import { TileStore, openBackends, type SaveLayer } from './TileStore.ts'
+import { TileStore, isStaleSave, openBackends, type SaveLayer } from './TileStore.ts'
 import { TILE_FORMAT, TILE_SIZE } from './tileFormat.ts'
+import { cutTiles, type TilePosition } from '../../utils/tiles.ts'
 
 const W = 600
 const H = 300
@@ -56,6 +57,36 @@ function painted(tiles: [number, number][], seed = 1): Uint8Array {
 }
 
 const layer = (id: string, pixels: Uint8Array | null): SaveLayer => ({ info: info(id), pixels })
+
+/** A layer given as some of its tiles, cut from its whole pixels, to put on top of what was saved for it. */
+const changes = (id: string, pixels: Uint8Array, tiles: [number, number][]): SaveLayer => ({
+  info: info(id),
+  pixels: null,
+  tiles: cutTiles(pixels, W, H, tiles.map(([x, y]): TilePosition => ({ x, y }))),
+})
+
+/** The pixels with one pixel's alpha changed, in the tile it is in. */
+function touched(pixels: Uint8Array, x: number, y: number): Uint8Array {
+  const out = pixels.slice()
+  const i = (y * W + x) * 4
+  out[i + 3] = out[i + 3] === 255 ? 254 : 255
+  if (out[i + 3] === 255) out.set([10, 20, 30], i)
+  return out
+}
+
+/** Copy one tile's pixels from a layer into another. */
+function copyTile(from: Uint8Array, to: Uint8Array, tx: number, ty: number) {
+  for (let y = ty * TILE_SIZE; y < Math.min(H, (ty + 1) * TILE_SIZE); y++) {
+    const start = (y * W + tx * TILE_SIZE) * 4
+    const end = (y * W + Math.min(W, (tx + 1) * TILE_SIZE)) * 4
+    to.set(from.subarray(start, end), start)
+  }
+}
+
+/** Make one tile of a layer transparent. */
+function eraseTile(pixels: Uint8Array, tx: number, ty: number) {
+  copyTile(new Uint8Array(W * H * 4), pixels, tx, ty)
+}
 
 async function tileRecords(projectId?: string) {
   const all = await (await getDB()).getAll('tileData')
@@ -407,6 +438,119 @@ describe('TileStore', () => {
     })
   })
 
+  describe('saving changed tiles (plan M1.3)', () => {
+    let store: TileStore
+    beforeEach(() => {
+      const idb = new IdbTileBackend()
+      store = new TileStore({ write: idb, read: { idb } })
+    })
+
+    it('writes only the changed tiles, on top of the save it builds on', async () => {
+      const ink = painted([[0, 0], [1, 0], [2, 1]])
+      const first = await store.save('p', { width: W, height: H, layers: [layer('ink', ink.slice())] })
+      expect(first.seq).toBe(1)
+      const kept = (await manifest('p'))!.layers[0].tiles.find((t) => t.x === 0 && t.y === 0)!.ref
+
+      // One pixel changed in tile (1, 0), and tile (0, 1) painted.
+      const expected = touched(ink, 300, 10)
+      copyTile(painted([[0, 1]], 9), expected, 0, 1)
+
+      const report = await store.save('p', {
+        width: W,
+        height: H,
+        base: 1,
+        layers: [changes('ink', expected, [[1, 0], [0, 1]])],
+      })
+      expect(report).toMatchObject({ seq: 2, written: 2, kept: 2 })
+
+      const doc = (await store.load('p'))!
+      expect(doc.seq).toBe(2)
+      expect(sameBytes(doc.layers[0].pixels!, expected)).toBe(true)
+      // The unchanged tile is the same record.
+      expect((await manifest('p'))!.layers[0].tiles.find((t) => t.x === 0 && t.y === 0)!.ref).toBe(kept)
+      expect((await tileRecords('p')).length).toBe(4)
+    })
+
+    it('drops a tile changed to transparent, and keeps one whose pixels came out the same', async () => {
+      const ink = painted([[0, 0], [2, 1]])
+      await store.save('p', { width: W, height: H, layers: [layer('ink', ink.slice())] })
+
+      const erased = ink.slice()
+      eraseTile(erased, 2, 1)
+      const report = await store.save('p', {
+        width: W,
+        height: H,
+        base: 1,
+        layers: [changes('ink', erased, [[0, 0], [2, 1]])],
+      })
+      expect(report).toMatchObject({ written: 0, kept: 1 })
+      expect((await manifest('p'))!.layers[0].tiles.map((t) => [t.x, t.y])).toEqual([[0, 0]])
+      expect(await tileRecords('p')).toHaveLength(1)
+      expect(sameBytes((await store.load('p'))!.layers[0].pixels!, erased)).toBe(true)
+    })
+
+    it('starts a layer that is new since the base from nothing', async () => {
+      await store.save('p', { width: W, height: H, layers: [layer('ink', painted([[0, 0]]))] })
+      const sky = painted([[1, 1]], 4)
+      await store.save('p', {
+        width: W,
+        height: H,
+        base: 1,
+        layers: [changes('ink', blank(), []), changes('sky', sky, [[1, 1]])],
+      })
+      const doc = (await store.load('p'))!
+      expect(doc.layers.map((l) => l.info.id)).toEqual(['ink', 'sky'])
+      expect(sameBytes(doc.layers[1].pixels!, sky)).toBe(true)
+    })
+
+    it('refuses to build on a save that is not the last one, writing nothing', async () => {
+      const ink = painted([[0, 0]])
+      await store.save('p', { width: W, height: H, layers: [layer('ink', ink.slice())] })
+      // Another tab saved since.
+      await store.save('p', { width: W, height: H, layers: [layer('ink', painted([[1, 0]], 3))] })
+      const records = (await tileRecords('p')).map((r) => r.key).sort()
+
+      const stale = store.save('p', { width: W, height: H, base: 1, layers: [changes('ink', ink, [[0, 0]])] })
+      await expect(stale).rejects.toSatisfy(isStaleSave)
+      expect((await manifest('p'))!.seq).toBe(2)
+      expect((await tileRecords('p')).map((r) => r.key).sort()).toEqual(records)
+    })
+
+    it('refuses to build on a save of another size, or on none', async () => {
+      await store.save('p', { width: W, height: H, layers: [layer('ink', painted([[0, 0]]))] })
+      const small = { info: info('ink'), pixels: null, tiles: [] }
+      await expect(store.save('p', { width: W - 1, height: H, base: 1, layers: [small] })).rejects.toSatisfy(isStaleSave)
+      await expect(store.save('never', { width: W, height: H, base: 1, layers: [small] })).rejects.toSatisfy(isStaleSave)
+    })
+
+    it('saves whole layers whatever the base, since they need none', async () => {
+      await store.save('p', { width: W, height: H, layers: [layer('ink', painted([[0, 0]]))] })
+      await store.save('p', { width: W, height: H, layers: [layer('ink', painted([[1, 0]]))] })
+      const report = await store.save('p', { width: W, height: H, base: 1, layers: [layer('ink', painted([[2, 0]]))] })
+      expect(report.seq).toBe(3)
+    })
+
+    it('refuses a changed tile that does not fit the document, keeping the last save', async () => {
+      await store.save('p', { width: W, height: H, layers: [layer('ink', painted([[0, 0]]))] })
+      const outside = { info: info('ink'), pixels: null, tiles: [{ x: 3, y: 0, pixels: new Uint8Array(4) }] }
+      await expect(store.save('p', { width: W, height: H, base: 1, layers: [outside] })).rejects.toThrow("doesn't fit")
+      // A tile at the edge is only as big as the part of the document it covers.
+      const wrongSize = { info: info('ink'), pixels: null, tiles: [{ x: 2, y: 1, pixels: new Uint8Array(TILE_SIZE * TILE_SIZE * 4) }] }
+      await expect(store.save('p', { width: W, height: H, base: 1, layers: [wrongSize] })).rejects.toThrow("doesn't fit")
+      expect((await manifest('p'))!.seq).toBe(1)
+    })
+
+    it('lists the projects it has documents or tiles for', async () => {
+      await store.save('p', { width: W, height: H, layers: [layer('ink', painted([[0, 0]]))] })
+      await store.save('q', { width: W, height: H, layers: [layer('ink', painted([[1, 1]]))] })
+      // Tiles left without a manifest, as by a delete that stopped halfway.
+      await (await getDB()).delete('documents', 'q')
+      expect((await store.storedProjects()).sort()).toEqual(['p', 'q'])
+      await store.delete('q')
+      expect(await store.storedProjects()).toEqual(['p'])
+    })
+  })
+
   describe('in OPFS', () => {
     let root: FakeDirectory
     let store: TileStore
@@ -504,6 +648,26 @@ describe('TileStore', () => {
       expect(root.files().size).toBe(3)
       const doc = (await store.load('p'))!
       expect(sameBytes(doc.layers[1].pixels!, sky)).toBe(true)
+    })
+
+    it('moves the tiles a partial save keeps from the backend the last save used', async () => {
+      const ink = painted([[0, 0], [1, 1]])
+      const idb = new IdbTileBackend()
+      await new TileStore({ write: idb, read: { idb } }).save('p', { width: W, height: H, layers: [layer('ink', ink.slice())] })
+
+      const changed = touched(ink, 10, 10)
+      const report = await store.save('p', { width: W, height: H, base: 1, layers: [changes('ink', changed, [[0, 0]])] })
+      expect(report).toMatchObject({ backend: 'opfs', written: 2 })
+      expect(await tileRecords('p')).toHaveLength(0)
+      expect(root.files().size).toBe(2)
+      expect(sameBytes((await store.load('p'))!.layers[0].pixels!, changed)).toBe(true)
+    })
+
+    it('lists the projects with files here, saved or not', async () => {
+      await store.save('p', { width: W, height: H, layers: [layer('ink', painted([[0, 0]]))] })
+      await store.save('a/b', { width: W, height: H, layers: [layer('ink', painted([[0, 0]]))] })
+      await (await getDB()).delete('documents', 'a/b')
+      expect((await store.storedProjects()).sort()).toEqual(['a/b', 'p'])
     })
   })
 

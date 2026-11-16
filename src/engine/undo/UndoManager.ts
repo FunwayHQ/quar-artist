@@ -1,5 +1,6 @@
 import { PerfMonitor } from '../perf/PerfMonitor.ts'
 import { compressSnapshot, decompressSnapshot, isCompressionAvailable } from './compression.ts'
+import { changedTiles, type TileChanges } from '../../utils/tiles.ts'
 
 const MAX_UNDO_STATES = 50
 
@@ -18,6 +19,11 @@ export interface LayerUndoEntry {
   layerId: string
   before: LayerSnapshot
   after: LayerSnapshot
+  /**
+   * The 256 × 256 tiles that differ between before and after, worked out
+   * when the entry is recorded: undoing or redoing it changes just these.
+   */
+  tiles?: TileChanges
 }
 
 export interface SelectionUndoEntry {
@@ -29,6 +35,27 @@ export interface SelectionUndoEntry {
 export type UndoEntry = LayerUndoEntry | SelectionUndoEntry
 
 export type UndoStateChangeCallback = (canUndo: boolean, canRedo: boolean) => void
+
+/** Reports the tiles of a layer that an operation changed, once its pixels are in place. */
+export type PixelChangeCallback = (layerId: string, tiles: TileChanges) => void
+
+/**
+ * The tiles two snapshots of a layer differ in; the whole layer when they
+ * can't be compared. `beforePixels` are the before snapshot's pixels
+ * uncompressed, for a snapshot compressed since it was read.
+ */
+function snapshotChanges(before: LayerSnapshot, after: LayerSnapshot, beforePixels?: Uint8Array | null): TileChanges {
+  const { width, height } = after
+  const size = width * height * 4
+  const old = beforePixels ?? (before.compressed ? null : before.data)
+  if (
+    !old || after.compressed || before.width !== width || before.height !== height ||
+    old.length < size || after.data.length < size
+  ) {
+    return 'all'
+  }
+  return new Set(changedTiles(old, after.data, width, height))
+}
 
 /**
  * Wait for any pending compression, then decompress if needed.
@@ -77,10 +104,18 @@ export class UndoManager {
   private redoStack: UndoEntry[] = []
   private pendingBefore: LayerSnapshot | null = null
   private pendingLayerId: string = ''
+  /** The pending snapshot's pixels uncompressed, when it may be compressed by now. */
+  private pendingPixels: Uint8Array | null = null
   private onChange: UndoStateChangeCallback | null = null
+  private onPixelChange: PixelChangeCallback | null = null
 
   setChangeCallback(cb: UndoStateChangeCallback) {
     this.onChange = cb
+  }
+
+  /** Called with the tiles each recorded layer operation changed (for saving only what changed, plan M1.3). */
+  setPixelChangeCallback(cb: PixelChangeCallback | null) {
+    this.onPixelChange = cb
   }
 
   get canUndo(): boolean {
@@ -95,9 +130,15 @@ export class UndoManager {
    * Called before a stroke begins.
    * Saves full layer pixel snapshot.
    */
-  beginOperation(snapshot: LayerSnapshot, layerId: string = '') {
+  /**
+   * Start an operation from the layer's snapshot. `pixels` are the
+   * snapshot's pixels uncompressed, for a snapshot that may have been
+   * compressed since it was read (a stroke reusing the last one's).
+   */
+  beginOperation(snapshot: LayerSnapshot, layerId: string = '', pixels?: Uint8Array) {
     this.pendingBefore = snapshot
     this.pendingLayerId = layerId
+    this.pendingPixels = pixels ?? null
   }
 
   /**
@@ -107,8 +148,11 @@ export class UndoManager {
     PerfMonitor.mark('undo-push-start')
     this.undoStack.push(entry)
 
-    // Compress layer snapshots in the background
     if (entry.type === 'layer') {
+      // Before compression replaces the pixels.
+      entry.tiles ??= snapshotChanges(entry.before, entry.after)
+      this.onPixelChange?.(entry.layerId, entry.tiles)
+      // Compress layer snapshots in the background
       compressInBackground(entry.before)
       compressInBackground(entry.after)
     }
@@ -135,9 +179,11 @@ export class UndoManager {
       layerId: this.pendingLayerId,
       before: this.pendingBefore,
       after: snapshot,
+      tiles: snapshotChanges(this.pendingBefore, snapshot, this.pendingPixels),
     }
 
     this.undoStack.push(entry)
+    this.onPixelChange?.(entry.layerId, entry.tiles!)
 
     // Compress snapshots asynchronously (doesn't block stroke)
     compressInBackground(entry.before)
@@ -151,13 +197,30 @@ export class UndoManager {
     // Any new operation invalidates the redo stack
     this.redoStack = []
     this.pendingBefore = null
+    this.pendingPixels = null
     this.notifyChange()
     PerfMonitor.measure('undo-push', 'undo-push-start')
   }
 
-  /** Cancel a pending operation (e.g., stroke cancelled). */
+  /**
+   * The layer changed outside the history (merged onto, resized): undoing or
+   * redoing any of its steps now restores more than that step's tiles, so
+   * each counts the whole layer as changed (plan M1.3).
+   */
+  forgetTiles(layerId: string) {
+    for (const entry of [...this.undoStack, ...this.redoStack]) {
+      if (entry.type === 'layer' && entry.layerId === layerId) entry.tiles = 'all'
+    }
+  }
+
+  /**
+   * Cancel a pending operation (e.g., stroke cancelled). What it already
+   * drew stays, with no entry to say where: the whole layer counts as changed.
+   */
   cancelOperation() {
+    if (this.pendingBefore) this.onPixelChange?.(this.pendingLayerId, 'all')
     this.pendingBefore = null
+    this.pendingPixels = null
   }
 
   /**
