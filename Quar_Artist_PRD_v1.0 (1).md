@@ -540,7 +540,7 @@ Key implementation details:
 | Tool/brush selection | Zustand store | On user action | Full (triggers re-render) |
 | Layer metadata | Zustand store + IndexedDB | On layer operations | Full (layers panel update) |
 | Color state | Zustand store | On color change | Full (picker update) |
-| Project metadata | Dexie.js (IndexedDB) | On save/auto-save | Minimal (gallery update) |
+| Project metadata | idb (IndexedDB) | On save/auto-save | Minimal (gallery update) |
 | Undo/redo stack | Tile diff cache + OPFS | Per operation | Minimal (button state) |
 
 ### 5.5 File I/O & Persistence
@@ -548,7 +548,7 @@ Key implementation details:
 | Concern | Technology | Rationale |
 |---|---|---|
 | Project storage | Origin Private File System (OPFS) | 2–4× faster than IndexedDB; synchronous access in Web Workers |
-| Metadata DB | Dexie.js (IndexedDB wrapper) | Structured queries for gallery, settings, brush presets |
+| Metadata DB | idb (IndexedDB wrapper) | Structured queries for gallery, settings, brush presets |
 | PSD import/export | ag-psd (MIT) | Full PSD R/W with layers, blend modes, masks, text |
 | Video export | FFmpeg.wasm (~25MB WASM) | Client-side MP4/WebM encoding for timelapse/animation |
 | GIF export | gifenc | Lightweight GIF encoding for animation export |
@@ -598,7 +598,7 @@ Real-time collaboration uses **Yjs CRDTs** for conflict-free synchronization of 
 | PSD I/O | ag-psd | latest | MIT | Read/write PSD with layers, masks, text |
 | Video Export | FFmpeg.wasm | 0.12+ | LGPL | Client-side MP4/WebM/GIF encoding |
 | GIF Export | gifenc | 1.0+ | MIT | Lightweight animated GIF encoding |
-| Persistence | Dexie.js | 4+ | Apache | IndexedDB wrapper for metadata/settings |
+| Persistence | idb | 8+ | ISC | IndexedDB wrapper for metadata/settings |
 | File System | OPFS | Native | W3C | High-perf binary file access in Workers |
 | Collaboration | Yjs | 13+ | MIT | CRDT-based real-time document sync |
 | Realtime Transport | y-websocket | latest | MIT | Collaboration server relay |
@@ -797,7 +797,7 @@ Real-time collaboration uses **Yjs CRDTs** for conflict-free synchronization of 
 - Figma Architecture Blog — figma.com/blog/webassembly-cut-figmas-load-time-by-3x
 - Krita Brush Engine Wiki — community.kde.org/Krita/BrushEngine
 - perfect-freehand Library — github.com/steveruizok/perfect-freehand
-- Dexie.js (IndexedDB) — github.com/dexie/Dexie.js
+- idb (IndexedDB) — github.com/jakearchibald/idb
 - Excalidraw Rendering Architecture — deepwiki.com/zsviczian/excalidraw/6.1-rendering-architecture
 
 ---

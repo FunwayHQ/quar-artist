@@ -1,16 +1,19 @@
 import { useProjectStore } from '../../stores/projectStore.ts'
 import { useUIStore, type ToastOptions } from '../../stores/uiStore.ts'
-import { MetadataDB, type StoredLayerData } from './MetadataDB.ts'
+import { MetadataDB } from './MetadataDB.ts'
 import { DocumentSession, type DocumentEngine } from './DocumentSession.ts'
+import type { DocumentStore, SaveLayer } from '../tiles/TileStore.ts'
+import { createDocumentStore } from '../tiles/WorkerDocumentStore.ts'
+import { TILE_SIZE, savedLayerInfo } from '../tiles/tileFormat.ts'
 import type { SaveStatus } from './AutoSave.ts'
 import { encodeLayersThumbnail } from './thumbnail.ts'
 import { readQart } from '../formats/qart/QartReader.ts'
 import { decodeImageBlob } from '../importImage.ts'
 import { canvasSizeProblem } from '../../utils/deviceLimits.ts'
 import { createId } from '../../utils/id.ts'
-import { setDatabaseEventListener, type DatabaseEvent, type LayerRecord, type ProjectRecord } from '../../db/schema.ts'
+import { setDatabaseEventListener, type DatabaseEvent, type ProjectRecord } from '../../db/schema.ts'
 import type { GallerySort, NewProjectConfig } from '../../types/project.ts'
-import { ALL_BLEND_MODES, MAX_LAYERS, type BlendMode, type LayerInfo, type StoredLayer } from '../../types/layer.ts'
+import { MAX_LAYERS, type BlendMode, type LayerInfo, type StoredLayer } from '../../types/layer.ts'
 
 const SETTING_SORT = 'gallery.sort'
 const SETTING_LAST_PROJECT = 'gallery.lastProjectId'
@@ -60,26 +63,9 @@ function describe(err: unknown): string {
   return String(err)
 }
 
-function isBlendMode(value: unknown): value is BlendMode {
-  return ALL_BLEND_MODES.includes(value as BlendMode)
-}
-
-function clamp01(value: unknown): number {
-  const n = typeof value === 'number' && Number.isFinite(value) ? value : 1
-  return Math.min(1, Math.max(0, n))
-}
-
-function infoFromRecord(r: LayerRecord): LayerInfo {
-  return {
-    id: r.layerId,
-    name: r.name,
-    blendMode: isBlendMode(r.blendMode) ? r.blendMode : 'normal',
-    opacity: clamp01(r.opacity),
-    visible: r.visible,
-    locked: r.locked,
-    alphaLock: r.alphaLock,
-    clippingMask: r.clippingMask,
-  }
+/** A delete that couldn't be made final yet. The project stays deleted, and the next start tries again. */
+function warnPurge(err: unknown) {
+  console.warn('[QUAR] A deleted project could not be removed yet:', err)
 }
 
 function newLayerInfo(name: string): LayerInfo {
@@ -95,11 +81,13 @@ function newLayerInfo(name: string): LayerInfo {
   }
 }
 
-/** A saved document: the project record and its layers, bottom first. */
+/** A saved document: the project record, at the document's size, and its layers, bottom first. */
 interface LoadedDocument {
   project: ProjectRecord
   layers: StoredLayer[]
   activeLayerId: string | null
+  /** Tiles that couldn't be read, which show as transparent. */
+  unreadableTiles: number
 }
 
 /** A document waiting for its engine. */
@@ -119,6 +107,7 @@ interface PendingDocument {
  */
 export class ProjectService {
   private readonly db: MetadataDB
+  private readonly tiles: DocumentStore
   private readonly debounceMs: number | undefined
   private session: DocumentSession | null = null
   private pending: PendingDocument | null = null
@@ -134,8 +123,9 @@ export class ProjectService {
   /** A save failure was shown, and no save has worked since: further failures stay quiet. */
   private saveErrorShown = false
 
-  constructor(db = new MetadataDB(), options: { debounceMs?: number } = {}) {
+  constructor(db = new MetadataDB(), options: { debounceMs?: number; store?: DocumentStore } = {}) {
     this.db = db
+    this.tiles = options.store ?? createDocumentStore()
     this.debounceMs = options.debounceMs
   }
 
@@ -282,6 +272,7 @@ export class ProjectService {
           return false
         }
         this.beginSession(doc.project, doc)
+        this.reportUnreadable(doc)
         await this.rememberLast(id)
         return true
       } catch (err) {
@@ -403,10 +394,21 @@ export class ProjectService {
       // Size not saved yet): open it again at its saved size.
       session.discard()
       this.beginSession(doc.project, doc)
+      this.reportUnreadable(doc)
       return
     }
     engine.loadDocument(doc.layers, doc.activeLayerId)
     session.attach(engine)
+    this.reportUnreadable(doc)
+  }
+
+  /** Say so when part of a document couldn't be read: it opened with those tiles transparent. */
+  private reportUnreadable({ project, unreadableTiles: n }: LoadedDocument) {
+    if (n === 0) return
+    const tiles = `${n} ${n === 1 ? 'tile' : 'tiles'} of ${TILE_SIZE} × ${TILE_SIZE} px`
+    this.toast(`Part of ${q(project.name)} couldn't be read and shows as transparent (${tiles})`, 'error', {
+      durationMs: 15000,
+    })
   }
 
   private async createAndOpen(config: NewProjectConfig) {
@@ -430,6 +432,7 @@ export class ProjectService {
     this.session = new DocumentSession(
       project.id,
       this.db,
+      this.tiles,
       (status, error) => this.onSaveStatus(status, error),
       this.debounceMs,
     )
@@ -480,16 +483,26 @@ export class ProjectService {
   private async loadDocument(id: string): Promise<LoadedDocument | null> {
     const project = await this.db.getProject(id)
     if (!project || project.deletedAt) return null
-    const size = project.width * project.height * 4
-    const layers: StoredLayer[] = []
-    for (const record of await this.db.loadLayers(id)) {
-      const data = await this.db.loadTile(id, record.layerId, 'full')
-      layers.push({
-        info: infoFromRecord(record),
-        pixels: data && data.byteLength === size ? new Uint8Array(data) : null,
-      })
+    const activeLayerId = project.activeLayerId ?? null
+    // A project saved the old way can move to tiles, in another tab, between the two reads: then read again.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const saved = await this.tiles.load(id)
+      if (saved) {
+        // The saved document's size wins over the record's, which a failed save may not have updated.
+        const { width, height, layers, unreadableTiles } = saved
+        return { project: { ...project, width, height }, layers, activeLayerId, unreadableTiles }
+      }
+      // Saved before the tile store, as whole layers: its next save moves it to tiles.
+      const layers = await this.db.loadLegacyLayers(id, project.width, project.height)
+      if (layers) return { project, layers, activeLayerId, unreadableTiles: 0 }
     }
-    return { project, layers, activeLayerId: project.activeLayerId ?? null }
+    throw new Error('another tab kept saving it while it opened')
+  }
+
+  /** Remove a project and its saved document. */
+  private async removeProject(id: string) {
+    await this.tiles.delete(id)
+    await this.db.deleteProject(id)
   }
 
   private async rememberLast(id: string) {
@@ -511,7 +524,14 @@ export class ProjectService {
     const original = this.store.getState().projects.find((p) => p.id === id)
     if (!original) return
     try {
-      await this.db.duplicateProject(id, `${original.name} copy`)
+      const copyId = await this.db.duplicateProject(id, `${original.name} copy`)
+      try {
+        await this.tiles.copy(id, copyId)
+      } catch (err) {
+        // Leave no half-made copy in the Gallery.
+        await this.removeProject(copyId).catch(() => undefined)
+        throw err
+      }
       await this.refresh()
       this.toast(`Duplicated ${q(original.name)}`, 'success')
     } catch (err) {
@@ -532,7 +552,8 @@ export class ProjectService {
       durationMs: DELETE_UNDO_MS,
       action: { label: 'Undo', run: () => void this.restoreProject(id, project.name) },
       onClose: (reason) => {
-        if (reason !== 'action') void this.purgeProject(id)
+        // If that fails, it stays deleted and the next start tries again.
+        if (reason !== 'action') void this.purgeProject(id).catch((err) => warnPurge(err))
       },
     })
   }
@@ -548,7 +569,7 @@ export class ProjectService {
   async purgeProject(id: string): Promise<void> {
     const project = await this.db.getProject(id)
     if (!project?.deletedAt) return
-    await this.db.deleteProject(id)
+    await this.removeProject(id)
     await this.removeStackIfEmpty(project.stackId)
     await this.refresh()
   }
@@ -565,13 +586,19 @@ export class ProjectService {
       if (!project.deletedAt) continue
       const undoLeft = project.deletedAt.getTime() + DELETE_UNDO_MS + PURGE_GRACE_MS - now
       if (undoLeft > 0) {
-        setTimeout(() => void this.purgeProject(project.id).catch(() => undefined), undoLeft)
+        setTimeout(() => void this.purgeProject(project.id).catch((err) => warnPurge(err)), undoLeft)
         continue
       }
-      await this.db.deleteProject(project.id)
-      if (project.stackId) stacks.add(project.stackId)
+      // A delete that can't be finished now doesn't stop the app: the project
+      // stays deleted, out of the Gallery, and the next start tries again.
+      try {
+        await this.removeProject(project.id)
+        if (project.stackId) stacks.add(project.stackId)
+      } catch (err) {
+        warnPurge(err)
+      }
     }
-    for (const stackId of stacks) await this.removeStackIfEmpty(stackId)
+    for (const stackId of stacks) await this.removeStackIfEmpty(stackId).catch((err) => warnPurge(err))
   }
 
   async setSort(sort: GallerySort): Promise<void> {
@@ -683,20 +710,20 @@ export class ProjectService {
 
     // Fresh ids: the same file imported twice makes two independent projects.
     const ids = new Map<string, string>()
-    const stored: StoredLayerData[] = [...layers]
+    const stored: SaveLayer[] = [...layers]
       .sort((a, b) => a.manifest.order - b.manifest.order)
       .slice(0, MAX_LAYERS)
       .map(({ manifest: layer, pixels }) => {
         if (pixels.length !== width * height * 4) throw new Error(`layer ${q(layer.name)} has the wrong size`)
-        const info: LayerInfo = {
+        const info = savedLayerInfo({
           ...newLayerInfo(String(layer.name)),
-          blendMode: isBlendMode(layer.blendMode) ? layer.blendMode : 'normal',
-          opacity: clamp01(layer.opacity),
-          visible: layer.visible !== false,
-          locked: layer.locked === true,
-          alphaLock: layer.alphaLock === true,
-          clippingMask: layer.clippingMask === true,
-        }
+          blendMode: layer.blendMode as BlendMode,
+          opacity: layer.opacity,
+          visible: layer.visible,
+          locked: layer.locked,
+          alphaLock: layer.alphaLock,
+          clippingMask: layer.clippingMask,
+        })
         if (!ids.has(layer.id)) ids.set(layer.id, info.id)
         return { info, pixels }
       })
@@ -708,23 +735,26 @@ export class ProjectService {
   }
 
   /** Create a project record with these layers and a thumbnail, in the open stack. */
-  private async addProject(config: NewProjectConfig, layers: StoredLayerData[], activeLayerId: string) {
+  private async addProject(config: NewProjectConfig, layers: SaveLayer[], activeLayerId: string) {
     const stackId = this.store.getState().openStackId ?? undefined
+    // Before saving: the save hands the pixels over to the persistence worker.
+    const thumbnail = await encodeLayersThumbnail(
+      layers.flatMap(({ info, pixels }) =>
+        pixels ? [{ pixels, opacity: info.opacity, visible: info.visible, blendMode: info.blendMode }] : [],
+      ),
+      config.width,
+      config.height,
+    ).catch(() => null)
     const id = await this.db.createProject(config.name, config.width, config.height, config.dpi, {
       colorSpace: config.colorSpace,
       ...(stackId ? { stackId } : {}),
     })
     try {
-      await this.db.saveDocumentLayers(id, layers)
-      const thumbnail = await encodeLayersThumbnail(
-        layers.map(({ info, pixels }) => ({ pixels, opacity: info.opacity, visible: info.visible, blendMode: info.blendMode })),
-        config.width,
-        config.height,
-      ).catch(() => null)
+      await this.tiles.save(id, { width: config.width, height: config.height, layers })
       await this.db.updateProject(id, { activeLayerId, ...(thumbnail ? { thumbnail } : {}) })
     } catch (err) {
       // Leave no half-imported project in the Gallery.
-      await this.db.deleteProject(id).catch(() => undefined)
+      await this.removeProject(id).catch(() => undefined)
       throw err
     }
     return id

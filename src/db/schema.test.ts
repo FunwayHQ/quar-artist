@@ -245,6 +245,55 @@ describe('QuarDB upgrade from version 2', () => {
   })
 })
 
+describe('QuarDB upgrade from version 3', () => {
+  beforeEach(async () => {
+    resetDB()
+    await deleteDB(DB_NAME)
+  })
+  afterEach(() => resetDB())
+
+  it('adds the tile store and keeps projects saved the old way readable', async () => {
+    const v3 = await openDB(DB_NAME, 3, {
+      upgrade(db) {
+        const projects = db.createObjectStore('projects', { keyPath: 'id' })
+        projects.createIndex('by-name', 'name')
+        projects.createIndex('by-updatedAt', 'updatedAt')
+        const layers = db.createObjectStore('layers', { keyPath: 'id', autoIncrement: true })
+        layers.createIndex('by-projectId', 'projectId')
+        layers.createIndex('by-project-layer', ['projectId', 'layerId'])
+        const tiles = db.createObjectStore('tiles', { keyPath: 'id', autoIncrement: true })
+        tiles.createIndex('by-projectId', 'projectId')
+        tiles.createIndex('by-project-layer-key', ['projectId', 'layerId', 'key'])
+        db.createObjectStore('settings', { keyPath: 'key' })
+        db.createObjectStore('stacks', { keyPath: 'id' })
+      },
+    })
+    await v3.add('projects', project('p1', 'Kept'))
+    await v3.add('layers', layer('p1', 'Ink'))
+    await v3.add('tiles', { projectId: 'p1', layerId: 'layer-1', key: 'full', data: new Uint8Array([9]).buffer })
+    v3.close()
+
+    const db = await getDB()
+    expect(db.version).toBe(DB_VERSION)
+    expect([...db.objectStoreNames]).toEqual(expect.arrayContaining(['documents', 'tileData']))
+    expect((await db.get('projects', 'p1'))!.name).toBe('Kept')
+    expect(await db.count('layers')).toBe(1)
+    expect(await db.count('tiles')).toBe(1)
+  })
+
+  it('keys tile records by project, layer and tile name, so one name is one record', async () => {
+    const db = await getDB()
+    const key = '0_0_s1'
+    await db.put('tileData', { projectId: 'p1', layerId: 'l1', key, data: new ArrayBuffer(1) })
+    await db.put('tileData', { projectId: 'p1', layerId: 'l1', key, data: new ArrayBuffer(2) })
+    await db.put('tileData', { projectId: 'p1', layerId: 'l1', key: '0_0_s2', data: new ArrayBuffer(3) })
+    await db.put('tileData', { projectId: 'p1', layerId: 'l2', key, data: new ArrayBuffer(4) })
+    expect(await db.count('tileData')).toBe(3)
+    expect((await db.get('tileData', ['p1', 'l1', key]))!.data.byteLength).toBe(2)
+    await expect(db.add('tileData', { projectId: 'p1', layerId: 'l1', key, data: new ArrayBuffer(5) })).rejects.toThrow()
+  })
+})
+
 describe('QuarDB connection', () => {
   beforeEach(async () => {
     resetDB()

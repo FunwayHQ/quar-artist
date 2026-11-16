@@ -1,6 +1,8 @@
 import { AutoSave, type LayerDataSet, type SaveStatusCallback } from './AutoSave.ts'
 import type { MetadataDB } from './MetadataDB.ts'
 import { encodeThumbnail } from './thumbnail.ts'
+import type { DocumentStore } from '../tiles/TileStore.ts'
+import { savedLayerInfo } from '../tiles/tileFormat.ts'
 import type { LayerInfo, StoredLayer } from '../../types/layer.ts'
 
 /** What a document session needs from the engine showing it. CanvasManager implements it. */
@@ -10,7 +12,7 @@ export interface DocumentEngine {
   getDocumentSize(): { width: number; height: number }
   getLayerInfos(): LayerInfo[]
   getActiveLayerId(): string
-  /** A layer's pixels, straight RGBA. */
+  /** A layer's pixels, straight RGBA, in a buffer of the caller's own. */
   getLayerPixels(id: string): Uint8Array | null
   getCompositePixels(): { pixels: Uint8ClampedArray; width: number; height: number } | null
   /**
@@ -33,9 +35,15 @@ export class DocumentSession {
   private engine: DocumentEngine | null = null
   private lastEngine: DocumentEngine | null = null
 
-  constructor(projectId: string, metaDb: MetadataDB, onStatus?: SaveStatusCallback, debounceMs?: number) {
+  constructor(
+    projectId: string,
+    metaDb: MetadataDB,
+    store: DocumentStore,
+    onStatus?: SaveStatusCallback,
+    debounceMs?: number,
+  ) {
     this.projectId = projectId
-    this.autosave = new AutoSave(metaDb, debounceMs)
+    this.autosave = new AutoSave(metaDb, store, debounceMs)
     this.autosave.setProjectId(projectId)
     if (onStatus) this.autosave.setStatusCallback(onStatus)
     this.autosave.setDataExtractor(() => this.extract())
@@ -122,17 +130,15 @@ export class DocumentSession {
     const engine = this.engine
     if (!engine) return null
     const { width, height } = engine.getDocumentSize()
-    const layerInfos = engine.getLayerInfos()
-    const layerPixels: LayerDataSet['layerPixels'] = []
-    for (const info of layerInfos) {
-      const pixels = engine.getLayerPixels(info.id)
-      if (pixels) layerPixels.push({ layerId: info.id, pixels })
-    }
+    // A layer the engine can't give pixels for keeps what was saved for it.
+    const layers = engine.getLayerInfos().map((info) => ({
+      info: savedLayerInfo(info),
+      pixels: engine.getLayerPixels(info.id),
+    }))
     // Keep the last thumbnail while a preview shows: the layers saved are the pixels from before it.
     const composite = engine.isPreviewing() ? null : engine.getCompositePixels()
     return {
-      layerInfos,
-      layerPixels,
+      layers,
       width,
       height,
       activeLayerId: engine.getActiveLayerId(),

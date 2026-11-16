@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 QUAR Artist is a professional-grade, open-source (MIT) digital illustration and painting web application. Part of the QUAR Suite (alongside QUAR Editor for 3D and QUAR Vector for 2D vector). The goal is Procreate-quality brush fidelity on the web.
 
-**MVP is fully client-side — no backend.** All persistence is local (IndexedDB via Dexie.js, OPFS for tile data). Export via .qart file download, PNG, JPEG, PSD. Collaboration and cloud features are deferred to Phase 2+.
+**MVP is fully client-side — no backend.** All persistence is local (IndexedDB via idb, OPFS for tile data). Export via .qart file download, PNG, JPEG, PSD. Collaboration and cloud features are deferred to Phase 2+.
 
 The full product specification is in `Quar_Artist_PRD_v1.0 (1).md`.
 The design system specification is in `quar-suite-design-prompt.md`.
@@ -35,7 +35,7 @@ All CSS custom properties (tokens for spacing, typography, radius, shadows, z-in
 - **Stroke Generation:** perfect-freehand
 - **Build:** Vite 5+
 - **Testing:** Vitest (unit) + Playwright (E2E + visual regression)
-- **Persistence:** Dexie.js (IndexedDB for metadata), OPFS (binary file storage)
+- **Persistence:** idb (IndexedDB for metadata, and for tiles where OPFS can't be used), OPFS (tile files, written from a persistence worker)
 - **PSD I/O:** ag-psd
 - **Collaboration (Phase 2):** Yjs CRDTs + y-websocket (not in MVP)
 - **Color Science:** chroma.js
@@ -86,7 +86,7 @@ Agent instruction files live in `agents/`. Each defines a specialized role, tool
 | Browser Testing | `agents/browser-testing.md` | E2E tests, cross-browser validation (Playwright MCP) |
 | Rendering Engine | `agents/rendering-engine.md` | PixiJS, WebGPU/WebGL, brush engine, shaders, compositing |
 | Project Architect | `agents/project-architect.md` | Scaffolding, Vite config, module boundaries, CI |
-| State Management | `agents/state-management.md` | Zustand stores, engine↔React bridge, Dexie.js, OPFS |
+| State Management | `agents/state-management.md` | Zustand stores, engine↔React bridge, idb, OPFS |
 | WASM Engineer | `agents/wasm-engineer.md` | Rust→WASM hot paths: LZ4, filters, pixel ops |
 | Collaboration | `agents/collaboration.md` | Yjs CRDTs, WebSocket, cursor presence, layer locking |
 | File I/O | `agents/file-io.md` | .qart format, PSD/PNG/JPEG export, persistence |

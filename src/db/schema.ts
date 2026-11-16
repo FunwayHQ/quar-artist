@@ -1,5 +1,6 @@
 import { openDB, type IDBPDatabase, type IDBPTransaction, type DBSchema, type StoreNames } from 'idb'
 import type { ColorSpace, StoredImage } from '../types/project.ts'
+import type { DocumentManifest } from '../io/tiles/tileFormat.ts'
 import { createId } from '../utils/id.ts'
 
 export interface ProjectRecord {
@@ -44,8 +45,21 @@ export interface LayerRecord {
   order: number
 }
 
+/** A whole layer's pixels, as versions up to 3 saved them. Read to open older projects, which move to `tileData` on their next save. */
 export interface TileRecord {
   id?: number
+  projectId: string
+  layerId: string
+  key: string
+  data: ArrayBuffer
+}
+
+/**
+ * One encoded 256 × 256 tile, where OPFS can't be written (plan M1.2). `key`
+ * is the tile's name, "column_row_save": each save writes new names, and the
+ * manifest says which are the document's.
+ */
+export interface TileDataRecord {
   projectId: string
   layerId: string
   key: string
@@ -90,6 +104,15 @@ interface QuarDBSchema extends DBSchema {
     key: string
     value: StackRecord
   }
+  /** Each project's saved document: its layers and where their tiles are. */
+  documents: {
+    key: string
+    value: DocumentManifest
+  }
+  tileData: {
+    key: [string, string, string]
+    value: TileDataRecord
+  }
 }
 
 export type QuarDB = IDBPDatabase<QuarDBSchema>
@@ -103,8 +126,10 @@ export const DB_NAME = 'QuarArtistDB'
  * 2. Projects keyed by a UUID (plan D12). Upgrading rekeys version 1 projects
  *    and points their layers and tiles at the new ids.
  * 3. Adds the stacks store (Gallery folders).
+ * 4. Adds the documents and tileData stores of the tile store (plan M1.2).
+ *    Projects saved before keep their layers and tiles stores until their next save.
  */
-export const DB_VERSION = 3
+export const DB_VERSION = 4
 
 /**
  * Database events the user may need to act on:
@@ -159,6 +184,11 @@ function openQuarDB(): Promise<QuarDB> {
         await rekeyProjects(db, tx)
       }
       if (oldVersion < 3) db.createObjectStore('stacks', { keyPath: 'id' })
+      if (oldVersion < 4) {
+        db.createObjectStore('documents', { keyPath: 'projectId' })
+        // One record per (project, layer, tile): the key can't repeat.
+        db.createObjectStore('tileData', { keyPath: ['projectId', 'layerId', 'key'] })
+      }
     },
     blocked() {
       onDatabaseEvent?.('blocked')

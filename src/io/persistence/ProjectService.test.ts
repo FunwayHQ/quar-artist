@@ -3,7 +3,10 @@ import 'fake-indexeddb/auto'
 import { deleteDB, openDB } from 'idb'
 import { ProjectService, DEFAULT_PROJECT, DELETE_UNDO_MS, PURGE_GRACE_MS, baseName, importKind } from './ProjectService.ts'
 import { MetadataDB } from './MetadataDB.ts'
-import { DB_NAME, DB_VERSION, resetDB, type ProjectRecord } from '../../db/schema.ts'
+import { DB_NAME, DB_VERSION, getDB, resetDB, type ProjectRecord } from '../../db/schema.ts'
+import { IdbTileBackend } from '../tiles/IdbTileBackend.ts'
+import { TileStore } from '../tiles/TileStore.ts'
+import { legacyRecords, writeLegacyLayers } from '../../test/legacyLayout.ts'
 import { useProjectStore } from '../../stores/projectStore.ts'
 import { useUIStore } from '../../stores/uiStore.ts'
 import { decodeImageBlob } from '../importImage.ts'
@@ -20,10 +23,16 @@ vi.mock('./thumbnail.ts', () => ({
 const initialProjectState = useProjectStore.getState()
 const store = () => useProjectStore.getState()
 const toasts = () => useUIStore.getState().toasts.map((t) => t.message)
-const filled = (value: number) => new Uint8Array(2 * 2 * 4).fill(value)
+/** 2 × 2 opaque pixels of one grey: they load back exactly. */
+function filled(value: number) {
+  const pixels = new Uint8Array(2 * 2 * 4).fill(value)
+  for (let i = 3; i < pixels.length; i += 4) pixels[i] = 255
+  return pixels
+}
 
 describe('ProjectService', () => {
   let db: MetadataDB
+  let tiles: TileStore
   let service: ProjectService
 
   beforeEach(async () => {
@@ -33,7 +42,9 @@ describe('ProjectService', () => {
     useUIStore.setState({ toasts: [] })
     vi.mocked(decodeImageBlob).mockReset()
     db = new MetadataDB()
-    service = new ProjectService(db, { debounceMs: 10 })
+    const idb = new IdbTileBackend()
+    tiles = new TileStore({ write: idb, read: { idb } })
+    service = new ProjectService(db, { debounceMs: 10, store: tiles })
   })
 
   afterEach(() => {
@@ -43,17 +54,33 @@ describe('ProjectService', () => {
   /** A saved 2 × 2 project with two layers, the bottom one active. */
   async function seedProject(name: string, extra: Partial<ProjectRecord> = {}) {
     const id = await db.createProject(name, 2, 2, 72)
-    await db.saveDocumentLayers(id, [
-      { info: layerInfo('bg', 'Background'), pixels: filled(1) },
-      { info: layerInfo('ink', 'Ink', { opacity: 0.5, blendMode: 'multiply' }), pixels: filled(2) },
-    ])
+    await tiles.save(id, {
+      width: 2,
+      height: 2,
+      layers: [
+        { info: layerInfo('bg', 'Background'), pixels: filled(1) },
+        { info: layerInfo('ink', 'Ink', { opacity: 0.5, blendMode: 'multiply' }), pixels: filled(2) },
+      ],
+    })
     await db.updateProject(id, { activeLayerId: 'bg', ...extra }, { touch: false })
     return id
   }
 
+  /** Mark a project deleted by another tab, `undoLeft` ms before the end of the window in which it can still be undone. */
+  async function deletedElsewhere(id: string, undoLeft: number) {
+    const deletedAt = new Date(Date.now() - DELETE_UNDO_MS - PURGE_GRACE_MS + undoLeft)
+    await db.updateProject(id, { deletedAt }, { touch: false })
+  }
+
+  /** The grey of a saved layer's first pixel, or null when it has none saved. */
   async function firstByte(projectId: string, layerId: string) {
-    const data = await db.loadTile(projectId, layerId, 'full')
-    return data ? new Uint8Array(data)[0] : null
+    const pixels = (await tiles.load(projectId))?.layers.find((l) => l.info.id === layerId)?.pixels
+    return pixels ? pixels[0] : null
+  }
+
+  /** The ids of a project's saved layers, bottom first. */
+  async function layerIds(projectId: string) {
+    return (await tiles.load(projectId))?.layers.map((l) => l.info.id) ?? []
   }
 
   async function openAndAttach(id: string) {
@@ -111,33 +138,35 @@ describe('ProjectService', () => {
       await service.start()
 
       expect(await db.getProject(gone)).toBeUndefined()
-      expect(await db.loadLayers(gone)).toEqual([])
+      expect(await tiles.load(gone)).toBeNull()
       expect(await db.getAllStacks()).toEqual([])
       expect(store().projects.map((p) => p.name)).toEqual(['Kept'])
     })
 
     it('leaves a recent delete to the tab that can still undo it, then makes it final', async () => {
-      // Another tab deleted it a moment ago; its Undo window ends in 100 ms.
-      const recent = await seedProject('Recent', { deletedAt: new Date(Date.now() - DELETE_UNDO_MS - PURGE_GRACE_MS + 100) })
+      const recent = await seedProject('Recent')
       await seedProject('Kept')
+      // Another tab deleted it a moment ago; its Undo window ends in 250 ms.
+      await deletedElsewhere(recent, 250)
 
       await service.start()
 
       expect(await db.getProject(recent)).toBeDefined()
       expect(store().projects.map((p) => p.name)).toEqual(['Kept'])
-      await vi.waitFor(async () => expect(await db.getProject(recent)).toBeUndefined(), { timeout: 2000 })
+      await vi.waitFor(async () => expect(await db.getProject(recent)).toBeUndefined(), { timeout: 3000 })
     })
 
     it('keeps a recent delete that its tab undid in time', async () => {
-      const recent = await seedProject('Recent', { deletedAt: new Date(Date.now() - DELETE_UNDO_MS - PURGE_GRACE_MS + 50) })
+      const recent = await seedProject('Recent')
+      await deletedElsewhere(recent, 150)
       await service.start()
 
       // The other tab's Undo.
       await db.updateProject(recent, { deletedAt: undefined }, { touch: false })
-      await new Promise((resolve) => setTimeout(resolve, 200))
+      await new Promise((resolve) => setTimeout(resolve, 400))
 
       expect(await db.getProject(recent)).toBeDefined()
-      expect(await db.loadLayers(recent)).toHaveLength(2)
+      expect(await layerIds(recent)).toEqual(['bg', 'ink'])
     })
 
     it('starts only once', async () => {
@@ -212,12 +241,92 @@ describe('ProjectService', () => {
       expect(store().lastProjectId).toBe(id)
     })
 
-    it('leaves a layer empty when its saved pixels are the wrong size', async () => {
-      const id = await seedProject('Painting')
-      await db.saveTile(id, 'ink', 'full', new ArrayBuffer(3))
+    it('opens a project saved before the tile store, and moves it to tiles at its next save', async () => {
+      const id = await db.createProject('Old', 2, 2, 72)
+      await writeLegacyLayers(id, [
+        { info: layerInfo('bg', 'Background'), pixels: filled(5) },
+        // Pixels of the wrong size load as an empty layer.
+        { info: layerInfo('ink', 'Ink', { opacity: 0.5 }), pixels: new Uint8Array(3) },
+      ])
+      await db.updateProject(id, { activeLayerId: 'ink' }, { touch: false })
       await service.start()
+
       const { engine } = await openAndAttach(id)
-      expect(engine.loads[0].layers.map((l) => l.pixels === null)).toEqual([false, true])
+      expect(engine.loads[0].layers.map((l) => l.info)).toEqual([
+        layerInfo('bg', 'Background'),
+        layerInfo('ink', 'Ink', { opacity: 0.5 }),
+      ])
+      expect(engine.loads[0].layers.map((l) => l.pixels?.[0] ?? null)).toEqual([5, null])
+      expect(engine.loads[0].activeLayerId).toBe('ink')
+
+      engine.paint(9)
+      expect(await service.goToGallery()).toBe(true)
+      expect(await layerIds(id)).toEqual(['bg', 'ink'])
+      expect(await firstByte(id, 'bg')).toBe(5)
+      expect(await firstByte(id, 'ink')).toBe(9)
+      expect(await legacyRecords(id)).toEqual({ layers: [], tiles: [] })
+    })
+
+    it('opens a project that another tab moves to tiles while it opens from the old layout', async () => {
+      const id = await db.createProject('Old', 2, 2, 72)
+      await writeLegacyLayers(id, [{ info: layerInfo('bg', 'Background'), pixels: filled(5) }])
+      await service.start()
+      // Between this tab finding no tiles and reading the old records, the other tab's first save commits.
+      const readOld = db.loadLegacyLayers.bind(db)
+      vi.spyOn(db, 'loadLegacyLayers').mockImplementationOnce(async (...args) => {
+        await tiles.save(id, { width: 2, height: 2, layers: [{ info: layerInfo('bg', 'Background'), pixels: filled(7) }] })
+        return readOld(...args)
+      })
+
+      const { engine } = await openAndAttach(id)
+      expect(engine.loads[0].layers.map((l) => l.pixels?.[0])).toEqual([7])
+      expect(await legacyRecords(id)).toEqual({ layers: [], tiles: [] })
+    })
+
+    it('does not stop at start-up when a deleted project cannot be removed yet', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const stuck = await seedProject('Stuck')
+      const gone = await seedProject('Gone')
+      await seedProject('Kept')
+      await deletedElsewhere(stuck, -60 * 60_000)
+      await deletedElsewhere(gone, -60 * 60_000)
+      const remove = tiles.delete.bind(tiles)
+      vi.spyOn(tiles, 'delete').mockImplementation(async (projectId) => {
+        if (projectId === stuck) throw new Error('the persistence worker stopped')
+        return remove(projectId)
+      })
+
+      await service.start()
+
+      expect(store().view).toBe('gallery')
+      expect(store().projects.map((p) => p.name)).toEqual(['Kept'])
+      expect(toasts()).toEqual([])
+      expect(await db.getProject(gone)).toBeUndefined()
+      // Still deleted, for the next start to remove.
+      expect((await db.getProject(stuck))?.deletedAt).toBeInstanceOf(Date)
+      expect(warn).toHaveBeenCalledWith('[QUAR] A deleted project could not be removed yet:', expect.any(Error))
+    })
+
+    it('opens a project with a tile it cannot read, and says so', async () => {
+      const id = await seedProject('Painting')
+      const [record] = await (await getDB()).getAll('tileData')
+      await (await getDB()).delete('tileData', [record.projectId, record.layerId, record.key])
+      await service.start()
+
+      const { engine } = await openAndAttach(id)
+      expect(engine.loads[0].layers.map((l) => l.pixels === null)).toEqual([false, false])
+      expect(toasts()).toEqual([
+        'Part of “Painting” couldn\'t be read and shows as transparent (1 tile of 256 × 256 px)',
+      ])
+    })
+
+    it('opens a project at the size it was saved at, even when its record says otherwise', async () => {
+      const id = await seedProject('Painting')
+      // A save whose record update failed after its layers were committed.
+      await db.updateProject(id, { width: 3, height: 5 }, { touch: false })
+      await service.start()
+      await openAndAttach(id)
+      expect(store()).toMatchObject({ canvasWidth: 2, canvasHeight: 2 })
     })
 
     it('saves changes to the open project', async () => {
@@ -233,7 +342,7 @@ describe('ProjectService', () => {
 
     it('saves the open project before going back to the Gallery', async () => {
       const id = await seedProject('Painting')
-      service = new ProjectService(db, { debounceMs: 60_000 })
+      service = new ProjectService(db, { debounceMs: 60_000, store: tiles })
       await service.start()
       const { engine } = await openAndAttach(id)
       engine.paint(9)
@@ -248,11 +357,11 @@ describe('ProjectService', () => {
 
     it('keeps the project open, and says why once, when saving it fails', async () => {
       const id = await seedProject('Painting')
-      service = new ProjectService(db, { debounceMs: 60_000 })
+      service = new ProjectService(db, { debounceMs: 60_000, store: tiles })
       await service.start()
       const { engine } = await openAndAttach(id)
       engine.paint(9)
-      vi.spyOn(db, 'saveLayers').mockRejectedValueOnce(new Error('disk full'))
+      vi.spyOn(tiles, 'save').mockRejectedValueOnce(new Error('disk full'))
 
       expect(await service.goToGallery()).toBe(false)
 
@@ -269,7 +378,7 @@ describe('ProjectService', () => {
       const id = await seedProject('Painting')
       await service.start()
       const { engine } = await openAndAttach(id)
-      vi.spyOn(db, 'saveLayers').mockRejectedValue(new Error('disk full'))
+      vi.spyOn(tiles, 'save').mockRejectedValue(new Error('disk full'))
 
       engine.paint(1)
       await vi.waitFor(() => expect(store().saveStatus).toBe('error'))
@@ -369,7 +478,7 @@ describe('ProjectService', () => {
       await vi.waitFor(() => expect(store().view).toBe('gallery'))
       expect(toasts()).toContain('Couldn\'t reopen “Painting” after the canvas restarted: read failed')
       expect(restarted.following).toBe(false)
-      expect((await db.loadLayers(id)).map((l) => l.layerId)).toEqual(['bg', 'ink'])
+      expect(await layerIds(id)).toEqual(['bg', 'ink'])
       expect(await firstByte(id, 'bg')).toBe(1)
       expect(await firstByte(id, 'ink')).toBe(2)
     })
@@ -475,9 +584,34 @@ describe('ProjectService', () => {
 
       const copy = store().projects.find((p) => p.name === 'A copy')!
       expect(copy.id).not.toBe(id)
-      expect((await db.loadLayers(copy.id)).map((l) => l.layerId)).toEqual(['bg', 'ink'])
+      expect(await layerIds(copy.id)).toEqual(['bg', 'ink'])
       expect(await firstByte(copy.id, 'ink')).toBe(2)
       expect(toasts()).toEqual(['Duplicated “A”'])
+    })
+
+    it('duplicates a project saved before the tile store', async () => {
+      const id = await db.createProject('Old', 2, 2, 72)
+      await writeLegacyLayers(id, [{ info: layerInfo('bg', 'Background'), pixels: filled(4) }])
+      await service.start()
+
+      await service.duplicateProject(id)
+
+      const copy = store().projects.find((p) => p.name === 'Old copy')!
+      expect(await legacyRecords(copy.id)).toEqual({ layers: ['bg'], tiles: ['bg'] })
+      const { engine } = await openAndAttach(copy.id)
+      expect(engine.loads[0].layers.map((l) => l.pixels?.[0])).toEqual([4])
+    })
+
+    it('leaves no half-made copy when copying the document fails', async () => {
+      const id = await seedProject('A')
+      await service.start()
+      vi.spyOn(tiles, 'copy').mockRejectedValueOnce(new DOMException('storage is full', 'QuotaExceededError'))
+
+      await service.duplicateProject(id)
+
+      expect(toasts()).toEqual(["Couldn't duplicate “A”: the browser's storage is full"])
+      expect((await db.getAllProjects()).map((p) => p.name)).toEqual(['A'])
+      expect(await layerIds(id)).toEqual(['bg', 'ink'])
     })
 
     it('deletes a project with an Undo, and Undo brings it back', async () => {
@@ -496,7 +630,7 @@ describe('ProjectService', () => {
 
       await vi.waitFor(() => expect(store().projects.map((p) => p.name).sort()).toEqual(['A', 'B']))
       expect((await db.getProject(id))!.deletedAt).toBeUndefined()
-      expect(await db.loadLayers(id)).toHaveLength(2)
+      expect(await layerIds(id)).toEqual(['bg', 'ink'])
     })
 
     it('says so when Undo comes after another tab made the delete final', async () => {
@@ -522,7 +656,8 @@ describe('ProjectService', () => {
       useUIStore.getState().dismissToast(toast.id, 'timeout')
 
       await vi.waitFor(async () => expect(await db.getProject(id)).toBeUndefined())
-      expect(await db.loadTile(id, 'bg', 'full')).toBeNull()
+      expect(await tiles.load(id)).toBeNull()
+      expect((await (await getDB()).getAll('tileData')).every((r) => r.projectId !== id)).toBe(true)
       // Its stack had nothing else, so it went too.
       await vi.waitFor(async () => expect(await db.getAllStacks()).toEqual([]))
     })
@@ -634,17 +769,17 @@ describe('ProjectService', () => {
       expect(project).toMatchObject({ width: 2, height: 2, dpi: 300 })
       expect(project.thumbnail?.type).toBe('image/webp')
       expect(project.thumbnail?.data.byteLength).toBe(3)
-      const layers = await db.loadLayers(project.id)
+      const layers = (await tiles.load(project.id))!.layers.map((l) => l.info)
       expect(layers.map((l) => l.name)).toEqual(['Sky', 'Ink'])
       // Fresh ids, so importing a file twice makes two independent projects.
-      expect(layers.map((l) => l.layerId)).not.toContain('l1')
+      expect(layers.map((l) => l.id)).not.toContain('l1')
       expect(layers[1]).toMatchObject({ blendMode: 'screen', opacity: 0.25 })
-      expect(project.activeLayerId).toBe(layers[1].layerId)
+      expect(project.activeLayerId).toBe(layers[1].id)
       expect(toasts()).toEqual(['Imported “Landscape”'])
 
       const { engine } = await openAndAttach(project.id)
       expect(engine.loads[0].layers.map((l) => l.pixels?.[0])).toEqual([10, 20])
-      expect(engine.loads[0].activeLayerId).toBe(layers[1].layerId)
+      expect(engine.loads[0].activeLayerId).toBe(layers[1].id)
     })
 
     it('imports an image as a one-layer project named after the file', async () => {
@@ -654,10 +789,10 @@ describe('ProjectService', () => {
 
       const project = store().projects.find((p) => p.name === 'cat')!
       expect(project).toMatchObject({ width: 2, height: 2, dpi: 72, colorSpace: 'srgb' })
-      const [layer] = await db.loadLayers(project.id)
+      const [layer] = (await tiles.load(project.id))!.layers.map((l) => l.info)
       expect(layer.name).toBe('cat')
-      expect(project.activeLayerId).toBe(layer.layerId)
-      expect(await firstByte(project.id, layer.layerId)).toBe(200)
+      expect(project.activeLayerId).toBe(layer.id)
+      expect(await firstByte(project.id, layer.id)).toBe(200)
     })
 
     it('imports into the open stack', async () => {
@@ -670,7 +805,7 @@ describe('ProjectService', () => {
 
     it('leaves no half-imported project when saving its pixels fails', async () => {
       vi.mocked(decodeImageBlob).mockResolvedValue({ pixels: new Uint8ClampedArray(2 * 2 * 4), width: 2, height: 2 })
-      vi.spyOn(db, 'saveDocumentLayers').mockRejectedValueOnce(new DOMException('storage is full', 'QuotaExceededError'))
+      vi.spyOn(tiles, 'save').mockRejectedValueOnce(new DOMException('storage is full', 'QuotaExceededError'))
 
       await service.importFiles([new File(['png'], 'Swatch.png', { type: 'image/png' })])
 

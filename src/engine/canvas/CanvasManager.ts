@@ -261,9 +261,10 @@ export class CanvasManager {
   }
 
   /**
-   * A layer's pixels, straight RGBA at document size. Under a filter or
+   * A layer's pixels, straight RGBA at document size, in a buffer of the
+   * caller's own (saves hand it to the persistence worker). Under a filter or
    * transform preview, the pixels from before it: a preview isn't part of the
-   * document until it is applied. Read-only: they may be the preview's own copy.
+   * document until it is applied.
    */
   getLayerPixels(id: string): Uint8Array | null {
     if (!this.app) return null
@@ -273,7 +274,8 @@ export class CanvasManager {
     const committed = this.transformState?.layerId === id
       ? this.transformState.beforeSnapshot
       : this.filterManager.committedPixels(id)
-    if (committed) return committed.data
+    // A preview's snapshot isn't compressed until it goes into the history, after the preview.
+    if (committed) return committed.compressed ? null : committed.data.slice()
     const { pixels } = readPixels(this.app.renderer, layer.texture)
     return new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength)
   }

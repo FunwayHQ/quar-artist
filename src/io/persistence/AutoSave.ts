@@ -1,14 +1,14 @@
-import { MetadataDB } from './MetadataDB.ts'
-import type { LayerInfo } from '../../types/layer.ts'
+import type { MetadataDB } from './MetadataDB.ts'
+import type { DocumentStore, SaveLayer } from '../tiles/TileStore.ts'
 import type { StoredImage } from '../../types/project.ts'
 
 export type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 export type SaveStatusCallback = (status: SaveStatus, error?: unknown) => void
 
 /**
- * Debounced auto-save and immediate saves for one project.
- * Collects layer pixel data via an extraction callback and persists
- * metadata + tiles to IndexedDB.
+ * Debounced auto-save and immediate saves for one project. Collects the
+ * document through an extraction callback, saves its layers to the document
+ * store (as tiles, plan M1.2) and then updates the project record.
  *
  * Saves run one at a time. A save requested while one is running runs again
  * right after it, so no change is dropped, and a failed save leaves the
@@ -17,6 +17,7 @@ export type SaveStatusCallback = (status: SaveStatus, error?: unknown) => void
  */
 export class AutoSave {
   private metaDb: MetadataDB
+  private store: DocumentStore
   private debounceMs: number
   private timerId: ReturnType<typeof setTimeout> | null = null
   private projectId: string | null = null
@@ -27,8 +28,9 @@ export class AutoSave {
   private statusCallback: SaveStatusCallback | null = null
   private extractLayerData: (() => LayerDataSet | null) | null = null
 
-  constructor(metaDb: MetadataDB, debounceMs = 5000) {
+  constructor(metaDb: MetadataDB, store: DocumentStore, debounceMs = 5000) {
     this.metaDb = metaDb
+    this.store = store
     this.debounceMs = debounceMs
   }
 
@@ -137,29 +139,16 @@ export class AutoSave {
       this.dirty = false
       this.statusCallback?.('saving')
 
-      // Save layer metadata
-      await this.metaDb.saveLayers(projectId, data.layerInfos)
-
-      // Save pixel data for each layer
-      for (const entry of data.layerPixels) {
-        await this.metaDb.saveTile(
-          projectId,
-          entry.layerId,
-          'full',
-          // Copy into a standalone ArrayBuffer (also narrows away SharedArrayBuffer)
-          new Uint8Array(entry.pixels).buffer,
-        )
-      }
-
-      // Drop the pixels of layers that were deleted since the last save
-      await this.metaDb.deleteTilesExcept(projectId, new Set(data.layerInfos.map((l) => l.id)))
+      // The layers, all at once: until this commits, the last save stays as it was.
+      await this.store.save(projectId, { width: data.width, height: data.height, layers: data.layers })
 
       // The thumbnail is a nicety: failing to encode it doesn't fail the save
       const thumbnail = data.thumbnail ? await data.thumbnail().catch(() => null) : null
 
       // Update the project record, which also stamps it as modified
       await this.metaDb.updateProject(projectId, {
-        ...(data.width !== undefined && data.height !== undefined ? { width: data.width, height: data.height } : {}),
+        width: data.width,
+        height: data.height,
         ...(data.activeLayerId !== undefined ? { activeLayerId: data.activeLayerId } : {}),
         ...(thumbnail ? { thumbnail } : {}),
       })
@@ -183,11 +172,11 @@ export class AutoSave {
 }
 
 export interface LayerDataSet {
-  layerInfos: LayerInfo[]
-  layerPixels: { layerId: string; pixels: Uint8Array }[]
-  /** The document size, kept in the project record. */
-  width?: number
-  height?: number
+  /** The document size, kept in the project record too. */
+  width: number
+  height: number
+  /** Bottom first. Their pixel buffers are handed over to the store. */
+  layers: SaveLayer[]
   activeLayerId?: string
   /** Encodes the Gallery thumbnail. Called after the layers are written. */
   thumbnail?: () => Promise<StoredImage | null>

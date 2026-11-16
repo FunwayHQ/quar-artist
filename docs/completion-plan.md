@@ -134,7 +134,7 @@ flowchart LR
   M6 --> M10
 ```
 
-**Immediate next steps:** M0 is done (M0.2 skipped), and so is M1.1. Next is M1.2, the tile store.
+**Immediate next steps:** M0 is done (M0.2 skipped), and so are M1.1 and M1.2. Next is M1.3, autosave v2.
 
 ---
 
@@ -296,7 +296,7 @@ flowchart LR
       - A duplicate or import that fails part-way leaves no half-made project behind.
     - Fixed on the way, the restore part of F103: restoring a layer (undo, redo, cancelling a filter, opening) went through a 2D canvas, and Firefox premultiplies `putImageData` rounding up, so faint colours got lighter with every undo, and would have with every reopen. `writePixels` (`engine/utils/readback.ts`) premultiplies on the CPU, rounding to nearest, and uploads the buffer directly. A read and write round trip now leaves every colour as it was; a unit test checks every colour and alpha, and the Firefox undo test is no longer an expected failure. Flood fill, transforms, CPU blending, image import and PNG export still pass through a 2D canvas (M1.8, M2.2).
     - Tests: unit tests for the service, sessions, autosave, database, transactions, Gallery components and dialog. `e2e/projects.spec.ts` covers saving and reopening across Gallery trips and reloads, New Project, renaming, duplicating, deleting with Undo, stacks, sorting and import by drop, on Chromium, Firefox and WebKit. `e2e/gpu/documents.spec.ts` checks that a reopened document matches pixel for pixel on WebGL and WebGPU. The dev server Playwright starts rebuilds Vite's dependency cache first (`--force`): when app code first imports an installed package, Vite otherwise bundles it mid-run and reloads every open page.
-- [ ] **M1.2 Tile store** · L · fixes F12, F82 (storage part)
+- [x] **M1.2 Tile store** · L · fixes F12, F82 (storage part)
   - A storage API that doesn't depend on the engine: `TileStore.put`, `get`, `list`, `deleteLayer` and `commit(manifest)`.
   - The OPFS backend runs in a persistence worker, commits atomically as described in D7, and falls back to IndexedDB.
   - Tile encoding:
@@ -310,6 +310,21 @@ flowchart LR
     - delete and duplicate walk the data with cursors instead of loading every tile with `getAll`;
     - handlers for blocked and terminated database connections.
   - Works with today's full-size layer textures by reading back only the changed tiles as small rectangles.
+  - **Done 2026-11-16.** Notes:
+    - The tile store (`io/tiles`) doesn't depend on the engine. Callers save, load, copy and delete whole documents (`DocumentStore`). Below that, backends store, read, remove and sweep tiles, and a manifest commits each save. That replaces the put/get/list/deleteLayer/commit list above: every caller deals in whole documents, and M1.3's changed tiles go in through `save`.
+    - Tiles: 256 × 256 premultiplied RGBA8, cut from the straight-alpha readbacks. The conversion back is exact for pixels as the GPU gives them, so a document reopens byte for byte. Empty tiles aren't stored. Tiles are compressed with `CompressionStream('deflate-raw')`, or stored as they are where the browser has none, and each records its codec. A hash per tile (SHA-1, or MurmurHash3 without Web Crypto on plain HTTP) lets a save keep the tiles that didn't change, so a stroke rewrites only the tiles it touched.
+    - Atomic commits (D7): a save writes its tiles under names of its own, then commits a manifest (the document's size, its layers bottom first and where each tile is) in one IndexedDB transaction, then removes the tiles it replaced. The commit uses strict durability, so it is on disk before those tiles go (Firefox and Safari default to relaxed, where a power cut could bring back a manifest whose tiles were removed). A save that stops part-way, its commit included, leaves the last save as it was. Its leftover tiles are swept by the next save that works, and every project's tiles are checked once, at its first save after the page loads. A save without layers is refused: it could only come from an engine that's gone, and would wipe the project. D7's `manifest-<seq>.json` in OPFS, with a pointer in IndexedDB, became the manifest itself in IndexedDB's new documents store: one write, just as atomic, and readable without OPFS.
+    - Backends: OPFS files, written with sync access handles from the persistence worker, in Chromium and Firefox. Where OPFS can't be written (WebKit's private test contexts, Safari private windows, sites without HTTPS, no worker), tiles go to IndexedDB's new tileData store, keyed by project, layer and tile, so each is unique by construction. A project saved in one backend opens from the other and moves over at its next save.
+    - The persistence worker (`io/tiles/tileWorker.ts`, with `WorkerDocumentStore` on the app's side) cuts, hashes, compresses and writes off the main thread. Pixel buffers move to it and back without copies. If it doesn't start within 10 s, fails to load or stops, saves run on the main thread, to IndexedDB. It reports progress while it works, and if it says nothing for 60 s while calls wait for it, or sends an answer that can't be read, the app gives up on it the same way, so closing a project can't wait forever. Saves, copies and deletes of a project hold a Web Lock on it, so they never overlap, in one tab or across tabs; loads share it. Browsers without Web Locks (Safari before 15.4) only order them within a tab: two tabs saving one project at the same moment could remove each other's tiles.
+    - Opening reads the manifest and builds full-size layers from the tiles (sparse tile layers come with M2.2). Tiles that are missing or don't decode load as transparent, and a toast says how many. The saved document's size counts over the project record's, which a failed save may not have updated.
+    - Projects saved before (M1.1's whole layers) still open. Their first save moves them to tiles and removes the old records in the same transaction. Opening reads the old records in one transaction that also looks for a manifest, so a project that another tab moves to tiles while it opens is read from the tiles, never half from each. Duplicating copies the old records one at a time, in one transaction, and deleting removes them.
+    - A deleted project whose data can't be removed at start-up (say, the worker stopped) stays deleted for the next start to remove; it no longer stops the app from opening its storage.
+    - MetadataDB (F12) keeps project records, stacks and settings, and reads the old layout; it no longer writes whole layers. Duplicating a project copies its tiles a layer at a time, encoded, never every tile at once. The rest of F12 landed in M1.1: updates in one transaction, handlers for blocked and closed connections.
+    - Schema version 4 adds the documents and tileData stores.
+    - `getLayerPixels` returns a buffer the caller owns, since the save hands it to the worker. The alpha conversions moved to `utils/alpha.ts`, which the worker uses without PixiJS.
+    - Not yet: each save still reads every layer back whole. Reading back only the tiles an operation changed needs M1.3's changed-tile reports.
+    - Q1: the PRD and CLAUDE.md now name `idb` instead of Dexie. `agents/` and `sprints/` still describe Dexie: they are the original prompts, kept as written.
+    - Tests: unit tests for the tile format and codec, the store on both backends (an in-memory OPFS stands in for the real one), saves and commits that fail part-way, Web Locks (a fake that grants them as browsers do), the worker client with a loopback worker (start-up failures, a stalled worker, an unreadable answer), and the services on top. A review of the change for ways to lose work found the commit order, backend moves, the old layout and the pixel conversions sound; its other findings are fixed above. `e2e/tiles.spec.ts` checks in Chromium, Firefox and WebKit that a save stores exactly the tiles its manifest names, that an unchanged layer keeps its tiles, and that a project saved the old way opens and moves to tiles.
 - [ ] **M1.3 Autosave v2** · M · fixes F01, F08, F14
   - Saves are incremental: each operation reports which tiles it changed, and the save reads back only those.
   - Timing and ordering:
@@ -324,8 +339,8 @@ flowchart LR
   - Storage safety:
     - request persistent storage (`navigator.storage.persist()`) on the first save;
     - show the storage estimate in Settings;
-    - recover from crashes when a project opens by detecting a half-written manifest;
-    - delete tiles that nothing refers to.
+    - recover from crashes when a project opens by detecting a half-written manifest (since M1.2 a manifest is one IndexedDB write, so what's left to detect is a save that never committed);
+    - delete tiles that nothing refers to (M1.2 sweeps each project's at its first save after the page loads; still to do: the tiles of projects that no longer exist).
 - [ ] **M1.4 Load path** · M
   - Opening a project reads the manifest, creates the layers and streams tiles to the GPU with a progress indicator.
   - It then restores the view, guides, symmetry settings, active layer and document settings.
@@ -1093,7 +1108,7 @@ All findings from the 2026-11-16 code review. Paths are relative to `src/`. Seve
 | 5.2.3 Tile-based undo with 100+ steps, LZ4 and OPFS offload | MVP | Full snapshots | M2.5 |
 | 5.3 Coalesced and predicted events, desynchronized canvas, palm rejection | MVP | Partial; no palm rejection | M3.1, M3.9 |
 | 5.4 Zustand for UI state only; imperative engine | — | Done | Keep |
-| 5.5 OPFS, persistence worker, metadata database | MVP | Missing | M1.2 |
+| 5.5 OPFS, persistence worker, metadata database | MVP | Done (M1.2) | — |
 | 5.6 Real-time collaboration | v1.0 | Missing | M10 |
 | 5.7 Workers and OffscreenCanvas, WASM with SIMD, service worker caching, lazy loading | MVP (Sprint 9) | Lazy-loaded dialogs only | M2.6, M6.2, M6.3 |
 | 6 Libraries not yet used: Dexie, perfect-freehand, chroma.js, FFmpeg.wasm, gifenc, Yjs | — | — | Q1–Q5, M8, M10 |

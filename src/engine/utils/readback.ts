@@ -7,6 +7,10 @@ import {
   type Renderer,
   type RenderTexture,
 } from 'pixi.js'
+import { premultiply, unpremultiply } from '../../utils/alpha.ts'
+
+// The conversions live in utils/alpha.ts, which workers can use without PixiJS.
+export { premultiply, unpremultiply }
 
 export interface PixelReadback {
   /** RGBA8 with straight (not premultiplied) alpha, top row first. */
@@ -28,45 +32,6 @@ export function readPixels(renderer: Renderer, target: Texture | Container): Pix
   const { pixels, width, height } = renderer.extract.pixels({ target })
   if (renderer.type === RendererType.WEBGL) unpremultiply(pixels)
   return { pixels, width, height }
-}
-
-/** Convert premultiplied RGBA8 to straight alpha in place. Fully transparent pixels become 0, 0, 0, 0. */
-export function unpremultiply(data: Uint8ClampedArray): void {
-  for (let i = 0; i < data.length; i += 4) {
-    const a = data[i + 3]
-    if (a === 255) continue
-    if (a === 0) {
-      data[i] = 0
-      data[i + 1] = 0
-      data[i + 2] = 0
-      continue
-    }
-    // Uint8ClampedArray rounds and clamps on assignment.
-    const scale = 255 / a
-    data[i] = data[i] * scale
-    data[i + 1] = data[i + 1] * scale
-    data[i + 2] = data[i + 2] * scale
-  }
-}
-
-/** Premultiply straight-alpha RGBA8, rounding to nearest (the inverse of `unpremultiply`). */
-export function premultiply(src: ArrayLike<number>, length = src.length): Uint8Array {
-  const out = new Uint8Array(length)
-  for (let i = 0; i < length; i += 4) {
-    const a = src[i + 3]
-    out[i + 3] = a
-    if (a === 0) continue
-    if (a === 255) {
-      out[i] = src[i]
-      out[i + 1] = src[i + 1]
-      out[i + 2] = src[i + 2]
-      continue
-    }
-    out[i] = Math.round((src[i] * a) / 255)
-    out[i + 1] = Math.round((src[i + 1] * a) / 255)
-    out[i + 2] = Math.round((src[i + 2] * a) / 255)
-  }
-  return out
 }
 
 /**

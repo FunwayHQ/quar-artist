@@ -1,21 +1,14 @@
-import { getDB, type ProjectRecord, type LayerRecord, type TileRecord, type StackRecord } from '../../db/schema.ts'
+import { getDB, type ProjectRecord, type StackRecord } from '../../db/schema.ts'
 import { inTransaction } from '../../db/transaction.ts'
-import type { LayerInfo } from '../../types/layer.ts'
+import type { BlendMode, StoredLayer } from '../../types/layer.ts'
 import { createId } from '../../utils/id.ts'
+import { savedLayerInfo } from '../tiles/tileFormat.ts'
 
-/** A layer's properties and its whole pixel buffer: straight RGBA, width × height × 4 bytes. */
-export interface StoredLayerData {
-  info: LayerInfo
-  pixels: Uint8Array
-}
-
-/** The bytes as a standalone ArrayBuffer, copied only when they are a view into a larger or shared buffer. */
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  const { buffer, byteOffset, byteLength } = bytes
-  if (buffer instanceof ArrayBuffer && byteOffset === 0 && byteLength === buffer.byteLength) return buffer
-  return bytes.slice().buffer
-}
-
+/**
+ * Project records, stacks and settings. Documents themselves are saved by the
+ * tile store (io/tiles); this also reads documents saved before it, as whole
+ * layers in the layers and tiles stores, until their next save moves them.
+ */
 export class MetadataDB {
   // ── Projects ──────────────────────────────────────────────────────
 
@@ -67,71 +60,52 @@ export class MetadataDB {
     })
   }
 
-  /** Delete a project with its layers and tiles. Reads only keys, never tile data. */
+  /**
+   * Delete a project's record, and its whole layers if it was saved before the
+   * tile store (the tile store deletes its document itself). Reads only keys.
+   */
   async deleteProject(id: string): Promise<void> {
     const db = await getDB()
     const tx = db.transaction(['projects', 'layers', 'tiles'], 'readwrite')
     await inTransaction(tx, async () => {
-      const tiles = tx.objectStore('tiles')
-      for (let c = await tiles.index('by-projectId').openKeyCursor(id); c; c = await c.continue()) {
-        await tiles.delete(c.primaryKey)
-      }
-      const layers = tx.objectStore('layers')
-      for (let c = await layers.index('by-projectId').openKeyCursor(id); c; c = await c.continue()) {
-        await layers.delete(c.primaryKey)
+      for (const name of ['tiles', 'layers'] as const) {
+        const store = tx.objectStore(name)
+        for (let c = await store.index('by-projectId').openKeyCursor(id); c; c = await c.continue()) {
+          await store.delete(c.primaryKey)
+        }
       }
       await tx.objectStore('projects').delete(id)
     })
   }
 
+  /**
+   * Copy a project's record under a new id and name, and its whole layers if
+   * it was saved before the tile store, one record at a time, in one
+   * transaction: the copy is made whole or not at all. The tile store copies
+   * its document itself.
+   */
   async duplicateProject(id: string, newName: string): Promise<string> {
     const db = await getDB()
-    const original = await db.get('projects', id)
-    if (!original) throw new Error(`Project ${id} not found`)
+    const tx = db.transaction(['projects', 'layers', 'tiles'], 'readwrite')
+    return inTransaction(tx, async () => {
+      const original = await tx.objectStore('projects').get(id)
+      if (!original) throw new Error(`Project ${id} not found`)
+      const now = new Date()
+      const copy: ProjectRecord = { ...original, id: createId(), name: newName, createdAt: now, updatedAt: now }
+      delete copy.deletedAt
+      await tx.objectStore('projects').add(copy)
 
-    const now = new Date()
-    const copy: ProjectRecord = { ...original, id: createId(), name: newName, createdAt: now, updatedAt: now }
-    delete copy.deletedAt
-    const newId = await db.add('projects', copy)
-    try {
-      await this.copyLayersAndTiles(id, newId)
-    } catch (err) {
-      // Leave no half-copied project behind.
-      await this.deleteProject(newId).catch(() => undefined)
-      throw err
-    }
-    return newId
-  }
-
-  private async copyLayersAndTiles(id: string, newId: string): Promise<void> {
-    const db = await getDB()
-    // Copy layers
-    const layers = await db.getAllFromIndex('layers', 'by-projectId', id)
-    for (const layer of layers) {
-      await db.add('layers', {
-        projectId: newId,
-        layerId: layer.layerId,
-        name: layer.name,
-        blendMode: layer.blendMode,
-        opacity: layer.opacity,
-        visible: layer.visible,
-        locked: layer.locked,
-        alphaLock: layer.alphaLock,
-        clippingMask: layer.clippingMask,
-        order: layer.order,
-      })
-    }
-
-    // Copy tiles
-    const tiles = await db.getAllFromIndex('tiles', 'by-projectId', id)
-    for (const tile of tiles) {
-      await db.add('tiles', {
-        projectId: newId,
-        layerId: tile.layerId,
-        key: tile.key,
-        data: tile.data.slice(0),
-      })
-    }
+      for (const name of ['layers', 'tiles'] as const) {
+        const store = tx.objectStore(name)
+        // The copies have another project id, outside the range being walked.
+        for (let c = await store.index('by-projectId').openCursor(id); c; c = await c.continue()) {
+          const record = { ...c.value, projectId: copy.id }
+          delete record.id
+          await store.add(record as never)
+        }
+      }
+      return copy.id
+    })
   }
 
   // ── Stacks ────────────────────────────────────────────────────────
@@ -160,122 +134,41 @@ export class MetadataDB {
     await db.delete('stacks', id)
   }
 
-  // ── Layers ────────────────────────────────────────────────────────
-
-  async saveLayers(projectId: string, layers: LayerInfo[]): Promise<void> {
-    const db = await getDB()
-    const tx = db.transaction('layers', 'readwrite')
-    const store = tx.objectStore('layers')
-    await inTransaction(tx, async () => {
-      // Replace this project's layer records
-      for (let c = await store.index('by-projectId').openKeyCursor(projectId); c; c = await c.continue()) {
-        await store.delete(c.primaryKey)
-      }
-      for (let i = 0; i < layers.length; i++) {
-        const info = layers[i]
-        await store.add({
-          projectId,
-          layerId: info.id,
-          name: info.name,
-          blendMode: info.blendMode,
-          opacity: info.opacity,
-          visible: info.visible,
-          locked: info.locked,
-          alphaLock: info.alphaLock,
-          clippingMask: info.clippingMask,
-          order: i,
-        })
-      }
-    })
-  }
+  // ── Documents saved before the tile store ─────────────────────────
 
   /**
-   * Save a whole document: its layer records, each layer's pixels, and the
-   * removal of pixels that belonged to layers it no longer has.
+   * The layers of a project saved before the tile store (M1.1 and earlier):
+   * layer records with whole straight-alpha pixels, bottom first. A layer
+   * whose pixels are missing or the wrong size loads empty. No records, no layers.
    */
-  async saveDocumentLayers(projectId: string, layers: StoredLayerData[]): Promise<void> {
-    await this.saveLayers(projectId, layers.map((l) => l.info))
-    for (const { info, pixels } of layers) {
-      await this.saveTile(projectId, info.id, 'full', toArrayBuffer(pixels))
-    }
-    await this.deleteTilesExcept(projectId, new Set(layers.map((l) => l.info.id)))
-  }
-
-  async loadLayers(projectId: string): Promise<LayerRecord[]> {
-    const db = await getDB()
-    const layers = await db.getAllFromIndex('layers', 'by-projectId', projectId)
-    return layers.sort((a, b) => a.order - b.order)
-  }
-
-  // ── Tiles ─────────────────────────────────────────────────────────
-
-  async saveTile(
-    projectId: string,
-    layerId: string,
-    key: string,
-    data: ArrayBuffer,
-  ): Promise<void> {
-    const db = await getDB()
-    const existing = await db.getFromIndex('tiles', 'by-project-layer-key', [projectId, layerId, key])
-
-    if (existing) {
-      await db.put('tiles', { ...existing, data })
-    } else {
-      await db.add('tiles', { projectId, layerId, key, data })
-    }
-  }
-
-  async loadTile(
-    projectId: string,
-    layerId: string,
-    key: string,
-  ): Promise<ArrayBuffer | null> {
-    const db = await getDB()
-    const record = await db.getFromIndex('tiles', 'by-project-layer-key', [projectId, layerId, key])
-    return record?.data ?? null
-  }
-
-  async loadAllTilesForLayer(
-    projectId: string,
-    layerId: string,
-  ): Promise<TileRecord[]> {
-    const db = await getDB()
-    // Use compound index range to query only tiles for this project+layer
-    const range = IDBKeyRange.bound(
-      [projectId, layerId, ''],
-      [projectId, layerId, '\uffff'],
+  async loadLegacyLayers(projectId: string, width: number, height: number): Promise<StoredLayer[] | null> {
+    // One transaction, with the tile store's documents: the save that moves a
+    // project to tiles drops these records in the transaction that writes its
+    // manifest, so this sees either all of them or the manifest.
+    const tx = (await getDB()).transaction(['documents', 'layers', 'tiles'])
+    if ((await tx.objectStore('documents').getKey(projectId)) !== undefined) return null
+    const records = (await tx.objectStore('layers').index('by-projectId').getAll(projectId)).sort(
+      (a, b) => a.order - b.order,
     )
-    return db.getAllFromIndex('tiles', 'by-project-layer-key', range)
-  }
-
-  /** Delete a project's tiles except those of the given layers. Reads only keys, never tile data. */
-  async deleteTilesExcept(projectId: string, keepLayerIds: ReadonlySet<string>): Promise<void> {
-    const db = await getDB()
-    const tx = db.transaction('tiles', 'readwrite')
-    // Every [projectId, layerId, key] sorts between [projectId] and [projectId, []].
-    const range = IDBKeyRange.bound([projectId], [projectId, []])
-    const index = tx.store.index('by-project-layer-key')
-    await inTransaction(tx, async () => {
-      for (let cursor = await index.openKeyCursor(range); cursor; cursor = await cursor.continue()) {
-        if (!keepLayerIds.has(cursor.key[1])) await tx.store.delete(cursor.primaryKey)
-      }
-    })
-  }
-
-  async deleteLayerTiles(projectId: string, layerId: string): Promise<void> {
-    const db = await getDB()
-    // Use compound index range to find only this layer's tiles
-    const range = IDBKeyRange.bound(
-      [projectId, layerId, ''],
-      [projectId, layerId, '\uffff'],
-    )
-    const tx = db.transaction('tiles', 'readwrite')
-    const index = tx.store.index('by-project-layer-key')
-    await inTransaction(tx, async () => {
-      for (let cursor = await index.openKeyCursor(range); cursor; cursor = await cursor.continue()) {
-        await tx.store.delete(cursor.primaryKey)
-      }
-    })
+    const size = width * height * 4
+    const layers: StoredLayer[] = []
+    for (const r of records) {
+      const tile = await tx.objectStore('tiles').index('by-project-layer-key').get([projectId, r.layerId, 'full'])
+      layers.push({
+        info: savedLayerInfo({
+          id: r.layerId,
+          name: r.name,
+          blendMode: r.blendMode as BlendMode,
+          opacity: r.opacity,
+          visible: r.visible,
+          locked: r.locked,
+          alphaLock: r.alphaLock,
+          clippingMask: r.clippingMask,
+        }),
+        pixels: tile && tile.data.byteLength === size ? new Uint8Array(tile.data) : null,
+      })
+    }
+    return layers
   }
 
   // ── Settings ──────────────────────────────────────────────────────

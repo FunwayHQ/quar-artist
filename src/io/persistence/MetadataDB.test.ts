@@ -1,8 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import 'fake-indexeddb/auto'
 import { MetadataDB } from './MetadataDB.ts'
-import { resetDB } from '../../db/schema.ts'
+import { getDB, resetDB } from '../../db/schema.ts'
 import type { LayerInfo } from '../../types/layer.ts'
+import { layerInfo } from '../../test/fakeDocumentEngine.ts'
+import { legacyRecords, writeLegacyLayers } from '../../test/legacyLayout.ts'
+import { IdbTileBackend } from '../tiles/IdbTileBackend.ts'
+import { TileStore } from '../tiles/TileStore.ts'
 
 describe('MetadataDB', () => {
   let meta: MetadataDB
@@ -49,60 +53,36 @@ describe('MetadataDB', () => {
       expect(project!.name).toBe('Renamed')
     })
 
-    it('deletes a project and its layers and tiles', async () => {
-      const id = await meta.createProject('Delete Me', 100, 100, 72)
-      const layers: LayerInfo[] = [{
-        id: 'layer-1',
-        name: 'BG',
-        visible: true,
-        opacity: 1,
-        blendMode: 'normal',
-        alphaLock: false,
-        clippingMask: false,
-        locked: false,
-      }]
-      await meta.saveLayers(id, layers)
-      await meta.saveTile(id, 'layer-1', 'full', new ArrayBuffer(8))
+    it('deletes a project with the whole layers it was saved with before the tile store', async () => {
+      const id = await meta.createProject('Delete Me', 1, 1, 72)
+      await writeLegacyLayers(id, [{ info: layerInfo('layer-1', 'BG'), pixels: new Uint8Array(4) }])
 
       await meta.deleteProject(id)
 
       expect(await meta.getProject(id)).toBeUndefined()
-      const remainingLayers = await meta.loadLayers(id)
-      expect(remainingLayers).toHaveLength(0)
-      expect(await meta.loadTile(id, 'layer-1', 'full')).toBeNull()
+      expect(await legacyRecords(id)).toEqual({ layers: [], tiles: [] })
     })
 
-    it('duplicates a project with layers and tiles', async () => {
-      const id = await meta.createProject('Original', 1920, 1080, 72)
-      const layers: LayerInfo[] = [{
-        id: 'layer-1',
-        name: 'BG',
-        visible: true,
-        opacity: 1,
-        blendMode: 'normal',
-        alphaLock: false,
-        clippingMask: false,
-        locked: false,
-      }]
-      await meta.saveLayers(id, layers)
-      const pixelData = new ArrayBuffer(16)
-      new Uint8Array(pixelData).fill(99)
-      await meta.saveTile(id, 'layer-1', 'full', pixelData)
+    it('duplicates a project, with the whole layers it was saved with before the tile store', async () => {
+      const id = await meta.createProject('Original', 2, 2, 72)
+      await writeLegacyLayers(id, [
+        { info: layerInfo('layer-1', 'BG'), pixels: new Uint8Array(16).fill(99) },
+        { info: layerInfo('layer-2', 'Ink', { opacity: 0.5 }), pixels: null },
+      ])
 
       const newId = await meta.duplicateProject(id, 'Copy')
       expect(newId).not.toBe(id)
 
       const copy = await meta.getProject(newId)
       expect(copy!.name).toBe('Copy')
-      expect(copy!.width).toBe(1920)
+      expect(copy!.width).toBe(2)
 
-      const copyLayers = await meta.loadLayers(newId)
-      expect(copyLayers).toHaveLength(1)
-      expect(copyLayers[0].layerId).toBe('layer-1')
-
-      const tile = await meta.loadTile(newId, 'layer-1', 'full')
-      expect(tile).not.toBeNull()
-      expect(new Uint8Array(tile!)[0]).toBe(99)
+      const layers = (await meta.loadLegacyLayers(newId, 2, 2))!
+      expect(layers.map((l) => l.info)).toEqual([layerInfo('layer-1', 'BG'), layerInfo('layer-2', 'Ink', { opacity: 0.5 })])
+      expect(layers[0].pixels![0]).toBe(99)
+      expect(layers[1].pixels).toBeNull()
+      // The original keeps its own.
+      expect(await legacyRecords(id)).toEqual({ layers: ['layer-1', 'layer-2'], tiles: ['layer-1'] })
     })
 
     it('throws when duplicating non-existent project', async () => {
@@ -110,101 +90,51 @@ describe('MetadataDB', () => {
     })
   })
 
-  describe('layers', () => {
-    it('saves and loads layers in order', async () => {
-      const id = await meta.createProject('P', 100, 100, 72)
-      const layers: LayerInfo[] = [
-        {
-          id: 'layer-1', name: 'Background', visible: true, opacity: 1,
-          blendMode: 'normal', alphaLock: false, clippingMask: false, locked: false,
-        },
-        {
-          id: 'layer-2', name: 'Sketch', visible: true, opacity: 0.5,
-          blendMode: 'multiply', alphaLock: false, clippingMask: false, locked: false,
-        },
-      ]
-      await meta.saveLayers(id, layers)
+  describe('documents saved before the tile store', () => {
+    it('loads their layers bottom first, with their properties and pixels', async () => {
+      const id = await meta.createProject('P', 1, 1, 72)
+      await writeLegacyLayers(id, [
+        { info: layerInfo('sky', 'Sky'), pixels: new Uint8Array([1, 2, 3, 255]) },
+        { info: layerInfo('ink', 'Ink', { opacity: 0.5, blendMode: 'multiply', locked: true }), pixels: new Uint8Array([4, 5, 6, 7]) },
+      ])
 
-      const loaded = await meta.loadLayers(id)
-      expect(loaded).toHaveLength(2)
-      expect(loaded[0].layerId).toBe('layer-1')
-      expect(loaded[0].order).toBe(0)
-      expect(loaded[1].layerId).toBe('layer-2')
-      expect(loaded[1].order).toBe(1)
-      expect(loaded[1].blendMode).toBe('multiply')
+      const layers = (await meta.loadLegacyLayers(id, 1, 1))!
+      expect(layers.map((l) => l.info)).toEqual([
+        layerInfo('sky', 'Sky'),
+        layerInfo('ink', 'Ink', { opacity: 0.5, blendMode: 'multiply', locked: true }),
+      ])
+      expect(layers.map((l) => [...l.pixels!])).toEqual([
+        [1, 2, 3, 255],
+        [4, 5, 6, 7],
+      ])
     })
 
-    it('replaces layers on re-save', async () => {
-      const id = await meta.createProject('P', 100, 100, 72)
-      const layers1: LayerInfo[] = [{
-        id: 'layer-1', name: 'Old', visible: true, opacity: 1,
-        blendMode: 'normal', alphaLock: false, clippingMask: false, locked: false,
-      }]
-      await meta.saveLayers(id, layers1)
-
-      const layers2: LayerInfo[] = [{
-        id: 'layer-2', name: 'New', visible: true, opacity: 0.8,
-        blendMode: 'screen', alphaLock: false, clippingMask: false, locked: false,
-      }]
-      await meta.saveLayers(id, layers2)
-
-      const loaded = await meta.loadLayers(id)
-      expect(loaded).toHaveLength(1)
-      expect(loaded[0].layerId).toBe('layer-2')
-    })
-  })
-
-  describe('tiles', () => {
-    it('saves and loads tile data', async () => {
-      const id = await meta.createProject('P', 100, 100, 72)
-      const data = new ArrayBuffer(32)
-      new Uint8Array(data).fill(128)
-
-      await meta.saveTile(id, 'layer-1', 'full', data)
-      const loaded = await meta.loadTile(id, 'layer-1', 'full')
-
-      expect(loaded).not.toBeNull()
-      expect(new Uint8Array(loaded!)[0]).toBe(128)
+    it('loads a layer empty when its pixels are missing or the wrong size, and fixes bad properties', async () => {
+      const id = await meta.createProject('P', 2, 2, 72)
+      await writeLegacyLayers(id, [
+        { info: layerInfo('short', 'Short'), pixels: new Uint8Array(4) },
+        { info: layerInfo('none', 'None', { blendMode: 'sparkle' as never, opacity: 7 }), pixels: null },
+      ])
+      const layers = (await meta.loadLegacyLayers(id, 2, 2))!
+      expect(layers.map((l) => l.pixels)).toEqual([null, null])
+      expect(layers[1].info).toMatchObject({ blendMode: 'normal', opacity: 1 })
     })
 
-    it('returns null for missing tile', async () => {
-      const result = await meta.loadTile('missing', 'x', 'y')
-      expect(result).toBeNull()
+    it('has no layers for a project never saved', async () => {
+      const id = await meta.createProject('P', 2, 2, 72)
+      expect(await meta.loadLegacyLayers(id, 2, 2)).toEqual([])
     })
 
-    it('overwrites existing tile data', async () => {
-      const id = await meta.createProject('P', 100, 100, 72)
-      const data1 = new ArrayBuffer(4)
-      new Uint8Array(data1).fill(1)
-      await meta.saveTile(id, 'layer-1', 'full', data1)
-
-      const data2 = new ArrayBuffer(4)
-      new Uint8Array(data2).fill(2)
-      await meta.saveTile(id, 'layer-1', 'full', data2)
-
-      const loaded = await meta.loadTile(id, 'layer-1', 'full')
-      expect(new Uint8Array(loaded!)[0]).toBe(2)
-    })
-
-    it('loads all tiles for a layer', async () => {
-      const id = await meta.createProject('P', 100, 100, 72)
-      await meta.saveTile(id, 'layer-1', 'tile-0', new ArrayBuffer(4))
-      await meta.saveTile(id, 'layer-1', 'tile-1', new ArrayBuffer(4))
-      await meta.saveTile(id, 'layer-2', 'tile-0', new ArrayBuffer(4))
-
-      const tiles = await meta.loadAllTilesForLayer(id, 'layer-1')
-      expect(tiles).toHaveLength(2)
-    })
-
-    it('deletes tiles for a specific layer', async () => {
-      const id = await meta.createProject('P', 100, 100, 72)
-      await meta.saveTile(id, 'layer-1', 'full', new ArrayBuffer(4))
-      await meta.saveTile(id, 'layer-2', 'full', new ArrayBuffer(4))
-
-      await meta.deleteLayerTiles(id, 'layer-1')
-
-      expect(await meta.loadTile(id, 'layer-1', 'full')).toBeNull()
-      expect(await meta.loadTile(id, 'layer-2', 'full')).not.toBeNull()
+    it('reads nothing of a project saved to the tile store since, to read from there instead', async () => {
+      const id = await meta.createProject('P', 1, 1, 72)
+      await writeLegacyLayers(id, [{ info: layerInfo('bg', 'Background'), pixels: new Uint8Array([1, 2, 3, 255]) }])
+      const idb = new IdbTileBackend()
+      await new TileStore({ write: idb, read: { idb } }).save(id, {
+        width: 1,
+        height: 1,
+        layers: [{ info: layerInfo('bg', 'Background'), pixels: new Uint8Array([4, 5, 6, 255]) }],
+      })
+      expect(await meta.loadLegacyLayers(id, 1, 1)).toBeNull()
     })
   })
 
@@ -248,54 +178,6 @@ describe('MetadataDB', () => {
       const copy = (await meta.getProject(copyId))!
       expect(copy.stackId).toBe('s1')
       expect(copy.deletedAt).toBeUndefined()
-    })
-  })
-
-  describe('documents', () => {
-    const info = (id: string, name: string): LayerInfo => ({
-      id,
-      name,
-      visible: true,
-      opacity: 1,
-      blendMode: 'normal',
-      alphaLock: false,
-      clippingMask: false,
-      locked: false,
-    })
-
-    it('saves layer records and pixels together, dropping layers that are gone', async () => {
-      const id = await meta.createProject('P', 1, 1, 72)
-      await meta.saveDocumentLayers(id, [
-        { info: info('a', 'Sky'), pixels: new Uint8Array([1, 2, 3, 4]) },
-        { info: info('b', 'Ink'), pixels: new Uint8Array([5, 6, 7, 8]) },
-      ])
-      await meta.saveDocumentLayers(id, [{ info: info('b', 'Ink'), pixels: new Uint8Array([9, 9, 9, 9]) }])
-
-      expect((await meta.loadLayers(id)).map((l) => l.layerId)).toEqual(['b'])
-      expect(await meta.loadTile(id, 'a', 'full')).toBeNull()
-      expect([...new Uint8Array((await meta.loadTile(id, 'b', 'full'))!)]).toEqual([9, 9, 9, 9])
-    })
-
-    it('stores only the bytes of a view, not its whole buffer', async () => {
-      const id = await meta.createProject('P', 1, 1, 72)
-      const backing = new Uint8Array([0, 0, 1, 2, 3, 4, 0, 0])
-      await meta.saveDocumentLayers(id, [{ info: info('a', 'Sky'), pixels: backing.subarray(2, 6) }])
-      expect([...new Uint8Array((await meta.loadTile(id, 'a', 'full'))!)]).toEqual([1, 2, 3, 4])
-    })
-
-    it('deletes tiles of other layers only within the project', async () => {
-      const a = await meta.createProject('A', 1, 1, 72)
-      const b = await meta.createProject('B', 1, 1, 72)
-      await meta.saveTile(a, 'keep', 'full', new ArrayBuffer(4))
-      await meta.saveTile(a, 'drop', 'full', new ArrayBuffer(4))
-      await meta.saveTile(a, 'drop', 'tile-1', new ArrayBuffer(4))
-      await meta.saveTile(b, 'drop', 'full', new ArrayBuffer(4))
-
-      await meta.deleteTilesExcept(a, new Set(['keep']))
-
-      expect(await meta.loadTile(a, 'keep', 'full')).not.toBeNull()
-      expect(await meta.loadAllTilesForLayer(a, 'drop')).toHaveLength(0)
-      expect(await meta.loadTile(b, 'drop', 'full')).not.toBeNull()
     })
   })
 
@@ -349,50 +231,39 @@ describe('MetadataDB', () => {
       expect((await meta.getProject(id))!.name).toBe('Kept')
     })
 
-    it('keeps the layers saved before when a layer save fails part-way', async () => {
-      const id = await meta.createProject('Layers', 2, 2, 72)
-      await meta.saveLayers(id, [info('a', 'Sky'), info('b', 'Ink')])
-
-      // The old records are deleted and the first new one added before the second fails.
-      await expectCleanFailure(() => meta.saveLayers(id, [info('c', 'New'), info('d', unstorable)]))
-
-      expect((await meta.loadLayers(id)).map((l) => l.name)).toEqual(['Sky', 'Ink'])
-    })
-
-    it('deletes a project with all its layers and tiles', async () => {
+    it('deletes a project with all its whole layers, leaving other projects alone', async () => {
       const id = await meta.createProject('Gone', 2, 2, 72)
       const other = await meta.createProject('Stays', 2, 2, 72)
       for (const project of [id, other]) {
-        await meta.saveLayers(project, [info('a', 'Sky'), info('b', 'Ink')])
-        await meta.saveTile(project, 'a', 'full', new Uint8Array(16).buffer)
-        await meta.saveTile(project, 'b', 'full', new Uint8Array(16).buffer)
+        await writeLegacyLayers(project, [
+          { info: info('a', 'Sky'), pixels: new Uint8Array(16) },
+          { info: info('b', 'Ink'), pixels: new Uint8Array(16) },
+        ])
       }
 
       await meta.deleteProject(id)
 
       expect(await meta.getProject(id)).toBeUndefined()
-      expect(await meta.loadLayers(id)).toEqual([])
-      expect(await meta.loadTile(id, 'a', 'full')).toBeNull()
-      expect(await meta.loadTile(id, 'b', 'full')).toBeNull()
-      expect(await meta.loadLayers(other)).toHaveLength(2)
-      expect(await meta.loadTile(other, 'b', 'full')).not.toBeNull()
+      expect(await legacyRecords(id)).toEqual({ layers: [], tiles: [] })
+      expect(await legacyRecords(other)).toEqual({ layers: ['a', 'b'], tiles: ['a', 'b'] })
     })
 
     it('leaves no half-copied project when duplicating fails', async () => {
       const id = await meta.createProject('Original', 2, 2, 72)
-      await meta.saveLayers(id, [info('a', 'Sky')])
-      await meta.saveTile(id, 'a', 'full', new Uint8Array(16).buffer)
+      await writeLegacyLayers(id, [{ info: info('a', 'Sky'), pixels: new Uint8Array(16) }])
       const add = IDBObjectStore.prototype.add
       const spy = vi.spyOn(IDBObjectStore.prototype, 'add').mockImplementation(function (this: IDBObjectStore, ...args) {
         if (this.name === 'tiles') throw new DOMException('storage is full', 'QuotaExceededError')
         return add.apply(this, args)
       })
 
-      await expect(meta.duplicateProject(id, 'Original copy')).rejects.toThrow('storage is full')
+      await expectCleanFailure(() => meta.duplicateProject(id, 'Original copy'))
       spy.mockRestore()
 
+      // The record and the layer records copied before the failure are rolled back.
       expect((await meta.getAllProjects()).map((p) => p.name)).toEqual(['Original'])
-      expect(await meta.loadLayers(id)).toHaveLength(1)
+      expect(await (await getDB()).count('layers')).toBe(1)
+      expect(await legacyRecords(id)).toEqual({ layers: ['a'], tiles: ['a'] })
     })
 
     it('says whether the project it updates exists', async () => {
@@ -402,13 +273,5 @@ describe('MetadataDB', () => {
       expect(await meta.getProject('missing')).toBeUndefined()
     })
 
-    it('deletes one layer\'s tiles only', async () => {
-      const id = await meta.createProject('Tiles', 2, 2, 72)
-      await meta.saveTile(id, 'a', 'full', new Uint8Array(16).buffer)
-      await meta.saveTile(id, 'b', 'full', new Uint8Array(16).buffer)
-      await meta.deleteLayerTiles(id, 'a')
-      expect(await meta.loadTile(id, 'a', 'full')).toBeNull()
-      expect(await meta.loadTile(id, 'b', 'full')).not.toBeNull()
-    })
   })
 })

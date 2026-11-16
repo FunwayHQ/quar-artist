@@ -60,7 +60,7 @@
 - **PNG** export — full-resolution composite
 - **JPEG** export — with quality slider (Low/Medium/High/Max)
 - **PSD** and **.qart** (ZIP archive with a manifest and per-layer pixel data): the writers exist but aren't connected to the Export dialog yet
-- **Saving:** auto-save, Ctrl+S and the Gallery are not connected yet, so a project lasts only until the page closes
+- **Saving:** projects save themselves in the browser, as compressed 256 × 256 tiles written from a background worker: in the origin private file system where the browser offers it, in IndexedDB otherwise. The Gallery lists them
 
 ### Undo/Redo
 - Full-layer snapshot undo with 50-state history
@@ -192,7 +192,7 @@ QUAR Artist is not ready for real work yet. The remaining work for the MVP and v
 | Colour | Works: colour disc, harmonies, palettes, recent colours. Palettes aren't saved yet (M1.9) |
 | Selection and transform | The tools work, but brush strokes and transforms ignore the selection, Feather does nothing, and transform handles misbehave after a rotation (M4.1–M4.3) |
 | Filters | Gaussian blur, sharpen, HSB adjustment, curves. Strokes made while a filter dialog is open are lost (M4.10) |
-| Saving | Projects save themselves in the browser a few seconds after each change, and when you go back to the Gallery or press Ctrl+S. The Gallery lists them with thumbnails, stacks, sorting, rename, duplicate, delete with undo, and import of .qart files and images. Saves still write whole layers and can lose the last few seconds if the tab is closed (M1.2, M1.3) |
+| Saving | Projects save themselves in the browser a few seconds after each change, and when you go back to the Gallery or press Ctrl+S. A save writes only the 256 × 256 tiles that changed, compressed, from a background worker, and lands whole or not at all. The Gallery lists projects with thumbnails, stacks, sorting, rename, duplicate, delete with undo, and import of .qart files and images. Each save still reads every layer back from the GPU, and the last few seconds can be lost if the tab is closed (M1.3) |
 | Export | PNG and JPEG work. PSD and .qart aren't connected yet (M1.6, M1.7) |
 | Rendering | WebGPU, or WebGL 2 where WebGPU isn't available |
 | Tests | Vitest unit tests, plus Playwright end-to-end and real-GPU pixel tests in Chromium (WebGPU and WebGL 2), Firefox and WebKit |

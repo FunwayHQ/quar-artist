@@ -378,7 +378,10 @@ describe('CanvasManager', () => {
       vi.spyOn(FilterManager.prototype, 'committedPixels').mockImplementation((layerId) => (layerId === id ? committed : null))
 
       expect(cm.isPreviewing()).toBe(true)
-      expect(cm.getLayerPixels(id)).toBe(committed.data)
+      // A copy: the save hands it to the persistence worker, and the preview still needs its own.
+      const pixels = cm.getLayerPixels(id)!
+      expect(pixels).toEqual(committed.data)
+      expect(pixels.buffer).not.toBe(committed.data.buffer)
     })
 
     it('saves the pixels from before a transform', () => {
@@ -389,7 +392,9 @@ describe('CanvasManager', () => {
         beforeSnapshot: before,
       }
       expect(cm.isPreviewing()).toBe(true)
-      expect(cm.getLayerPixels(id)).toBe(before.data)
+      const pixels = cm.getLayerPixels(id)!
+      expect(pixels).toEqual(before.data)
+      expect(pixels.buffer).not.toBe(before.data.buffer)
       ;(cm as unknown as { transformState: null }).transformState = null
     })
 

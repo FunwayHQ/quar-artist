@@ -69,9 +69,10 @@ export class FakeDocumentEngine implements DocumentEngine {
     return this.activeLayerId
   }
 
+  /** A copy, as the real engine gives: the caller owns it. */
   getLayerPixels(id: string) {
     if (this.readFailure) throw this.readFailure
-    return this.layers.find((l) => l.info.id === id)?.pixels ?? null
+    return this.layers.find((l) => l.info.id === id)?.pixels.slice() ?? null
   }
 
   getCompositePixels() {
@@ -88,9 +89,10 @@ export class FakeDocumentEngine implements DocumentEngine {
   }
 
   /** Set the first byte of the active layer, as a stroke would change pixels, and report the change. */
+  /** Paint the first pixel of the active layer opaque, with `value` as its red. */
   paint(value: number) {
     const layer = this.layers.find((l) => l.info.id === this.activeLayerId)!
-    layer.pixels[0] = value
+    layer.pixels.set([value, 0, 0, 255], 0)
     this.onChange?.()
   }
 
