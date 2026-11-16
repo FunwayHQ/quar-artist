@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 // Mock pixi.js — PixiJS can't run in jsdom
+// Registers GPU blend shaders, which need the real PixiJS and are never drawn here.
+vi.mock('../layers/blendModes.ts', () => ({}))
+
 vi.mock('pixi.js', () => {
   const mockTexture = {
     destroy: vi.fn(),

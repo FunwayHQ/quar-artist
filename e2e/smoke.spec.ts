@@ -1,14 +1,10 @@
 import { test, expect } from '@playwright/test'
-import type { RenderBackend } from '../src/types/engine.ts'
 import { CANVAS, STROKE_PIXELS, canvasShot, changedPixels, drawStroke, waitForEngine } from './support/app.ts'
-import { expectKnownBug } from './support/knownBugs.ts'
 
 test.describe('QUAR Artist — Smoke Tests', () => {
-  let backend: RenderBackend
-
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
-    backend = await waitForEngine(page)
+    await waitForEngine(page)
   })
 
   test('app loads with canvas and title bar', async ({ page }) => {
@@ -57,15 +53,6 @@ test.describe('QUAR Artist — Smoke Tests', () => {
   })
 
   test('redo brings a stroke back exactly', async ({ page }) => {
-    expectKnownBug(
-      {
-        id: 'F07',
-        fixedIn: 'M0.5',
-        summary: 'redo uploads a premultiplied WebGL snapshot as straight alpha, darkening the stroke edge',
-        backends: ['webgl2'],
-      },
-      { backend },
-    )
     const before = await canvasShot(page)
     await drawStroke(page)
     await expect.poll(async () => changedPixels(page, before, await canvasShot(page))).toBeGreaterThan(STROKE_PIXELS)

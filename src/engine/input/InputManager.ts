@@ -79,6 +79,9 @@ export class InputManager {
   }
 
   private handlePointerDown = (e: PointerEvent) => {
+    // Only the primary button, a pen's tip or a finger draws, pans or zooms.
+    // Right-click opens the context menu; other buttons do nothing yet (F56).
+    if (e.button !== 0) return
     this.element?.setPointerCapture(e.pointerId)
     const local = this.toLocalCoords(e.clientX, e.clientY)
     this.activePointers.set(e.pointerId, { id: e.pointerId, x: local.x, y: local.y })
@@ -139,7 +142,8 @@ export class InputManager {
   }
 
   private handlePointerUp = (e: PointerEvent) => {
-    this.activePointers.delete(e.pointerId)
+    // Ignore pointers that never went down here, such as an ignored right-click.
+    if (!this.activePointers.delete(e.pointerId)) return
 
     if (this.isPanning) {
       this.isPanning = false

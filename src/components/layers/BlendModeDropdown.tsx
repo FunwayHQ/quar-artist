@@ -2,8 +2,10 @@ import { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react
 import { createPortal } from 'react-dom'
 import { ChevronDown } from 'lucide-react'
 import type { BlendMode } from '../../types/layer.ts'
-import { BLEND_MODE_GROUPS, BLEND_MODE_LABELS } from '../../types/layer.ts'
+import { BLEND_MODE_GROUPS, BLEND_MODE_LABELS, BLEND_MODES_SHOWN_AS_NORMAL } from '../../types/layer.ts'
 import styles from './BlendModeDropdown.module.css'
+
+const NOT_YET_HINT = 'Not supported yet: this layer is drawn as Normal for now'
 
 interface BlendModeDropdownProps {
   value: BlendMode
@@ -127,6 +129,7 @@ export function BlendModeDropdown({ value, onChange }: BlendModeDropdownProps) {
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label="Blend mode"
+        title={BLEND_MODES_SHOWN_AS_NORMAL.has(value) ? NOT_YET_HINT : undefined}
         type="button"
       >
         <span className={styles.triggerLabel}>{BLEND_MODE_LABELS[value]}</span>
@@ -152,6 +155,7 @@ export function BlendModeDropdown({ value, onChange }: BlendModeDropdownProps) {
                     const idx = flatIdx++
                     const isActive = mode === value
                     const isFocused = idx === focusIndex
+                    const shownAsNormal = BLEND_MODES_SHOWN_AS_NORMAL.has(mode)
                     return (
                       <button
                         key={mode}
@@ -160,6 +164,7 @@ export function BlendModeDropdown({ value, onChange }: BlendModeDropdownProps) {
                         aria-selected={isActive}
                         data-active={isActive || undefined}
                         data-focused={isFocused || undefined}
+                        title={shownAsNormal ? NOT_YET_HINT : undefined}
                         onClick={(e) => {
                           e.stopPropagation()
                           handleSelect(mode)
@@ -167,6 +172,12 @@ export function BlendModeDropdown({ value, onChange }: BlendModeDropdownProps) {
                         type="button"
                       >
                         {BLEND_MODE_LABELS[mode]}
+                        {shownAsNormal && (
+                          <>
+                            {' '}
+                            <span className={styles.modeNote}>as Normal</span>
+                          </>
+                        )}
                       </button>
                     )
                   })}

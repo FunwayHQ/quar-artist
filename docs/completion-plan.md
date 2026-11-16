@@ -216,12 +216,23 @@ flowchart LR
     - Testing the failure screen found F102: with no usable WebGL, PixiJS 8 quietly falls back to its Canvas 2D renderer, and the app reported that as WebGL 2. `createRenderer` now rejects Canvas 2D and WebGL 1, so those browsers get the failure screen.
     - The root error boundary offers Retry and Reload. Saving first needs persistence, so that step moves to M1.3.
     - Unhandled promise rejections and exceptions thrown outside React show an error toast. A message that repeats within 5 s is shown once.
-- [ ] **M0.5 Stopgap fixes** · S · fixes F15 (partly), F49, F56, F07 (readback part)
+- [x] **M0.5 Stopgap fixes** · S · fixes F15 (partly), F49, F56, F104, F07 (readback part)
   - Add `import 'pixi.js/advanced-blend-modes'`. This fixes 12 of the 13 modes that currently render as Normal. Hue stays Normal until M2.4 and is labelled that way in the blend menu.
   - Only the primary button or pen contact paints; right-click and middle-click never do.
   - A pen pressure of 0 stays 0; only the mouse defaults to 0.5.
   - Convert WebGL readbacks (premultiplied) to straight alpha in one shared readback helper, and use it for every `extract.pixels` call: export, thumbnails, timelapse, undo and redo snapshots, flood fill, filters, transforms, the eyedropper, the magic wand and CPU blending. WebGPU readbacks are already straight.
   - Remove the `expectKnownBug` calls these fixes resolve: F07 on WebGL, and F15 for the 12 modes that `advanced-blend-modes` adds. Re-run the blend tests over transparency and move any mode that still fails there to F16 (M2.4).
+  - **Done 2026-11-16.** Notes:
+    - `engine/layers/blendModes.ts` registers PixiJS's advanced blend modes. On WebGL that alone changed nothing: PixiJS skips blend filters unless the renderer is created with `useBackBuffer: true`, even for layers drawn into render textures. `createRenderer` now sets it, at the cost of one screen-sized texture and a copy per frame.
+    - The 12 modes now match the reference over an opaque backdrop in all four configurations. Soft Light was still wrong on WebGPU: PixiJS's WGSL passes the two halves of the formula to `select` in the wrong order (F104, found here). `blendModes.ts` registers a corrected Soft Light in its place until M2.4.
+    - Over transparent and semi-transparent backdrops, PixiJS's formulas blend with black or with the premultiplied colour. Only Exclusion comes out right, because its formula is linear in the backdrop. The other 11 are now marked F16 (M2.4), alongside Multiply and the CPU modes.
+    - Hue and Dissolve still render as Normal. The blend menu shows "as Normal" next to both, with a tooltip.
+    - A stroke, pan or gesture only starts on `button === 0`, so right- and middle-button drags no longer paint. The pen's barrel button and eraser tip do nothing until M3.1 recognises them.
+    - Pens keep their pressure, 0 included, so a stroke tapers where the pen lifts instead of ending in a blob. Mice, and touch without pressure sensing, still paint at 0.5.
+    - `engine/utils/readback.ts` returns straight alpha on both backends, and every readback goes through it: undo and redo snapshots, export, thumbnails, timelapse, flood fill, filters, transforms, the eyedropper, the magic wand and CPU blending.
+    - F07 is fixed on Chromium and WebKit. On Firefox, semi-transparent colours still shift slightly, because its 2D canvas rounds premultiplied colour up and undo, redo and export all pass through one (F103, found here; M1.8 and M2.2). Measured: +2 levels per undo at 50% alpha, +4 in an exported PNG at 25% alpha.
+    - The harness decodes exported PNGs in Node instead of through a 2D canvas, so the export tests check the file to within 1 level. Known-bug markers can also be limited to particular browsers.
+    - New e2e tests: right- and middle-button drags don't paint; a pen lifting to zero pressure tapers the stroke.
 - [ ] **M0.6 Housekeeping** · S · fixes F55, F62, F80, F98
   - Unique ids for projects and layers (D12).
   - The overlay canvas redraws only when something changed, not on every frame.
@@ -318,8 +329,9 @@ flowchart LR
     - runs in a worker.
   - Import with ag-psd's `readPsd`: layers, blend modes, opacity, visibility and clipping. Groups are flattened until M7.1. Size limits apply.
   - Fidelity test: compare our composite with the PSD's embedded composite on a set of test files. The PRD target is at least a 95% match.
-- [ ] **M1.8 Image export** · M · fixes F07, F14 (DPI), F94
+- [ ] **M1.8 Image export** · M · fixes F07, F14 (DPI), F94, F103
   - PNG and JPEG use straight alpha from the single conversion point and record DPI (the PNG `pHYs` chunk and the JPEG JFIF density).
+  - Encode PNGs from the pixel buffer, not from a 2D canvas, so Firefox's rounding can't shift semi-transparent colours (F103).
   - TIFF export (PRD MVP) uses a small built-in baseline-TIFF writer: 8-bit RGBA, uncompressed or Deflate.
   - Export at scale (new): 25–400% or a target size, with proper resampling.
   - Option to export only the current layer or the selection.
@@ -358,10 +370,10 @@ flowchart LR
 - [ ] **M2.1 Document model** · M · fixes F98
   - Model the layer tree (raster, group and text layers, plus later types), layer properties, tile maps, a tiled selection mask and document settings.
   - Plain TypeScript with no GPU references, fully unit-tested.
-- [ ] **M2.2 Tile pool, residency and readback** · XL · fixes F07, F51, F97, F82
+- [ ] **M2.2 Tile pool, residency and readback** · XL · fixes F07, F51, F97, F82, F103
   - Implement D2 and D3, with memory budgets per device class.
   - One utility converts between premultiplied and straight alpha.
-  - No document-sized 2D canvases anywhere, because of iOS Safari's 16.7-megapixel limit.
+  - No document-sized 2D canvases anywhere, because of iOS Safari's 16.7-megapixel limit. Uploading straight from buffers also ends F103.
 - [ ] **M2.3 Tiled write path** · L
   - `LayerSurface.beginWrite(region)` copies any affected tiles that history still uses, renders with per-tile offsets, and reports changed tiles to the compositor, history and autosave.
 - [ ] **M2.4 Shader compositor** · XL · fixes F15–F20, F27
@@ -892,8 +904,8 @@ All findings from the 2026-11-16 code review. Paths are relative to `src/`. Seve
 | F12 | M | MetadataDB updates aren't atomic, the tile index isn't unique, and delete and duplicate load every tile into memory | `io/persistence/MetadataDB.ts:36-98`, `db/schema.ts:103` | M1.2 |
 | F13 | M | Image import has no size check, so a huge PNG crashes the tab and loses unsaved work | `io/importImage.ts:16-29`, `engine/canvas/CanvasManager.ts:389-399` | M1.11 |
 | F14 | L | Smaller persistence gaps:<br>• no persistent-storage request and no quota handling<br>• custom brush presets are never saved<br>• PNG and JPEG carry no DPI<br>• dropping a non-image file makes the browser navigate away | `db/schema.ts:76-111`, `App.tsx:375-377` | M1.3, M1.5, M1.8, M1.9 |
-| F15 | C | 13 of the 26 blend modes render as Normal:<br>• `pixi.js/advanced-blend-modes` is never imported<br>• PixiJS has no Hue mode<br>• Linear Burn is missing<br>• Dissolve behaves as Normal | `engine/layers/LayerCompositor.ts:21-54`, `engine/shaders/blend/cpuBlend.ts:191` | M0.5, M2.4 |
-| F16 | H | The CPU blend modes (Vivid Light, Linear Light, Pin Light, Hard Mix, Subtract, Divide, Darker Color) are wrong over transparent and semi-transparent areas, often black, because the formula treats transparency as black. GPU Multiply has the same problem | `engine/shaders/blend/cpuBlend.ts:247-250` | M2.4 |
+| F15 | C | 13 of the 26 blend modes render as Normal:<br>• `pixi.js/advanced-blend-modes` is never imported<br>• PixiJS has no Hue mode<br>• Linear Burn is missing<br>• Dissolve behaves as Normal<br>• on WebGL, PixiJS skips the advanced modes unless the renderer is created with `useBackBuffer: true` (found in M0.5) | `engine/layers/LayerCompositor.ts:21-54`, `engine/shaders/blend/cpuBlend.ts:191`, `engine/renderer.ts` | M0.5, M2.4 |
+| F16 | H | The CPU blend modes (Vivid Light, Linear Light, Pin Light, Hard Mix, Subtract, Divide, Darker Color) are wrong over transparent and semi-transparent areas, often black, because the formula treats transparency as black. GPU Multiply has the same problem, and so do PixiJS's advanced modes, all except Exclusion (measured in M0.5) | `engine/shaders/blend/cpuBlend.ts:247-250` | M2.4 |
 | F17 | H | GPU blend modes on layers above a custom-mode layer are computed against transparency | `engine/layers/LayerCompositor.ts:204-260`, `engine/layers/LayerCompositor.ts:435-452` | M2.4 |
 | F18 | H | Painting below a custom-mode layer runs at about 1 fps, because every frame does full readbacks and a per-pixel JavaScript loop | `engine/layers/LayerCompositor.ts:188-240`, `engine/layers/LayerCompositor.ts:517-591` | M2.4 |
 | F19 | H | The compositor's fast path ignores the active layer's clipping mask and custom blend mode. Clipped layers with custom modes render as Normal on every path | `engine/layers/LayerCompositor.ts:159-288` | M2.4 |
@@ -980,6 +992,8 @@ All findings from the 2026-11-16 code review. Paths are relative to `src/`. Seve
 | F100 | M | Alpha lock makes semi-transparent pixels opaque: each batch of masked stamps is drawn source-over onto the layer, so alpha builds up as the stroke passes (found by the M0.3 harness) | `engine/brush/BrushEngine.ts:251-285` | M3.4 |
 | F101 | L | Strokes end up to one stamp spacing before the pen-up point, because stamps are only placed at spacing steps and no final stamp is added (found by the M0.3 harness) | `engine/brush/PathInterpolator.ts:66-75` | M3.3 |
 | F102 | M | With no usable WebGL, PixiJS 8 falls back to its Canvas 2D renderer, which the engine doesn't support, and the app reports it as WebGL 2 (found in M0.4) | `engine/renderer.ts` | M0.4 |
+| F103 | L | On Firefox, semi-transparent colours shift each time pixels pass through a 2D canvas, because Firefox rounds premultiplied colour up when it stores them. Undo, redo, flood fill, filters, transforms, CPU blending and image import upload through a 2D canvas, and PNG export encodes from one. Measured: +2 levels per undo at 50% alpha, +4 in an exported PNG at 25% alpha (found in M0.5) | `engine/canvas/CanvasManager.ts` (`restoreLayerSnapshot`), `io/formats/image/ImageExporter.ts:25-27` | M1.8, M2.2 |
+| F104 | M | Soft Light is wrong on WebGPU: PixiJS 8's WGSL passes the two halves of the formula to `select` in the wrong order, so every channel takes the other branch (found in M0.5) | PixiJS `advanced-blend-modes/SoftLightBlend`; worked around in `engine/layers/blendModes.ts` | M0.5 |
 
 ## Appendix B — PRD traceability
 

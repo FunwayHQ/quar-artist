@@ -4,6 +4,7 @@ import type { LayerInfo, BlendMode } from '../../types/layer.ts'
 import { MAX_LAYERS } from '../../types/layer.ts'
 import { get2dContext } from '../../utils/canvas2d.ts'
 import { asClampedBytes } from '../../utils/typedArrays.ts'
+import { readPixels } from '../utils/readback.ts'
 
 let nextId = 1
 function generateLayerId(): string {
@@ -359,7 +360,7 @@ export class LayerManager {
       })
 
       // Extract to a data URL via canvas
-      const pixels = this.app.renderer.extract.pixels({ target: thumbTex })
+      const pixels = readPixels(this.app.renderer, thumbTex)
       const canvas = document.createElement('canvas')
       canvas.width = thumbSize
       canvas.height = thumbSize

@@ -14,12 +14,19 @@ export interface KnownBug {
   summary: string
   /** Backends the bug shows on. Default: all. */
   backends?: HarnessInfo['backend'][]
+  /** Browsers the bug shows in. Default: all. */
+  browsers?: BrowserName[]
 }
 
-/** Mark the running test as an expected failure if `bug` applies to this backend. */
+type BrowserName = 'chromium' | 'firefox' | 'webkit'
+
+/** Mark the running test as an expected failure if `bug` applies to this backend and browser. */
 export function expectKnownBug(bug: KnownBug | undefined, info: Pick<HarnessInfo, 'backend'>): void {
   if (!bug) return
-  const applies = !bug.backends || bug.backends.includes(info.backend)
-  if (!applies) return
+  if (bug.backends && !bug.backends.includes(info.backend)) return
+  // Device presets set defaultBrowserType, not browserName.
+  const { browserName, defaultBrowserType } = test.info().project.use
+  const browser = browserName ?? defaultBrowserType ?? 'chromium'
+  if (bug.browsers && !bug.browsers.includes(browser)) return
   test.fail(true, `${bug.id}: ${bug.summary} (fix planned in ${bug.fixedIn})`)
 }

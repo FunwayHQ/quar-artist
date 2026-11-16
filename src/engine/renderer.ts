@@ -48,6 +48,10 @@ export async function createRenderer(canvas: HTMLCanvasElement, options: Rendere
     resolution: window.devicePixelRatio || 1,
     width: canvas.clientWidth,
     height: canvas.clientHeight,
+    // WebGL only. PixiJS skips every blend filter (all modes but normal,
+    // multiply, screen and add) unless this is on, even for layers drawn into
+    // render textures. It costs one screen-sized texture and a copy per frame.
+    useBackBuffer: true,
   }
 
   try {

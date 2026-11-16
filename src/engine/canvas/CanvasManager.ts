@@ -27,6 +27,8 @@ import type { RGBAColor } from '../../types/color.ts'
 import type { TextProperties } from '../../types/text.ts'
 import { get2dContext } from '../../utils/canvas2d.ts'
 import { asClampedBytes } from '../../utils/typedArrays.ts'
+import { readPixels } from '../utils/readback.ts'
+import { strokePressure } from '../input/pressure.ts'
 
 /**
  * Manages the two-canvas architecture:
@@ -517,7 +519,7 @@ export class CanvasManager {
     if (!layer) return
 
     // Snapshot before
-    const extracted = this.app.renderer.extract.pixels({ target: layer.texture })
+    const extracted = readPixels(this.app.renderer, layer.texture)
     const before: LayerSnapshot = {
       width: extracted.width,
       height: extracted.height,
@@ -556,7 +558,7 @@ export class CanvasManager {
     const layer = this.layerManager.getActiveLayer()
     if (!layer) return
 
-    const extracted = this.app.renderer.extract.pixels({ target: layer.texture })
+    const extracted = readPixels(this.app.renderer, layer.texture)
     const snapshot: LayerSnapshot = {
       width: extracted.width,
       height: extracted.height,
@@ -650,7 +652,7 @@ export class CanvasManager {
     if (!layer) return
 
     // Extract current pixel data
-    const extracted = this.app.renderer.extract.pixels({ target: layer.texture })
+    const extracted = readPixels(this.app.renderer, layer.texture)
     const pixels = new Uint8Array(extracted.pixels.buffer, extracted.pixels.byteOffset, extracted.pixels.byteLength)
 
     // Snapshot before
@@ -711,7 +713,7 @@ export class CanvasManager {
     const outputTexture = this.compositor.getOutputTexture()
     if (!outputTexture) return
 
-    const extracted = this.app.renderer.extract.pixels({ target: outputTexture })
+    const extracted = readPixels(this.app.renderer, outputTexture)
     const pixels = new Uint8Array(extracted.pixels.buffer, extracted.pixels.byteOffset, extracted.pixels.byteLength)
 
     const color = this.eyedropperTool.sample(
@@ -735,7 +737,7 @@ export class CanvasManager {
     this.recomposite()
     const outputTexture = this.compositor.getOutputTexture()
     if (!outputTexture) return null
-    const extracted = this.app.renderer.extract.pixels({ target: outputTexture })
+    const extracted = readPixels(this.app.renderer, outputTexture)
     return {
       pixels: new Uint8ClampedArray(
         extracted.pixels.buffer,
@@ -947,7 +949,7 @@ export class CanvasManager {
     if (!layer) return
 
     // Extract pixel data from the active layer
-    const extracted = this.app.renderer.extract.pixels({ target: layer.texture })
+    const extracted = readPixels(this.app.renderer, layer.texture)
     const pixels = new Uint8Array(
       extracted.pixels.buffer,
       extracted.pixels.byteOffset,
@@ -969,7 +971,7 @@ export class CanvasManager {
     // Extract current pixel data
     let extracted: { pixels: Uint8ClampedArray; width: number; height: number }
     try {
-      extracted = this.app.renderer.extract.pixels({ target: layer.texture })
+      extracted = readPixels(this.app.renderer, layer.texture)
     } catch {
       return // extraction not available (e.g. during tests)
     }
@@ -1055,7 +1057,7 @@ export class CanvasManager {
     const layer = this.layerManager.getLayerById(this.transformState.layerId)
     if (layer) {
       // Extract the after snapshot
-      const extracted = this.app.renderer.extract.pixels({ target: layer.texture })
+      const extracted = readPixels(this.app.renderer, layer.texture)
       const after: LayerSnapshot = {
         width: extracted.width,
         height: extracted.height,
@@ -1157,7 +1159,7 @@ export class CanvasManager {
     if (!layer) return
 
     // Extract current pixels
-    const extracted = this.app.renderer.extract.pixels({ target: layer.texture })
+    const extracted = readPixels(this.app.renderer, layer.texture)
     const pixels = new Uint8Array(extracted.pixels.buffer, extracted.pixels.byteOffset, extracted.pixels.byteLength)
     const before: LayerSnapshot = {
       width: extracted.width,
@@ -1483,7 +1485,7 @@ export class CanvasManager {
     const strokePoint: StrokePoint = {
       x: canvasPoint.x,
       y: canvasPoint.y,
-      pressure: ps.pressure || 0.5,
+      pressure: strokePressure(ps),
       tiltX: ps.tiltX,
       tiltY: ps.tiltY,
       timestamp: performance.now(),
@@ -1500,7 +1502,7 @@ export class CanvasManager {
           return {
             x: cp.x,
             y: cp.y,
-            pressure: c.pressure || 0.5,
+            pressure: strokePressure(c),
             tiltX: c.tiltX,
             tiltY: c.tiltY,
             timestamp: performance.now(),
@@ -1508,7 +1510,7 @@ export class CanvasManager {
         })
       : [{
           ...this.viewTransform.screenToCanvas(ps.x, ps.y),
-          pressure: ps.pressure || 0.5,
+          pressure: strokePressure(ps),
           tiltX: ps.tiltX,
           tiltY: ps.tiltY,
           timestamp: performance.now(),

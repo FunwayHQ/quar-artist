@@ -48,7 +48,9 @@ describe('createRenderer', () => {
     const canvas = document.createElement('canvas')
     const app = await createRenderer(canvas)
     expect(app).toBe(pixi.FakeApplication.instances[0])
-    expect(app.init).toHaveBeenCalledWith(expect.objectContaining({ canvas, backgroundAlpha: 0, preference: 'webgl' }))
+    expect(app.init).toHaveBeenCalledWith(
+      expect.objectContaining({ canvas, backgroundAlpha: 0, preference: 'webgl', useBackBuffer: true }),
+    )
   })
 
   it('uses WebGPU when the browser offers it', async () => {

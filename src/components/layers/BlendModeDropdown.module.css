@@ -175,6 +175,14 @@
   color: var(--color-text-primary);
 }
 
+/* Modes that are drawn as Normal until the shader compositor lands */
+.modeNote {
+  margin-left: auto;
+  color: var(--color-text-tertiary);
+  font-size: 10px;
+  font-weight: 400;
+}
+
 /* Active / selected mode */
 .modeItem[data-active='true'] {
   color: var(--color-accent-primary);

@@ -8,6 +8,7 @@ import type { SymmetryEngine } from '../guides/SymmetryEngine.ts'
 import type { LayerSnapshot } from '../undo/UndoManager.ts'
 import type { StrokePoint, StampPosition, BrushPreset } from '../../types/brush.ts'
 import type { RGBAColor } from '../../types/color.ts'
+import { readPixels } from '../utils/readback.ts'
 
 /**
  * Stamp-based brush rendering pipeline.
@@ -166,7 +167,7 @@ export class BrushEngine {
 
     const w = this.activeLayerTexture.width
     const h = this.activeLayerTexture.height
-    const pixels = this.app.renderer.extract.pixels({ target: this.activeLayerTexture })
+    const pixels = readPixels(this.app.renderer, this.activeLayerTexture)
 
     return {
       width: w,

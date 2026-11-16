@@ -6,6 +6,7 @@ import { cpuUnsharpMask } from '../shaders/filters/sharpenFilter.ts'
 import { cpuApplyCurves } from '../shaders/filters/curvesFilter.ts'
 import { get2dContext } from '../../utils/canvas2d.ts'
 import { asClampedBytes } from '../../utils/typedArrays.ts'
+import { readPixels } from '../utils/readback.ts'
 
 /**
  * Non-destructive filter preview system.
@@ -240,7 +241,7 @@ export class FilterManager {
       return { width: 0, height: 0, data: new Uint8Array(0) }
     }
 
-    const extracted = this.app.renderer.extract.pixels({ target: texture })
+    const extracted = readPixels(this.app.renderer, texture)
     return {
       width: extracted.width,
       height: extracted.height,

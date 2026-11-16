@@ -1,6 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // Mock pixi.js
+// Registers GPU blend shaders, which need the real PixiJS and are never drawn here.
+vi.mock('./blendModes.ts', () => ({}))
+
 vi.mock('pixi.js', () => {
   class MockRenderTexture {
     width: number

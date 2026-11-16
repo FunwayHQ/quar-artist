@@ -62,6 +62,36 @@ test.describe('strokes', () => {
   })
 })
 
+test.describe('pointer input', () => {
+  for (const [button, name] of [
+    [1, 'middle'],
+    [2, 'right'],
+  ] as const) {
+    test(`a ${name}-button drag does not paint`, async ({ quar }) => {
+      await quar.open({ width: SIZE, height: SIZE })
+      const layer = await quar.baseLayerId()
+      await quar.setBrush({ size: 6, color: RED })
+      await quar.setTool('brush')
+      await quar.stroke(line({ x: 8, y: 32 }, { x: 56, y: 32 }), { button })
+      expect((await quar.readLayer(layer)).maxAlpha()).toBe(0)
+    })
+  }
+
+  test('a pen lifting to zero pressure tapers the stroke instead of ending in a blob', async ({ quar }) => {
+    await quar.open({ width: SIZE, height: SIZE })
+    const layer = await quar.baseLayerId()
+    await quar.setBrush({ size: 12, color: RED, pressureSize: true })
+    await quar.setTool('brush')
+    const points = line({ x: 8, y: 32 }, { x: 48, y: 32 }).map((p) => ({ ...p, pressure: 0.3 }))
+    points[points.length - 1].pressure = 0
+    await quar.stroke(points, { pointerType: 'pen' })
+
+    const pixels = await quar.readLayer(layer)
+    const painted = (x: number) => [...Array(SIZE).keys()].filter((y) => pixels.at(x, y)[3] > 0).length
+    expect(painted(48), 'stroke height where the pen lifted').toBeLessThan(painted(28))
+  })
+})
+
 test.describe('undo and redo', () => {
   test('undo removes a stroke completely', async ({ quar }) => {
     await quar.open({ width: SIZE, height: SIZE })
@@ -77,16 +107,7 @@ test.describe('undo and redo', () => {
   })
 
   test('redo restores a stroke exactly', async ({ quar }) => {
-    const info = await quar.open({ width: SIZE, height: SIZE })
-    expectKnownBug(
-      {
-        id: 'F07',
-        fixedIn: 'M0.5',
-        summary: 'premultiplied WebGL snapshots are re-uploaded as straight alpha, darkening anti-aliased edges',
-        backends: ['webgl2'],
-      },
-      info,
-    )
+    await quar.open({ width: SIZE, height: SIZE })
     const layer = await quar.baseLayerId()
     await quar.setBrush({ size: 6, color: RED })
     await quar.setTool('brush')
@@ -100,12 +121,13 @@ test.describe('undo and redo', () => {
 
   test('undo restores semi-transparent pixels exactly', async ({ quar }) => {
     const info = await quar.open({ width: SIZE, height: SIZE })
+    // Pure red would hide this: its premultiplied channels are whole numbers at any alpha.
     expectKnownBug(
       {
-        id: 'F07',
-        fixedIn: 'M0.5',
-        summary: 'premultiplied WebGL snapshots are re-uploaded as straight alpha, darkening semi-transparent pixels',
-        backends: ['webgl2'],
+        id: 'F103',
+        fixedIn: 'M2.2',
+        summary: "Firefox's 2D canvas rounds premultiplied colour up, so each trip through one shifts semi-transparent colours",
+        browsers: ['firefox'],
       },
       info,
     )

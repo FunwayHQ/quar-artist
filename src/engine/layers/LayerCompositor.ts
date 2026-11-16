@@ -1,10 +1,13 @@
 import { RenderTexture, Sprite, Container, Texture, type Application, type BLEND_MODES } from 'pixi.js'
+// Registers the blend filters behind most names in PIXI_BLEND_MAP below.
+import './blendModes.ts'
 import type { Layer } from './LayerManager.ts'
 import type { BlendMode } from '../../types/layer.ts'
 import { CUSTOM_BLEND_MODES } from '../shaders/blend/blendFilters.ts'
 import { cpuBlendLayers } from '../shaders/blend/cpuBlend.ts'
 import { PerfMonitor } from '../perf/PerfMonitor.ts'
 import { asClampedBytes } from '../../utils/typedArrays.ts'
+import { readPixels } from '../utils/readback.ts'
 
 /**
  * Composites all visible layers bottom-to-top onto the output RenderTexture.
@@ -532,7 +535,7 @@ export class LayerCompositor {
     }
 
     // Extract current composite pixels
-    const dstExtract = this.app.renderer.extract.pixels({ target: targetTexture })
+    const dstExtract = readPixels(this.app.renderer, targetTexture)
     if (!dstExtract?.pixels) {
       const fallbackSprite = new Sprite(layer.texture)
       fallbackSprite.alpha = layer.info.opacity
@@ -547,7 +550,7 @@ export class LayerCompositor {
     )
 
     // Extract layer pixels
-    const srcExtract = this.app.renderer.extract.pixels({ target: layer.texture })
+    const srcExtract = readPixels(this.app.renderer, layer.texture)
     if (!srcExtract?.pixels) {
       const fallbackSprite = new Sprite(layer.texture)
       fallbackSprite.alpha = layer.info.opacity

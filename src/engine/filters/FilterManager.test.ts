@@ -43,6 +43,7 @@ vi.mock('pixi.js', () => {
     static from() { return new MockGpuProgram() }
   }
   return {
+    RendererType: { WEBGL: 1, WEBGPU: 2, CANVAS: 4 },
     Texture: MockTexture,
     Sprite: MockSprite,
     Container: MockContainer,

@@ -223,19 +223,13 @@ function createHarness(manager: CanvasManager, overlay: HTMLCanvasElement, info:
     },
 
     async exportPng() {
-      // Same path as App's export handler, minus the download.
+      // Same path as App's export handler, minus the download. The test decodes
+      // the file itself: decoding it here, through a 2D canvas, would round
+      // semi-transparent colours once more.
       const result = manager.getCompositePixels()
       if (!result) throw new Error('harness: no composite to export')
       const blob = await exportImage(result.pixels, result.width, result.height, { format: 'png' })
-      const bitmap = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' })
-      const canvas = document.createElement('canvas')
-      canvas.width = bitmap.width
-      canvas.height = bitmap.height
-      const ctx = canvas.getContext('2d')
-      if (!ctx) throw new Error('harness: no 2D context')
-      ctx.drawImage(bitmap, 0, 0)
-      const decoded = ctx.getImageData(0, 0, bitmap.width, bitmap.height)
-      return encode(decoded.data, decoded.width, decoded.height, false)
+      return { base64: toBase64(new Uint8Array(await blob.arrayBuffer())) }
     },
   }
 }
@@ -255,11 +249,15 @@ function encode(src: ArrayLike<number>, w: number, h: number, premultiplied: boo
       data[i + 2] = Math.min(255, Math.round((data[i + 2] * 255) / a))
     }
   }
+  return { width: w, height: h, base64: toBase64(data) }
+}
+
+function toBase64(data: Uint8Array): string {
   let binary = ''
   for (let i = 0; i < data.length; i += 0x4000) {
     binary += String.fromCharCode(...data.subarray(i, i + 0x4000))
   }
-  return { width: w, height: h, base64: btoa(binary) }
+  return btoa(binary)
 }
 
 /** Bit of `buttons` for a DOM `button` value (middle and secondary are swapped). */

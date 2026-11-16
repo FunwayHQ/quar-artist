@@ -20,6 +20,11 @@ export interface HarnessInfo {
   height: number
 }
 
+export interface EncodedFile {
+  /** The file's bytes, base64-encoded. */
+  base64: string
+}
+
 export interface EncodedPixels {
   width: number
   height: number
@@ -114,8 +119,8 @@ export interface QuarHarness {
   readLayer(layerId: string): EncodedPixels
   /** Recomposite all layers (no cache) and read back the result. */
   readComposite(): EncodedPixels
-  /** Run the PNG export path and decode the file it produces. */
-  exportPng(): Promise<EncodedPixels>
+  /** Run the PNG export path and return the file it produces. */
+  exportPng(): Promise<EncodedFile>
 }
 
 declare global {

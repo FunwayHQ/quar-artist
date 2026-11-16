@@ -109,6 +109,28 @@ describe('InputManager', () => {
       expect(onUp).toHaveBeenCalledTimes(1)
     })
 
+    it('ignores middle- and right-button drags (F56)', () => {
+      const onDown = vi.fn()
+      const onMove = vi.fn()
+      const onUp = vi.fn()
+      input.setStrokeCallbacks({ onPointerDown: onDown, onPointerMove: onMove, onPointerUp: onUp })
+      for (const button of [1, 2]) {
+        el.dispatchEvent(createPointerEvent('pointerdown', { pointerId: 1, button }))
+        el.dispatchEvent(createPointerEvent('pointermove', { pointerId: 1, clientX: 10, clientY: 10 }))
+        el.dispatchEvent(createPointerEvent('pointerup', { pointerId: 1, button }))
+      }
+      expect(onDown).not.toHaveBeenCalled()
+      expect(onMove).not.toHaveBeenCalled()
+      expect(onUp).not.toHaveBeenCalled()
+    })
+
+    it('ignores the release of a pointer it never saw go down', () => {
+      const onUp = vi.fn()
+      input.setStrokeCallbacks({ onPointerUp: onUp })
+      el.dispatchEvent(createPointerEvent('pointerup', { pointerId: 7 }))
+      expect(onUp).not.toHaveBeenCalled()
+    })
+
     it('does not fire stroke callbacks during space+drag pan', () => {
       const onDown = vi.fn()
       const onMove = vi.fn()

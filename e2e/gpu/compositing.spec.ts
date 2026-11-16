@@ -29,16 +29,13 @@ function expectUniform(pixels: Pixels, rect: Rect, expected: RGBA, label: string
 const PER_PIXEL_MODES = ALL_BLEND_MODES.filter((m) => m !== 'dissolve')
 
 // Measured on Chromium (WebGL 2 and WebGPU), Firefox and WebKit: the same on all four.
-const RENDERS_AS_NORMAL: KnownBug = {
-  id: 'F15',
-  fixedIn: 'M0.5',
-  summary: 'renders as Normal because pixi.js/advanced-blend-modes is not imported',
-}
 const NO_HUE: KnownBug = { id: 'F15', fixedIn: 'M2.4', summary: 'renders as Normal because PixiJS has no Hue mode' }
-const BLACK_OVER_TRANSPARENCY: KnownBug = {
+const OPAQUE_BACKDROP_ASSUMED: KnownBug = {
   id: 'F16',
   fixedIn: 'M2.4',
-  summary: 'the formula assumes an opaque backdrop, so the result turns black over transparent areas',
+  summary:
+    'the formula assumes an opaque backdrop: it blends with black where the backdrop is transparent ' +
+    'and with the premultiplied colour where it is semi-transparent',
 }
 
 const ADVANCED_MODES = [
@@ -49,14 +46,14 @@ const CPU_MODES = [
   'vividLight', 'linearLight', 'pinLight', 'hardMix', 'subtract', 'divide', 'darkerColor',
 ] as const satisfies readonly BlendMode[]
 
-const KNOWN_OPAQUE: Partial<Record<BlendMode, KnownBug>> = {
-  ...Object.fromEntries(ADVANCED_MODES.map((m) => [m, RENDERS_AS_NORMAL])),
-  hue: NO_HUE,
-}
+const KNOWN_OPAQUE: Partial<Record<BlendMode, KnownBug>> = { hue: NO_HUE }
 const KNOWN_TRANSPARENT: Partial<Record<BlendMode, KnownBug>> = {
-  ...KNOWN_OPAQUE,
-  multiply: BLACK_OVER_TRANSPARENCY,
-  ...Object.fromEntries(CPU_MODES.map((m) => [m, BLACK_OVER_TRANSPARENCY])),
+  // Exclusion passes: its formula is linear in the backdrop, so blending with
+  // the premultiplied colour happens to give the right result.
+  ...Object.fromEntries(
+    [...ADVANCED_MODES.filter((m) => m !== 'exclusion'), 'multiply', ...CPU_MODES].map((m) => [m, OPAQUE_BACKDROP_ASSUMED]),
+  ),
+  hue: NO_HUE,
 }
 
 test.describe('blend modes over an opaque backdrop', () => {

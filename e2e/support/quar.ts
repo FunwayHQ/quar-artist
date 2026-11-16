@@ -23,6 +23,7 @@ import type {
   SelectionState,
 } from '../harness/protocol.ts'
 import { Pixels, channelDistance, formatColor } from './pixels.ts'
+import { decodePng } from './png.ts'
 
 export { Pixels }
 
@@ -128,8 +129,10 @@ export class Quar {
     return Pixels.decode(await this.page.evaluate(() => window.__quar!.readComposite()))
   }
 
+  /** Export a PNG through the app's export path and decode the file exactly. */
   async exportPng(): Promise<Pixels> {
-    return Pixels.decode(await this.page.evaluate(() => window.__quar!.exportPng()))
+    const { base64 } = await this.page.evaluate(() => window.__quar!.exportPng())
+    return decodePng(Buffer.from(base64, 'base64'))
   }
 }
 

@@ -1,5 +1,6 @@
 /**
- * PNG export through the app's export path, decoded back to pixels.
+ * PNG export through the app's export path. The test decodes the file itself,
+ * so these checks see exactly what the file holds.
  */
 import type { RGBA } from '../harness/protocol.ts'
 import { expectKnownBug } from '../support/knownBugs.ts'
@@ -32,10 +33,10 @@ test('PNG export keeps semi-transparent colours', async ({ quar }) => {
   const info = await quar.open({ width: SIZE, height: SIZE })
   expectKnownBug(
     {
-      id: 'F07',
-      fixedIn: 'M0.5',
-      summary: 'WebGL readbacks are premultiplied but exported as straight alpha',
-      backends: ['webgl2'],
+      id: 'F103',
+      fixedIn: 'M1.8',
+      summary: "the PNG is encoded from Firefox's 2D canvas, which rounds premultiplied colour up",
+      browsers: ['firefox'],
     },
     info,
   )
@@ -44,7 +45,8 @@ test('PNG export keeps semi-transparent colours', async ({ quar }) => {
   await quar.fillRect(layer, [40, 60, 220, 64], { x: 16, y: 0, width: 16, height: SIZE })
 
   const png = await quar.exportPng()
-  // A 2D canvas stores premultiplied 8-bit colour, so low alpha loses some precision on decode.
-  expect(png.at(4, 4)).toMatchColor([255, 0, 0, 128], 3)
-  expect(png.at(20, 4)).toMatchColor([40, 60, 220, 64], 5)
+  // Within 1: the GPU and the encoder's 2D canvas both keep premultiplied
+  // 8-bit colour, which rounds 220 at alpha 64 to 219 on the way out.
+  expect(png.at(4, 4)).toMatchColor([255, 0, 0, 128], 1)
+  expect(png.at(20, 4)).toMatchColor([40, 60, 220, 64], 1)
 })

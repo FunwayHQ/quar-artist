@@ -65,6 +65,12 @@ export const BLEND_MODE_LABELS: Record<BlendMode, string> = {
   dissolve: 'Dissolve',
 }
 
+/**
+ * Modes the compositor can't draw yet: they render as Normal until the shader
+ * compositor (plan M2.4), and the blend menu says so.
+ */
+export const BLEND_MODES_SHOWN_AS_NORMAL: ReadonlySet<BlendMode> = new Set<BlendMode>(['hue', 'dissolve'])
+
 export const BLEND_MODE_GROUPS: { label: string; modes: BlendMode[] }[] = [
   { label: 'Normal', modes: ['normal', 'dissolve'] },
   { label: 'Darken', modes: ['darken', 'multiply', 'colorBurn', 'darkerColor'] },
