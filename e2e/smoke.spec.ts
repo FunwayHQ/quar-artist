@@ -1,14 +1,18 @@
 import { test, expect } from '@playwright/test'
+import type { RenderBackend } from '../src/types/engine.ts'
+import { CANVAS, STROKE_PIXELS, canvasShot, changedPixels, drawStroke, waitForEngine } from './support/app.ts'
+import { expectKnownBug } from './support/knownBugs.ts'
 
 test.describe('QUAR Artist — Smoke Tests', () => {
+  let backend: RenderBackend
+
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
-    // Wait for loading overlay to disappear (engine init)
-    await page.waitForSelector('[data-testid="canvas-container"]', { timeout: 15000 })
+    backend = await waitForEngine(page)
   })
 
   test('app loads with canvas and title bar', async ({ page }) => {
-    await expect(page.locator('[data-testid="canvas-container"]')).toBeVisible()
+    await expect(page.locator(CANVAS)).toBeVisible()
     await expect(page.locator('[data-testid="title-bar"]')).toBeVisible()
   })
 
@@ -25,25 +29,13 @@ test.describe('QUAR Artist — Smoke Tests', () => {
     await expect(eraserBtn).not.toHaveAttribute('data-active', 'true')
   })
 
-  test('draw stroke on canvas without errors', async ({ page }) => {
+  test('a stroke paints on the canvas without errors', async ({ page }) => {
     const errors: string[] = []
     page.on('pageerror', (err) => errors.push(err.message))
 
-    const canvas = page.locator('[data-testid="canvas-container"]')
-    const box = await canvas.boundingBox()
-    if (!box) throw new Error('Canvas not found')
-
-    const cx = box.x + box.width / 2
-    const cy = box.y + box.height / 2
-
-    // Simulate a stroke: pointerdown → pointermove → pointerup
-    await page.mouse.move(cx - 50, cy)
-    await page.mouse.down()
-    for (let i = -50; i <= 50; i += 10) {
-      await page.mouse.move(cx + i, cy + Math.sin(i / 10) * 20)
-    }
-    await page.mouse.up()
-
+    const before = await canvasShot(page)
+    await drawStroke(page)
+    await expect.poll(async () => changedPixels(page, before, await canvasShot(page))).toBeGreaterThan(STROKE_PIXELS)
     expect(errors).toHaveLength(0)
   })
 
@@ -54,32 +46,37 @@ test.describe('QUAR Artist — Smoke Tests', () => {
     expect(layersAfter).toBe(layersBefore + 1)
   })
 
-  test('undo and redo with keyboard shortcuts', async ({ page }) => {
-    const canvas = page.locator('[data-testid="canvas-container"]')
-    const box = await canvas.boundingBox()
-    if (!box) throw new Error('Canvas not found')
+  test('undo removes a stroke', async ({ page }) => {
+    const before = await canvasShot(page)
+    await drawStroke(page)
+    await expect.poll(async () => changedPixels(page, before, await canvasShot(page))).toBeGreaterThan(STROKE_PIXELS)
 
-    const cx = box.x + box.width / 2
-    const cy = box.y + box.height / 2
+    await page.keyboard.press('ControlOrMeta+z')
+    await expect.poll(async () => changedPixels(page, before, await canvasShot(page)), { message: 'canvas after undo' })
+      .toBe(0)
+  })
 
-    // Draw a stroke
-    await page.mouse.move(cx, cy)
-    await page.mouse.down()
-    await page.mouse.move(cx + 30, cy + 30)
-    await page.mouse.up()
+  test('redo brings a stroke back exactly', async ({ page }) => {
+    expectKnownBug(
+      {
+        id: 'F07',
+        fixedIn: 'M0.5',
+        summary: 'redo uploads a premultiplied WebGL snapshot as straight alpha, darkening the stroke edge',
+        backends: ['webgl2'],
+      },
+      { backend },
+    )
+    const before = await canvasShot(page)
+    await drawStroke(page)
+    await expect.poll(async () => changedPixels(page, before, await canvasShot(page))).toBeGreaterThan(STROKE_PIXELS)
+    const painted = await canvasShot(page)
 
-    // Wait for stroke to complete
-    await page.waitForTimeout(200)
-
-    // Undo
-    await page.keyboard.press('Control+z')
-    await page.waitForTimeout(200)
-
-    // Redo
-    await page.keyboard.press('Control+Shift+z')
-    await page.waitForTimeout(200)
-
-    // No crashes — success
+    await page.keyboard.press('ControlOrMeta+z')
+    await expect.poll(async () => changedPixels(page, before, await canvasShot(page)), { message: 'canvas after undo' })
+      .toBe(0)
+    await page.keyboard.press('ControlOrMeta+Shift+z')
+    await expect.poll(async () => changedPixels(page, painted, await canvasShot(page)), { message: 'canvas after redo' })
+      .toBe(0)
   })
 
   test('menu navigation — File menu opens and closes', async ({ page }) => {

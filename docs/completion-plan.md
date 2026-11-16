@@ -175,7 +175,7 @@ flowchart LR
     - Fixing the guide sync revealed one more hooks error that the React Compiler had been masking: the Google Fonts consent check now runs in a lazy `useState` initializer.
 - [x] ~~**M0.2 Continuous integration**~~ · **Skipped** (decision 2026-11-16: no automated checks on GitHub)
   - Replaced by the local `npm run verify` script from M0.1, run before every commit.
-- [ ] **M0.3 Real-GPU test harness** · L · fixes F76
+- [x] **M0.3 Real-GPU test harness** · L · fixes F76
   - Add `e2e/harness/`: a test page that boots the real engine (no mocks) and exposes `window.__quar` for scripted actions:
     - create a document and set layer properties;
     - draw strokes with a seeded random generator;
@@ -191,6 +191,15 @@ flowchart LR
     - stroke opacity limit;
     - undo after Merge Down.
   - Strengthen the smoke tests: wait until the engine is actually ready, then check pixels after drawing a stroke and after undo.
+  - **Done 2026-11-16.** Notes:
+    - Run the GPU tests with `npm run e2e:gpu` (WebGL 2 in Chromium, Firefox and WebKit) or `npm run e2e:webgpu` (WebGPU in Chromium; skipped when the machine has no adapter). `npm run e2e` adds the app tests; with `QUAR_WEBGPU=1` it covers all four configurations in about 6 minutes. It isn't part of `npm run verify`: run it before committing a package that changes rendering or engine start-up.
+    - The harness page is `e2e/harness/index.html?w=64&h=64&renderer=webgl`. Tests use the `quar` fixture (`e2e/support/quar.ts`), compare against `e2e/reference/`, and declare open bugs with `expectKnownBug` (`e2e/support/knownBugs.ts`). When a fix lands, its test passes unexpectedly, which fails the run until the marker is removed.
+    - Chromium runs as the full browser (`channel: 'chromium'`). Playwright's default headless shell only has the SwiftShader software GPU, where PixiJS's WebGPU renderer draws nothing.
+    - All four configurations give the same results except for F07: on WebGL 2, undo, redo and PNG export darken semi-transparent pixels, while WebGPU is exact. F07 turned out wider than the review found, so M0.5 now fixes it at the readback.
+    - 13 blend modes render as Normal (F15). Multiply and the 7 CPU modes are wrong over transparency (F16).
+    - The canvas container exposes the backend as `data-renderer`, so app tests can declare backend-specific bugs.
+    - New findings: F100 (alpha lock makes semi-transparent pixels opaque) and F101 (strokes end before the pen-up point). F60 now has a reproducible test (`e2e/lifecycle.spec.ts`). Until M0.4 fixes it, it also breaks about half of the app tests on Chromium, where WebGPU starts slowly enough for the discarded engine to report ready first.
+    - `npm run verify` also type-checks `e2e/` and `playwright.config.ts` (`tsconfig.e2e.json`).
 - [ ] **M0.4 Engine lifecycle and error handling** · M · fixes F02, F60, F61
   - `useEngine` attaches through a callback ref, so a newly mounted canvas container gets the engine again.
   - Asynchronous initialisation can be cancelled.
@@ -199,11 +208,12 @@ flowchart LR
   - Add a root error boundary that tries to save and then offers a reload.
   - If the engine can't start, show a screen explaining the WebGPU or WebGL 2 requirement.
   - Show a toast for unhandled promise rejections.
-- [ ] **M0.5 Stopgap fixes** · S · fixes F15 (partly), F49, F56, F07 (export part)
+- [ ] **M0.5 Stopgap fixes** · S · fixes F15 (partly), F49, F56, F07 (readback part)
   - Add `import 'pixi.js/advanced-blend-modes'`. This fixes 12 of the 13 modes that currently render as Normal. Hue stays Normal until M2.4 and is labelled that way in the blend menu.
   - Only the primary button or pen contact paints; right-click and middle-click never do.
   - A pen pressure of 0 stays 0; only the mouse defaults to 0.5.
-  - Convert WebGL readbacks (premultiplied) to straight alpha before `putImageData` in PNG and JPEG export, layer thumbnails and timelapse frames. WebGPU readbacks are already straight.
+  - Convert WebGL readbacks (premultiplied) to straight alpha in one shared readback helper, and use it for every `extract.pixels` call: export, thumbnails, timelapse, undo and redo snapshots, flood fill, filters, transforms, the eyedropper, the magic wand and CPU blending. WebGPU readbacks are already straight.
+  - Remove the `expectKnownBug` calls these fixes resolve: F07 on WebGL, and F15 for the 12 modes that `advanced-blend-modes` adds. Re-run the blend tests over transparency and move any mode that still fails there to F16 (M2.4).
 - [ ] **M0.6 Housekeeping** · S · fixes F55, F62, F80, F98
   - Unique ids for projects and layers (D12).
   - The overlay canvas redraws only when something changed, not on every frame.
@@ -354,6 +364,7 @@ flowchart LR
     - Hue, Saturation, Color, Luminosity.
   - Also Dissolve, and Pass Through for groups.
   - Clipping uses the base layer's alpha.
+    - Decide how clipped layers composite over semi-transparent base pixels: as a group (Photoshop's default: the clipped layers paint onto the base, which keeps its alpha), or each against the whole stack with its opacity scaled by the base alpha. The CPU reference (`e2e/reference/compositing.ts`) does the second today; change it first if M2.4 chooses the group behaviour. The M0.3 tests only use opaque bases, where both give the same result.
   - Merge Down and Flatten reuse the compositor, so the result matches what's on screen.
   - Golden tests compare against the CPU reference on both backends.
   - Remove the CPU blend path and the use of PixiJS blend modes and masks.
@@ -406,12 +417,13 @@ flowchart LR
   - Touch-and-hold samples a colour.
   - A three-finger swipe down opens the copy/paste menu.
   - A quick pinch fits the canvas to the screen.
-- [ ] **M3.3 Stroke pipeline** · M
+- [ ] **M3.3 Stroke pipeline** · M · fixes F101
   - Smoothing: StreamLine (exponential), rope/lazy-mouse stabilisation and motion filtering (v1.0).
   - Then Catmull-Rom interpolation and pressure-aware spacing.
   - Each stamp's parameters come from pressure, tilt, azimuth, twist and speed, through curves.
   - Each stroke uses a seeded random generator, which collaboration replay needs.
-- [ ] **M3.4 Stamp renderer and stroke buffer** · XL · fixes F20 (alpha lock), F21, F22, F24, F30 (strokes)
+  - The stroke ends exactly at the pen-up point: place a final stamp there (F101).
+- [ ] **M3.4 Stamp renderer and stroke buffer** · XL · fixes F20 (alpha lock), F21, F22, F24, F30 (strokes), F100
   - Implement D5. Stamps are batched textured quads using mipmapped shape textures.
   - Grain can follow the stamp ("texturized") or stay fixed to the canvas ("rolling"), with scale, depth and movement settings.
   - Hardness comes from generated shape textures.
@@ -863,7 +875,7 @@ All findings from the 2026-11-16 code review. Paths are relative to `src/`. Seve
 | F04 | H | New Project keeps the old layers, pixels and undo history | `App.tsx:318-322` | M1.1 |
 | F05 | H | Choosing PSD or .qart export closes the dialog without writing a file | `App.tsx:295-315` | M1.6, M1.7 |
 | F06 | H | A typed canvas size beyond the GPU limit wipes every layer, because the old textures are destroyed even when copying failed. Shrinking the canvas crops it with no undo | `components/dialogs/CanvasSizeDialog.tsx:46-50`, `engine/layers/LayerManager.ts:59-73`, `engine/canvas/CanvasManager.ts:340-358` | M1.11, M4.6 |
-| F07 | H | WebGL readbacks are premultiplied but treated as straight alpha. Exports darken (50% red becomes dark red), and thumbnails, timelapse, Curves, CPU blending and tolerances differ between backends | `engine/canvas/CanvasManager.ts:728-746`, `io/formats/image/ImageExporter.ts:25-27` | M0.5, M1.8, M2.2 |
+| F07 | H | WebGL readbacks are premultiplied but treated as straight alpha:<br>• exports darken (50% red becomes dark red)<br>• undo, redo, flood fill, filters and transforms upload the premultiplied data again, so every such edit darkens semi-transparent pixels (measured in M0.3)<br>• thumbnails, timelapse, Curves, CPU blending and tolerances differ between backends | `engine/canvas/CanvasManager.ts:303-326`, `engine/canvas/CanvasManager.ts:728-746`, `engine/brush/BrushEngine.ts:163-175`, `io/formats/image/ImageExporter.ts:25-27` | M0.5, M1.8, M2.2 |
 | F08 | H | AutoSave has race conditions:<br>• writes to the wrong project after a switch<br>• drops saves requested during a save<br>• swallows storage-full errors<br>• leaves orphaned tiles<br>• loses the pending save when a project closes | `io/persistence/AutoSave.ts:74-116` | M1.3 |
 | F09 | H | PSD export:<br>• passes opacity as 0–255, which ag-psd clamps to 1<br>• writes a black composite<br>• drops clipping, locks and DPI<br>• runs on the main thread | `io/formats/psd/PsdExporter.ts:23-41` | M1.7 |
 | F10 | M | The .qart reader accepts hostile input: infinite sizes, duplicate ids, and unbounded decompression (a 33 KB file inflated to 800 MiB) | `io/formats/qart/manifest.ts:47-76`, `io/formats/qart/QartReader.ts:43-50` | M1.6 |
@@ -872,7 +884,7 @@ All findings from the 2026-11-16 code review. Paths are relative to `src/`. Seve
 | F13 | M | Image import has no size check, so a huge PNG crashes the tab and loses unsaved work | `io/importImage.ts:16-29`, `engine/canvas/CanvasManager.ts:389-399` | M1.11 |
 | F14 | L | Smaller persistence gaps:<br>• no persistent-storage request and no quota handling<br>• custom brush presets are never saved<br>• PNG and JPEG carry no DPI<br>• dropping a non-image file makes the browser navigate away | `db/schema.ts:76-111`, `App.tsx:375-377` | M1.3, M1.5, M1.8, M1.9 |
 | F15 | C | 13 of the 26 blend modes render as Normal:<br>• `pixi.js/advanced-blend-modes` is never imported<br>• PixiJS has no Hue mode<br>• Linear Burn is missing<br>• Dissolve behaves as Normal | `engine/layers/LayerCompositor.ts:21-54`, `engine/shaders/blend/cpuBlend.ts:191` | M0.5, M2.4 |
-| F16 | H | CPU blend modes turn black over transparent areas, because the formula is only valid over an opaque backdrop. GPU Multiply has the same problem | `engine/shaders/blend/cpuBlend.ts:247-250` | M2.4 |
+| F16 | H | The CPU blend modes (Vivid Light, Linear Light, Pin Light, Hard Mix, Subtract, Divide, Darker Color) are wrong over transparent and semi-transparent areas, often black, because the formula treats transparency as black. GPU Multiply has the same problem | `engine/shaders/blend/cpuBlend.ts:247-250` | M2.4 |
 | F17 | H | GPU blend modes on layers above a custom-mode layer are computed against transparency | `engine/layers/LayerCompositor.ts:204-260`, `engine/layers/LayerCompositor.ts:435-452` | M2.4 |
 | F18 | H | Painting below a custom-mode layer runs at about 1 fps, because every frame does full readbacks and a per-pixel JavaScript loop | `engine/layers/LayerCompositor.ts:188-240`, `engine/layers/LayerCompositor.ts:517-591` | M2.4 |
 | F19 | H | The compositor's fast path ignores the active layer's clipping mask and custom blend mode. Clipped layers with custom modes render as Normal on every path | `engine/layers/LayerCompositor.ts:159-288` | M2.4 |
@@ -916,7 +928,7 @@ All findings from the 2026-11-16 code review. Paths are relative to `src/`. Seve
 | F57 | H | No pen or touch handling:<br>• the first finger of a pinch leaves a dab<br>• lifting one finger keeps drawing<br>• no palm rejection<br>• no switch to the eraser when the pen is flipped | `engine/input/InputManager.ts:81-103` | M3.1, M3.2 |
 | F58 | M | A two-finger trackpad scroll zooms instead of panning | `engine/input/InputManager.ts:158-173` | M3.1 |
 | F59 | L | Space-to-pan gets stuck after Alt-Tab | `engine/input/InputManager.ts:175-189` | M3.1 |
-| F60 | H | React StrictMode, or unmounting during initialisation, leaks a GPU context and can leave the UI driving a destroyed engine | `engine/canvas/CanvasManager.ts:114-133`, `hooks/useEngine.ts` | M0.4 |
+| F60 | H | React StrictMode, or unmounting during initialisation, leaks a GPU context and can leave the UI driving a destroyed engine. Measured in M0.3: the discarded engine reports ready while the live one is still starting, so early input is lost | `engine/canvas/CanvasManager.ts:114-133`, `hooks/useEngine.ts` | M0.4 |
 | F61 | H | Errors aren't caught: the error boundary only wraps dialogs, and if the engine fails to start the loading spinner never ends | `App.tsx:696-766`, `hooks/useEngine.ts:37` | M0.4 |
 | F62 | L | The overlay canvas redraws every frame, even when nothing changes | `engine/canvas/CanvasManager.ts:1405-1416` | M0.6 |
 | F63 | H | At 768 px and narrower, both side panels are hidden with nothing in their place | `App.module.css:92-96` | M5.1 |
@@ -956,6 +968,8 @@ All findings from the 2026-11-16 code review. Paths are relative to `src/`. Seve
 | F97 | L | Magic wand, fill and eyedropper tolerances differ between WebGL and WebGPU | — | M2.2, M4.4 |
 | F98 | M | Layer ids restart at `layer_1` on every page load, so they will collide with ids in restored projects | `engine/layers/LayerManager.ts:7-10` | M0.6, M2.1 |
 | F99 | M | Panels don't auto-hide (PRD and design system); `useAutoHide` is never used | `hooks/useAutoHide.ts` | M5.1 |
+| F100 | M | Alpha lock makes semi-transparent pixels opaque: each batch of masked stamps is drawn source-over onto the layer, so alpha builds up as the stroke passes (found by the M0.3 harness) | `engine/brush/BrushEngine.ts:251-285` | M3.4 |
+| F101 | L | Strokes end up to one stamp spacing before the pen-up point, because stamps are only placed at spacing steps and no final stamp is added (found by the M0.3 harness) | `engine/brush/PathInterpolator.ts:66-75` | M3.3 |
 
 ## Appendix B — PRD traceability
 

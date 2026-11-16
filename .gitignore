@@ -31,3 +31,8 @@ sprint*.png
 
 # Playwright MCP
 .playwright-mcp/
+
+# Playwright output
+test-results/
+playwright-report/
+blob-report/

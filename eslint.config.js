@@ -35,6 +35,13 @@ export default defineConfig([
       '@typescript-eslint/no-explicit-any': 'off',
     },
   },
+  // Playwright code isn't React; its fixtures receive a callback named `use`.
+  {
+    files: ['e2e/**/*.ts', 'playwright.config.ts'],
+    rules: {
+      'react-hooks/rules-of-hooks': 'off',
+    },
+  },
   // Architecture boundary: engine cannot import React
   {
     files: ['src/engine/**/*.ts'],

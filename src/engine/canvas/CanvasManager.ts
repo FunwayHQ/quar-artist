@@ -16,7 +16,7 @@ import { SymmetryEngine } from '../guides/SymmetryEngine.ts'
 import { QuickShape, type DetectedShape } from '../tools/QuickShape.ts'
 import { TextTool } from '../tools/TextTool.ts'
 import { TimelapseRecorder } from '../timelapse/TimelapseRecorder.ts'
-import { createRenderer } from '../renderer.ts'
+import { createRenderer, type RendererOptions } from '../renderer.ts'
 import type { ViewState, PointerState, ToolType } from '../../types/engine.ts'
 import type { StrokePoint } from '../../types/brush.ts'
 import type { FilterParams } from '../../types/filter.ts'
@@ -112,7 +112,7 @@ export class CanvasManager {
    * The container should be a positioned element that holds both canvases.
    * docWidth/docHeight set the artwork resolution (layer & compositor textures).
    */
-  async init(container: HTMLElement, docWidth?: number, docHeight?: number): Promise<void> {
+  async init(container: HTMLElement, docWidth?: number, docHeight?: number, renderer: RendererOptions = {}): Promise<void> {
     this.container = container
 
     // Create static canvas (PixiJS)
@@ -128,7 +128,7 @@ export class CanvasManager {
     this.overlayCtx = this.overlayCanvas.getContext('2d', { desynchronized: true })
 
     // Initialize PixiJS renderer (async — check for destroy after await)
-    this.app = await createRenderer(this.staticCanvas)
+    this.app = await createRenderer(this.staticCanvas, renderer)
 
     // Guard: if destroy() was called while we were awaiting, bail out
     if (this.destroyed) return

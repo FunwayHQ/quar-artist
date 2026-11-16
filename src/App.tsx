@@ -26,6 +26,7 @@ const DrawingGuidesDialog = lazy(() => import('@components/dialogs/DrawingGuides
 const TimelapseExportDialog = lazy(() => import('@components/dialogs/TimelapseExportDialog.tsx').then(m => ({ default: m.TimelapseExportDialog })))
 const QuickMenuSettingsDialog = lazy(() => import('@components/dialogs/QuickMenuSettingsDialog.tsx').then(m => ({ default: m.QuickMenuSettingsDialog })))
 import { useEngine } from '@hooks/useEngine.ts'
+import { getBackend } from '@engine/renderer.ts'
 import { useKeyboardShortcuts } from '@hooks/useKeyboardShortcuts.ts'
 import { useBrushStore } from '@stores/brushStore.ts'
 import { useColorStore } from '@stores/colorStore.ts'
@@ -631,7 +632,7 @@ export default function App() {
 
         {/* Center: Canvas */}
         <div onContextMenu={handleCanvasContextMenu} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          <CanvasViewport ref={containerRef} />
+          <CanvasViewport ref={containerRef} engineReady={ready} renderer={(ready && getBackend()) || undefined} />
         </div>
 
         {showPanels && rightPanelOpen && (

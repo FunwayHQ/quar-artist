@@ -1,10 +1,10 @@
 import { test, expect } from '@playwright/test'
+import { waitForEngine } from './support/app.ts'
 
 test.describe('Sprint 15 — Timelapse, Text Tool, QuickMenu', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
-    // Wait for canvas to be ready
-    await page.waitForSelector('[data-testid="canvas-container"]', { timeout: 10000 })
+    await waitForEngine(page)
   })
 
   test('Text tool: click toolbar → click canvas → textarea appears → type → Enter → textarea gone', async ({ page }) => {

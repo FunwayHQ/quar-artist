@@ -14,7 +14,9 @@
     "verify": "npm run typecheck && npm run lint && npm test && vite build",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "e2e": "playwright test",
-    "e2e:chromium": "playwright test --project=chromium"
+    "e2e:chromium": "playwright test --project=chromium",
+    "e2e:gpu": "playwright test e2e/gpu",
+    "e2e:webgpu": "QUAR_WEBGPU=1 playwright test --project=chromium-webgpu"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
