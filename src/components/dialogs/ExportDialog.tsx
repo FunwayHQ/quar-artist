@@ -14,8 +14,8 @@ interface ExportDialogProps {
 
 type ExportFormat = ExportOptions['format']
 
-/** Formats the app can't write yet: PSD export comes with plan M1.7, .qart with M1.5 and M1.6. */
-const NOT_YET: Partial<Record<ExportFormat, string>> = { psd: 'PSD', qart: '.qart' }
+/** Formats the app can't write yet: PSD export comes with plan M1.7. */
+const NOT_YET: Partial<Record<ExportFormat, string>> = { psd: 'PSD' }
 
 const JPEG_PRESETS = [
   { label: 'Low', value: 0.3 },
@@ -82,6 +82,12 @@ export function ExportDialog({
         {notYet && (
           <p className={styles.notYet} role="note">
             {notYet} export isn't available yet. PNG keeps the picture with its transparency, as one layer.
+          </p>
+        )}
+
+        {format === 'qart' && (
+          <p className={styles.notYet} role="note">
+            A .qart file keeps every layer, to open again in QUAR Artist, in this browser or another.
           </p>
         )}
 

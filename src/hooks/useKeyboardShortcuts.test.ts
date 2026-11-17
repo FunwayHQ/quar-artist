@@ -138,5 +138,76 @@ describe('useKeyboardShortcuts', () => {
     expect(onSave).toHaveBeenCalledTimes(2)
     expect(event.defaultPrevented).toBe(true)
   })
+
+  it('saves as a .qart file on Ctrl+Shift+S, and opens a file on Ctrl+O, instead of the browser (plan M1.5)', () => {
+    const onSave = vi.fn()
+    const onSaveAs = vi.fn()
+    const onOpen = vi.fn()
+    renderHook(() => useKeyboardShortcuts({ manager: null, undo, redo, onOpenFilter, onSave, onSaveAs, onOpen }))
+
+    const saveAs = new KeyboardEvent('keydown', { key: 'S', ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true })
+    document.dispatchEvent(saveAs)
+    const open = new KeyboardEvent('keydown', { key: 'o', ctrlKey: true, bubbles: true, cancelable: true })
+    document.dispatchEvent(open)
+    fireKey('o', { metaKey: true })
+
+    expect(onSaveAs).toHaveBeenCalledOnce()
+    expect(onSave).not.toHaveBeenCalled()
+    expect(onOpen).toHaveBeenCalledTimes(2)
+    expect(saveAs.defaultPrevented).toBe(true)
+    expect(open.defaultPrevented).toBe(true)
+  })
+
+  it('does not open files while a document opens (plan M1.4)', () => {
+    const onOpen = vi.fn()
+    renderHook(() => useKeyboardShortcuts({ manager: null, undo, redo, onOpenFilter, onOpen }))
+    useProjectStore.setState({ openProgress: 0.5 })
+    try {
+      fireKey('o', { ctrlKey: true })
+      expect(onOpen).not.toHaveBeenCalled()
+    } finally {
+      useProjectStore.setState({ openProgress: null })
+    }
+  })
+
+  it("keeps the browser's Save Page, Open File and screenshots from running while a document opens (plan M1.5)", () => {
+    const onSave = vi.fn()
+    const onSaveAs = vi.fn()
+    const onOpen = vi.fn()
+    renderHook(() => useKeyboardShortcuts({ manager: null, undo, redo, onOpenFilter, onSave, onSaveAs, onOpen }))
+    useProjectStore.setState({ openProgress: 0.5 })
+    try {
+      const key = (k: string, shiftKey = false) => {
+        const event = new KeyboardEvent('keydown', { key: k, ctrlKey: true, shiftKey, bubbles: true, cancelable: true })
+        document.dispatchEvent(event)
+        return event.defaultPrevented
+      }
+      // Firefox takes Ctrl+Shift+S for its screenshots.
+      expect({ save: key('s'), saveAs: key('S', true), open: key('o') }).toEqual({ save: true, saveAs: true, open: true })
+      expect(onSave).not.toHaveBeenCalled()
+      expect(onSaveAs).not.toHaveBeenCalled()
+      expect(onOpen).not.toHaveBeenCalled()
+    } finally {
+      useProjectStore.setState({ openProgress: null })
+    }
+  })
+
+  it('saves, saves as and opens once for a held key, which would read the whole document for every repeat (plan M1.5)', () => {
+    const onSave = vi.fn()
+    const onSaveAs = vi.fn()
+    const onOpen = vi.fn()
+    renderHook(() => useKeyboardShortcuts({ manager: null, undo, redo, onOpenFilter, onSave, onSaveAs, onOpen }))
+    for (const repeat of [false, true, true]) {
+      fireKey('s', { ctrlKey: true, repeat })
+      fireKey('S', { ctrlKey: true, shiftKey: true, repeat })
+      fireKey('o', { ctrlKey: true, repeat })
+    }
+    expect([onSave, onSaveAs, onOpen].map((f) => f.mock.calls.length)).toEqual([1, 1, 1])
+
+    // Other shortcuts still repeat: a held ] keeps growing the brush, from 12 by 5 a press.
+    fireKey(']')
+    fireKey(']', { repeat: true })
+    expect(useBrushStore.getState().size).toBe(22)
+  })
 })
 

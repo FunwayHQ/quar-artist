@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import 'fake-indexeddb/auto'
 import { deleteDB, openDB } from 'idb'
-import { ProjectService, DEFAULT_PROJECT, DELETE_UNDO_MS, PURGE_GRACE_MS, baseName, importKind } from './ProjectService.ts'
+import { ProjectService, DEFAULT_PROJECT, DELETE_UNDO_MS, PURGE_GRACE_MS, baseName, importKind, sortDroppedFiles } from './ProjectService.ts'
 import { MetadataDB } from './MetadataDB.ts'
 import { DB_NAME, DB_VERSION, getDB, resetDB, type ProjectRecord } from '../../db/schema.ts'
 import { IdbTileBackend } from '../tiles/IdbTileBackend.ts'
@@ -11,11 +11,37 @@ import { useProjectStore } from '../../stores/projectStore.ts'
 import { useUIStore } from '../../stores/uiStore.ts'
 import { decodeImageBlob } from '../importImage.ts'
 import { writeQart } from '../formats/qart/QartWriter.ts'
+import { readQart } from '../formats/qart/QartReader.ts'
+import * as fileAccess from '../files/fileAccess.ts'
+import type { FileHandle } from '../files/fileAccess.ts'
 import { FakeDocumentEngine, layerInfo } from '../../test/fakeDocumentEngine.ts'
 import { sameBytes } from '../../test/bytes.ts'
 import { defaultGuides, documentGuides, useGuideStore } from '../../stores/guideStore.ts'
 
 vi.mock('../importImage.ts', () => ({ decodeImageBlob: vi.fn() }))
+// Files on disk: the tests pick them, and see what is written to them.
+vi.mock('../files/fileAccess.ts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../files/fileAccess.ts')>()),
+  canPickSaveFile: vi.fn(),
+  pickSaveFile: vi.fn(),
+  pickOpenFile: vi.fn(),
+  mayWrite: vi.fn(),
+  writeFile: vi.fn(),
+  lastModified: vi.fn(),
+  sameFile: vi.fn(),
+  downloadFile: vi.fn(),
+}))
+const files = vi.mocked(fileAccess)
+/** Files on disk as the tests stand them in: each one's last-modified time, which every write moves on. */
+const disk = new Map<string, number>()
+function diskKey(handle: unknown): string {
+  const { id, name } = handle as { id?: string; name: string }
+  return id ?? name
+}
+/** Another program writes a file. */
+function writtenElsewhere(handle: unknown) {
+  disk.set(diskKey(handle), (disk.get(diskKey(handle)) ?? 1) + 1000)
+}
 // jsdom has no 2D canvas to draw thumbnails with.
 vi.mock('./thumbnail.ts', () => ({
   encodeLayersThumbnail: vi.fn(async () => ({ type: 'image/webp', data: new Uint8Array([1, 2, 3]).buffer })),
@@ -43,6 +69,17 @@ describe('ProjectService', () => {
     useProjectStore.setState(initialProjectState, true)
     useUIStore.setState({ toasts: [] })
     vi.mocked(decodeImageBlob).mockReset()
+    files.canPickSaveFile.mockReset().mockReturnValue(false)
+    files.pickSaveFile.mockReset()
+    files.pickOpenFile.mockReset()
+    files.mayWrite.mockReset().mockResolvedValue(true)
+    disk.clear()
+    files.writeFile.mockReset().mockImplementation(async (handle) => {
+      disk.set(diskKey(handle), (disk.get(diskKey(handle)) ?? 1) + 1)
+    })
+    files.lastModified.mockReset().mockImplementation(async (handle) => disk.get(diskKey(handle)) ?? 1)
+    files.sameFile.mockReset().mockImplementation(async (a, b) => (a as { id?: string }).id === (b as { id?: string }).id)
+    files.downloadFile.mockReset()
     db = new MetadataDB()
     const idb = new IdbTileBackend()
     tiles = new TileStore({ write: idb, read: { idb } })
@@ -699,17 +736,21 @@ describe('ProjectService', () => {
       await vi.waitFor(() => expect(store().saveStatus).toBe('error'))
       const [full] = useUIStore.getState().toasts
       expect(full.message).toBe(
-        "The browser's storage is full: “Painting” isn't being saved. Export it to keep a copy, and make room by deleting projects you don't need from the Gallery in another tab.",
+        "The browser's storage is full: “Painting” isn't being saved. Save it as a .qart file to keep a copy, and make room by deleting projects you don't need from the Gallery in another tab.",
       )
-      expect(full.action?.label).toBe('Export…')
+      // A .qart file keeps every layer (plan M1.5): here a download, which needs no storage.
+      expect(full.action?.label).toBe('Save as .qart…')
       full.action!.run()
-      expect(useUIStore.getState().showExportDialog).toBe(true)
+      await vi.waitFor(() => expect(files.downloadFile).toHaveBeenCalledOnce())
+      const [[blob, name]] = files.downloadFile.mock.calls
+      expect(name).toBe('Painting.qart')
+      expect((await readQart(blob)).layers.map((l) => l.pixels[0])).toEqual([5, 2])
 
       // It can't close either: it stays open, with the same way out.
       expect(await service.goToGallery()).toBe(false)
       const stuck = useUIStore.getState().toasts.at(-1)!
       expect(stuck.message).toContain("“Painting” can't be saved, so it stays open")
-      expect(stuck.action?.label).toBe('Export…')
+      expect(stuck.action?.label).toBe('Save as .qart…')
     })
 
     it('removes saved documents whose project is gone at start-up, and keeps every other', async () => {
@@ -1317,6 +1358,601 @@ describe('ProjectService', () => {
     })
   })
 
+  describe('files on disk (plan M1.5)', () => {
+    /** A file's handle, as tests stand it in: a record, which storage can keep. `id` tells files apart. */
+    function fileHandle(name: string, id = name): FileHandle {
+      return { kind: 'file', name, id } as unknown as FileHandle
+    }
+
+    /** A .qart file of a 2 × 2, 300 dpi document: a Sky layer under an active Ink layer. */
+    async function qartFile(name: string) {
+      const blob = await writeQart({
+        name: 'ignored',
+        width: 2,
+        height: 2,
+        dpi: 300,
+        activeLayerId: 'l2',
+        layers: [
+          { info: layerInfo('l1', 'Sky'), order: 0, pixels: filled(10) },
+          { info: layerInfo('l2', 'Ink'), order: 1, pixels: filled(20) },
+        ],
+      })
+      // As the fake disk has it: last modified at 1.
+      return new File([blob], name, { lastModified: 1 })
+    }
+
+    /** A write to a file (the last by default): the handle, and each layer's name and first grey, as the file has them. */
+    async function written(call = -1) {
+      const [handle, blob] = files.writeFile.mock.calls.at(call)!
+      const { manifest, layers } = await readQart(blob)
+      const active = layers.find((l) => l.manifest.id === manifest.activeLayerId)?.manifest.name
+      return { handle, layers: layers.map((l) => [l.manifest.name, l.pixels[0]]), active }
+    }
+
+    /** Start without storage, as a browser that blocks it does, with an engine on the canvas. */
+    async function startUnsaved() {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      const broken = new MetadataDB()
+      vi.spyOn(broken, 'getAllProjects').mockRejectedValue(new DOMException('denied', 'SecurityError'))
+      service = new ProjectService(broken)
+      await service.start()
+      useUIStore.setState({ toasts: [] })
+      const engine = new FakeDocumentEngine()
+      service.attachEngine(engine)
+      return engine
+    }
+
+    /** Open a seeded project and save it as a .qart file picked as `handle`. */
+    async function savedAs(handle = fileHandle('Painting.qart')) {
+      const id = await seedProject('Painting')
+      await service.start()
+      const { engine } = await openAndAttach(id)
+      files.canPickSaveFile.mockReturnValue(true)
+      files.pickSaveFile.mockResolvedValue(handle)
+      expect(await service.saveAsFile()).toBe(true)
+      useUIStore.setState({ toasts: [] })
+      return { id, engine, handle }
+    }
+
+    it('saves as a .qart file picked to save to, with every layer as the canvas has it', async () => {
+      const id = await seedProject('Painting')
+      await service.start()
+      const { engine } = await openAndAttach(id)
+      engine.paint(9)
+      // Saved, thumbnail and all: Save as has nothing left to save in the browser.
+      expect(await service.saveNow()).toBe(true)
+      const modified = (await db.getProject(id))!.updatedAt.getTime()
+      useUIStore.setState({ toasts: [] })
+      files.canPickSaveFile.mockReturnValue(true)
+      const picked = fileHandle('Painting.qart')
+      files.pickSaveFile.mockResolvedValue(picked)
+
+      expect(await service.saveAsFile()).toBe(true)
+
+      expect(files.pickSaveFile).toHaveBeenCalledWith('Painting.qart')
+      expect(await written()).toEqual({ handle: picked, layers: [['Background', 9], ['Ink', 2]], active: 'Background' })
+      expect(toasts()).toEqual(['Saved “Painting” to “Painting.qart”'])
+      // Kept with the project, without changing its modified date, with the time the file has.
+      const record = (await db.getProject(id))!
+      expect(record.fileHandle).toEqual(picked)
+      expect(record.fileModified).toBe(disk.get('Painting.qart'))
+      expect(record.updatedAt.getTime()).toBe(modified)
+    })
+
+    it('writes the file again with Ctrl+S, besides saving in the browser', async () => {
+      const { id, engine, handle } = await savedAs()
+      engine.paint(10)
+
+      expect(await service.saveNow()).toBe(true)
+
+      expect(files.mayWrite).toHaveBeenCalledWith(handle)
+      expect(files.writeFile).toHaveBeenCalledTimes(2)
+      expect((await written()).layers).toEqual([['Background', 10], ['Ink', 2]])
+      expect(await firstByte(id, 'bg')).toBe(10)
+      expect(toasts()).toEqual(['Saved “Painting” to “Painting.qart”'])
+    })
+
+    it('writes the file a project was saved as when it opens again', async () => {
+      const { id, handle } = await savedAs()
+      expect(await service.goToGallery()).toBe(true)
+      const { engine } = await openAndAttach(id)
+      engine.paint(11)
+
+      expect(await service.saveNow()).toBe(true)
+
+      expect(await written()).toMatchObject({ handle, layers: [['Background', 11], ['Ink', 2]] })
+    })
+
+    it('writes the document as it was at the key press, while the browser asks whether it may', async () => {
+      const { engine } = await savedAs()
+      engine.paint(20)
+      let allow: (ok: boolean) => void = () => {}
+      files.mayWrite.mockReturnValue(new Promise((resolve) => (allow = resolve)))
+
+      const saving = service.saveNow()
+      engine.paint(21)
+      allow(true)
+
+      expect(await saving).toBe(true)
+      expect((await written()).layers[0]).toEqual(['Background', 20])
+    })
+
+    it('writes nothing when the picker is closed without a file', async () => {
+      const id = await seedProject('Painting')
+      await service.start()
+      await openAndAttach(id)
+      files.canPickSaveFile.mockReturnValue(true)
+      files.pickSaveFile.mockResolvedValue(null)
+
+      expect(await service.saveAsFile()).toBe(false)
+
+      expect(files.writeFile).not.toHaveBeenCalled()
+      expect(toasts()).toEqual([])
+      expect((await db.getProject(id))!.fileHandle).toBeUndefined()
+    })
+
+    it('says why it could not save to the file picked, and keeps no file', async () => {
+      const id = await seedProject('Painting')
+      await service.start()
+      await openAndAttach(id)
+      files.canPickSaveFile.mockReturnValue(true)
+      files.pickSaveFile.mockResolvedValue(fileHandle('Painting.qart'))
+      files.writeFile.mockRejectedValue(new DOMException('no room', 'QuotaExceededError'))
+
+      expect(await service.saveAsFile()).toBe(false)
+
+      expect(toasts()).toEqual(["Couldn't save “Painting” to “Painting.qart”: the disk is full"])
+      expect((await db.getProject(id))!.fileHandle).toBeUndefined()
+    })
+
+    it('downloads the .qart file where a file cannot be picked to save to, and Ctrl+S then saves in the browser only', async () => {
+      const id = await seedProject('Painting')
+      await service.start()
+      const { engine } = await openAndAttach(id)
+      engine.paint(9)
+
+      expect(await service.saveAsFile()).toBe(true)
+
+      const [[blob, name]] = files.downloadFile.mock.calls
+      expect(name).toBe('Painting.qart')
+      expect((await readQart(blob)).layers.map((l) => l.pixels[0])).toEqual([9, 2])
+      expect(toasts()).toEqual(['Downloaded “Painting.qart”'])
+      expect(await service.saveNow()).toBe(true)
+      expect(files.writeFile).not.toHaveBeenCalled()
+      expect(toasts().at(-1)).toBe('Saved “Painting”')
+    })
+
+    it('saves in the browser, and says so, when the file may not be written; the next Ctrl+S asks again', async () => {
+      const { id, engine } = await savedAs()
+      engine.paint(30)
+      files.mayWrite.mockResolvedValue(false)
+
+      expect(await service.saveNow()).toBe(false)
+
+      expect(files.writeFile).toHaveBeenCalledTimes(1)
+      expect(await firstByte(id, 'bg')).toBe(30)
+      const toast = useUIStore.getState().toasts.at(-1)!
+      expect(toast.message).toBe("Saved “Painting” in the browser, but not to “Painting.qart”: the browser didn't allow writing to it")
+      expect(toast.action?.label).toBe('Save as .qart…')
+      files.mayWrite.mockResolvedValue(true)
+      expect(await service.saveNow()).toBe(true)
+      expect(files.writeFile).toHaveBeenCalledTimes(2)
+    })
+
+    it('forgets a file that was moved or deleted', async () => {
+      const { id } = await savedAs()
+      files.writeFile.mockRejectedValueOnce(new DOMException('gone', 'NotFoundError'))
+
+      expect(await service.saveNow()).toBe(false)
+
+      expect(toasts()).toEqual(['Saved “Painting” in the browser, but not to “Painting.qart”: it was moved or deleted'])
+      await vi.waitFor(async () => expect((await db.getProject(id))!.fileHandle).toBeUndefined())
+      expect(await service.saveNow()).toBe(true)
+      expect(files.writeFile).toHaveBeenCalledTimes(2)
+      expect(toasts().at(-1)).toBe('Saved “Painting”')
+    })
+
+    it('says when a layer cannot be read for the file, and saves in the browser all the same', async () => {
+      const { id, engine } = await savedAs()
+      engine.paint(31)
+      vi.spyOn(engine, 'getLayerPixels').mockReturnValueOnce(null)
+
+      expect(await service.saveNow()).toBe(false)
+
+      expect(await firstByte(id, 'bg')).toBe(31)
+      expect(toasts()).toEqual([
+        "Saved “Painting” in the browser, but not to “Painting.qart”: the layer “Background” can't be read right now. Try again in a moment",
+      ])
+    })
+
+    it('keeps a file with one project: another saved to it takes it over', async () => {
+      const a = await seedProject('A')
+      const b = await seedProject('B')
+      await service.start()
+      files.canPickSaveFile.mockReturnValue(true)
+      await openAndAttach(a)
+      files.pickSaveFile.mockResolvedValue(fileHandle('Shared.qart', 'shared'))
+      expect(await service.saveAsFile()).toBe(true)
+      await openAndAttach(b)
+      // The same file, picked again: another handle to it.
+      files.pickSaveFile.mockResolvedValue({ ...fileHandle('Shared.qart', 'shared'), again: true } as unknown as FileHandle)
+      expect(await service.saveAsFile()).toBe(true)
+
+      expect((await db.getProject(a))!.fileHandle).toBeUndefined()
+      expect((await db.getProject(b))!.fileHandle).toMatchObject({ id: 'shared', again: true })
+    })
+
+    it('does not copy the file with a duplicate: the copy is work of its own', async () => {
+      const { id } = await savedAs()
+      expect(await service.goToGallery()).toBe(true)
+
+      await service.duplicateProject(id)
+
+      const copy = (await db.getAllProjects()).find((p) => p.name === 'Painting copy')!
+      expect(copy.fileHandle).toBeUndefined()
+      expect((await db.getProject(id))!.fileHandle).toBeDefined()
+    })
+
+    it('opens a .qart file as a new project, once the open one is saved, and writes it with Ctrl+S', async () => {
+      const id = await seedProject('Painting')
+      await service.start()
+      const { engine } = await openAndAttach(id)
+      engine.paint(40)
+      const handle = fileHandle('Landscape.qart')
+      files.pickOpenFile.mockResolvedValue({ file: await qartFile('Landscape.qart'), handle })
+
+      expect(await service.openFile()).toBe(true)
+
+      expect(await firstByte(id, 'bg')).toBe(40)
+      expect(store()).toMatchObject({ view: 'canvas', currentProjectName: 'Landscape', canvasWidth: 2, canvasHeight: 2, dpi: 300 })
+      const project = (await db.getAllProjects()).find((p) => p.name === 'Landscape')!
+      expect(project.stackId).toBeUndefined()
+      expect(project.fileHandle).toEqual(handle)
+      const opened = new FakeDocumentEngine()
+      service.attachEngine(opened)
+      await service.settled()
+      expect(opened.loads[0].layers.map((l) => l.pixels?.[0])).toEqual([10, 20])
+      opened.paint(50)
+      expect(await service.saveNow()).toBe(true)
+      expect(await written()).toEqual({ handle, layers: [['Sky', 10], ['Ink', 50]], active: 'Ink' })
+    })
+
+    it('opens an image as a new project of its own, which Ctrl+S does not write to', async () => {
+      await seedProject('Painting')
+      await service.start()
+      vi.mocked(decodeImageBlob).mockResolvedValue({ pixels: new Uint8ClampedArray(16).fill(200), width: 2, height: 2 })
+      files.pickOpenFile.mockResolvedValue({ file: new File(['png'], 'cat.png', { type: 'image/png' }), handle: fileHandle('cat.png') })
+
+      expect(await service.openFile()).toBe(true)
+
+      expect(store().currentProjectName).toBe('cat')
+      expect((await db.getAllProjects()).find((p) => p.name === 'cat')!.fileHandle).toBeUndefined()
+      const engine = new FakeDocumentEngine()
+      service.attachEngine(engine)
+      await service.settled()
+      engine.paint(1)
+      expect(await service.saveNow()).toBe(true)
+      expect(files.writeFile).not.toHaveBeenCalled()
+    })
+
+    it('opens from the Gallery into the stack open there', async () => {
+      const existing = await seedProject('Painting')
+      await service.start()
+      const stack = await service.createStack('Studies', [existing])
+      service.openStack(stack)
+      files.pickOpenFile.mockResolvedValue({ file: await qartFile('Landscape.qart'), handle: null })
+
+      expect(await service.openFile()).toBe(true)
+
+      expect((await db.getAllProjects()).find((p) => p.name === 'Landscape')!.stackId).toBe(stack)
+    })
+
+    it('says why it cannot open a PSD file or another, leaves the open project open, and does nothing for a closed picker', async () => {
+      const id = await seedProject('Painting')
+      await service.start()
+      await openAndAttach(id)
+      const pick = (file: File) => files.pickOpenFile.mockResolvedValueOnce({ file, handle: null })
+      files.pickOpenFile.mockResolvedValueOnce(null)
+      pick(new File(['psd'], 'scan.psd'))
+      pick(new File(['text'], 'notes.txt', { type: 'text/plain' }))
+      pick(new File(['not a zip'], 'bad.qart'))
+
+      for (let i = 0; i < 4; i++) expect(await service.openFile()).toBe(false)
+
+      expect(toasts()).toEqual([
+        "“scan.psd”: PSD files can't be opened yet",
+        "“notes.txt” isn't a .qart file or an image",
+        expect.stringMatching(/^Couldn't open “bad\.qart”: /),
+      ])
+      expect(store()).toMatchObject({ view: 'canvas', currentProjectId: id })
+      expect((await db.getAllProjects()).map((p) => p.name)).toEqual(['Painting'])
+    })
+
+    it('says why the open picker failed', async () => {
+      files.pickOpenFile.mockRejectedValue(new DOMException('Must be handling a user gesture to show a file picker.', 'SecurityError'))
+      expect(await service.openFile()).toBe(false)
+      expect(toasts()).toEqual(["Couldn't open a file: Must be handling a user gesture to show a file picker."])
+    })
+
+    it('without storage, opens a file in the canvas’s place, and Ctrl+S writes the file', async () => {
+      await startUnsaved()
+      const handle = fileHandle('Landscape.qart')
+      files.pickOpenFile.mockResolvedValue({ file: await qartFile('Landscape.qart'), handle })
+      const before = store().sessionId
+
+      expect(await service.openFile()).toBe(true)
+
+      expect(store()).toMatchObject({ view: 'canvas', currentProjectId: null, currentProjectName: 'Landscape', canvasWidth: 2, dpi: 300 })
+      expect(store().sessionId).not.toBe(before)
+      // Until it is in, the canvas can't be used.
+      expect(store().openProgress).toBe(0)
+      const engine = new FakeDocumentEngine()
+      service.attachEngine(engine)
+      expect(engine.loads[0].layers.map((l) => l.pixels?.[0])).toEqual([10, 20])
+      expect(store().openProgress).toBeNull()
+
+      engine.paint(60)
+      expect(service.hasUnsavedChanges).toBe(true)
+      expect(await service.saveNow()).toBe(true)
+      expect(await written()).toEqual({ handle, layers: [['Sky', 10], ['Ink', 60]], active: 'Ink' })
+      expect(toasts().at(-1)).toBe('Saved “Landscape” to “Landscape.qart”')
+      // The file has its changes: the canvas can go without asking.
+      expect(service.hasUnsavedChanges).toBe(false)
+      expect(await service.capture()).toBe(true)
+    })
+
+    it('without storage, asks before a file replaces a canvas with changes', async () => {
+      const engine = await startUnsaved()
+      engine.paint(1)
+      files.pickOpenFile.mockResolvedValue({ file: await qartFile('Landscape.qart'), handle: null })
+      const session = store().sessionId
+
+      expect(await service.openFile()).toBe(false)
+
+      expect(store().sessionId).toBe(session)
+      const toast = useUIStore.getState().toasts.at(-1)!
+      expect(toast).toMatchObject({
+        message: "The open canvas can't be saved in this browser, so opening “Landscape.qart” loses it",
+        action: { label: 'Open anyway' },
+      })
+      toast.action!.run()
+      expect(store()).toMatchObject({ currentProjectName: 'Landscape' })
+      expect(store().sessionId).not.toBe(session)
+    })
+
+    it('without storage, offers on Ctrl+S to save a .qart file, which Ctrl+S writes from then on', async () => {
+      const engine = await startUnsaved()
+      engine.paint(1)
+
+      expect(await service.saveNow()).toBe(false)
+
+      const toast = useUIStore.getState().toasts.at(-1)!
+      expect(toast.message).toBe("“Untitled Project” can't be saved in this browser. Save it as a .qart file to keep it.")
+      expect(toast.action?.label).toBe('Save as .qart…')
+      files.canPickSaveFile.mockReturnValue(true)
+      files.pickSaveFile.mockResolvedValue(fileHandle('Untitled Project.qart'))
+      toast.action!.run()
+      await vi.waitFor(() => expect(files.writeFile).toHaveBeenCalledOnce())
+      await vi.waitFor(() => expect(service.hasUnsavedChanges).toBe(false))
+
+      engine.paint(2)
+      expect(service.hasUnsavedChanges).toBe(true)
+      expect(await service.saveNow()).toBe(true)
+      expect((await written()).layers).toEqual([['Layer 1', 2]])
+      expect(service.hasUnsavedChanges).toBe(false)
+    })
+
+    it('without storage, never writes a restarted, empty canvas over the file it was saved to', async () => {
+      const engine = await startUnsaved()
+      engine.paint(1)
+      files.canPickSaveFile.mockReturnValue(true)
+      files.pickSaveFile.mockResolvedValue(fileHandle('Untitled Project.qart'))
+      expect(await service.saveAsFile()).toBe(true)
+      // React StrictMode hands the same engine over again: nothing was lost.
+      service.attachEngine(engine)
+      expect(await service.saveNow()).toBe(true)
+      expect(files.writeFile).toHaveBeenCalledTimes(2)
+
+      // A lost GPU context: the canvas comes back with a new, empty engine.
+      service.attachEngine(new FakeDocumentEngine())
+
+      expect(toasts().at(-1)).toBe(
+        'The canvas restarted and lost what it showed. “Untitled Project.qart” still has it as last saved: open it again with File › Open…',
+      )
+      expect(await service.saveNow()).toBe(false)
+      expect(files.writeFile).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not write a project that opened with tiles it could not read over its file, which may still have them', async () => {
+      const { id, handle } = await savedAs()
+      expect(await written()).toMatchObject({ handle, layers: [['Background', 1], ['Ink', 2]] })
+      expect(await service.goToGallery()).toBe(true)
+      // One of the project's saved tiles is lost from browser storage.
+      const [record] = await (await getDB()).getAll('tileData')
+      await (await getDB()).delete('tileData', [record.projectId, record.layerId, record.key])
+
+      await openAndAttach(id)
+
+      expect(toasts().at(-1)).toBe(
+        "Part of “Painting” couldn't be read and shows as transparent (1 tile of 256 × 256 px). “Painting.qart” may still have it, so Ctrl+S no longer writes to it: open it with File › Open…",
+      )
+      expect(await service.saveNow()).toBe(true)
+      expect(files.writeFile).toHaveBeenCalledOnce()
+      await vi.waitFor(async () => expect((await db.getProject(id))!.fileHandle).toBeUndefined())
+    })
+
+    it('after a reload, does not write the older browser copy over the file Ctrl+S wrote while storage was full', async () => {
+      const { id, engine, handle } = await savedAs()
+      let full = true
+      const save = tiles.save.bind(tiles)
+      vi.spyOn(tiles, 'save').mockImplementation(async (...args) => {
+        if (full) throw new DOMException('no room', 'QuotaExceededError')
+        return save(...args)
+      })
+      // Storage is full: Ctrl+S can't save in the browser, but writes the file.
+      engine.paint(77)
+      expect(await service.saveNow()).toBe(false)
+      expect(toasts()).toContain('Saved “Painting” to “Painting.qart”')
+      expect((await written()).layers).toEqual([['Background', 77], ['Ink', 2]])
+
+      // The project can't close, so the tab is closed: the file has the work. Later, with room again, it opens.
+      full = false
+      useProjectStore.setState(initialProjectState, true)
+      useUIStore.setState({ toasts: [] })
+      service = new ProjectService(db, { debounceMs: 10, store: tiles })
+      await service.start()
+      const { engine: reopened } = await openAndAttach(id)
+      reopened.paint(5)
+
+      expect(await service.saveNow()).toBe(false)
+
+      expect(files.writeFile).toHaveBeenCalledTimes(2)
+      expect(await written()).toMatchObject({ handle, layers: [['Background', 77], ['Ink', 2]] })
+      expect(toasts()).toEqual([
+        'Saved “Painting” in the browser, but not to “Painting.qart”: it may have changed since “Painting” was last saved to it. Open it with File › Open… to keep what it has, or Save as .qart… to replace it',
+      ])
+      await vi.waitFor(async () => expect((await db.getProject(id))!.fileHandle).toBeUndefined())
+    })
+
+    it('leaves a file another program wrote since the project last saved to it, and writes one the project wrote', async () => {
+      const { id, engine, handle } = await savedAs()
+      engine.paint(3)
+      expect(await service.saveNow()).toBe(true)
+      expect(await service.goToGallery()).toBe(true)
+      // Reopened, the project still writes its file: the browser copy has what the file has.
+      const { engine: reopened } = await openAndAttach(id)
+      reopened.paint(4)
+      expect(await service.saveNow()).toBe(true)
+      expect(files.writeFile).toHaveBeenCalledTimes(3)
+
+      writtenElsewhere(handle)
+      reopened.paint(5)
+
+      expect(await service.saveNow()).toBe(false)
+      expect(files.writeFile).toHaveBeenCalledTimes(3)
+      expect(toasts().at(-1)).toMatch(/^Saved “Painting” in the browser, but not to “Painting.qart”: it may have changed since/)
+      // Let go of: the next Ctrl+S saves in the browser only, and says so.
+      expect(await service.saveNow()).toBe(true)
+      expect(toasts().at(-1)).toBe('Saved “Painting”')
+    })
+
+    it('keeps the file Save as picked with the project when it closes while the file is being written', async () => {
+      const id = await seedProject('Painting')
+      await service.start()
+      await openAndAttach(id)
+      files.canPickSaveFile.mockReturnValue(true)
+      const handle = fileHandle('Painting.qart')
+      files.pickSaveFile.mockResolvedValue(handle)
+      let finish!: () => void
+      files.writeFile.mockImplementationOnce(() => new Promise<void>((resolve) => (finish = resolve)))
+
+      const saving = service.saveAsFile()
+      await vi.waitFor(() => expect(files.writeFile).toHaveBeenCalledOnce())
+      // A large file takes a while to write; meanwhile the user goes back to the Gallery.
+      expect(await service.goToGallery()).toBe(true)
+      finish()
+
+      expect(await saving).toBe(true)
+      expect(toasts().at(-1)).toBe('Saved “Painting” to “Painting.qart”')
+      expect((await db.getProject(id))!.fileHandle).toEqual(handle)
+      // Ctrl+S writes it when the project opens again.
+      const { engine } = await openAndAttach(id)
+      engine.paint(6)
+      expect(await service.saveNow()).toBe(true)
+      expect(await written()).toMatchObject({ handle, layers: [['Background', 6], ['Ink', 2]] })
+    })
+
+    it('stops writing a file with Ctrl+S once another tab linked it to another project', async () => {
+      const a = await seedProject('A')
+      const b = await seedProject('B')
+      await service.start()
+      const { engine } = await openAndAttach(a)
+      files.canPickSaveFile.mockReturnValue(true)
+      const shared = fileHandle('Shared.qart', 'shared')
+      files.pickSaveFile.mockResolvedValue(shared)
+      expect(await service.saveAsFile()).toBe(true)
+      // Another tab opens the file as B: what its File › Open… writes.
+      await db.updateProject(a, { fileHandle: undefined, fileModified: undefined }, { touch: false })
+      await db.updateProject(b, { fileHandle: { ...shared } as FileHandle, fileModified: disk.get('shared') }, { touch: false })
+      engine.paint(9)
+
+      expect(await service.saveNow()).toBe(false)
+
+      expect(files.writeFile).toHaveBeenCalledOnce()
+      expect(toasts().at(-1)).toBe(
+        'Saved “A” in the browser, but not to “Shared.qart”: it belongs to another project now. Save as .qart… to write to it anyway',
+      )
+      expect((await db.getProject(b))!.fileHandle).toMatchObject({ id: 'shared' })
+    })
+
+    it('writes the latest of the Ctrl+S presses made while the file is being written, once, rather than each', async () => {
+      const { engine } = await savedAs()
+      let finish!: () => void
+      files.writeFile.mockImplementationOnce(() => new Promise<void>((resolve) => (finish = resolve)))
+      const saves = [service.saveNow()]
+      await vi.waitFor(() => expect(files.writeFile).toHaveBeenCalledTimes(2))
+      // Pressed again and again while a large file writes.
+      for (let i = 0; i < 9; i++) {
+        engine.paint(10 + i)
+        saves.push(service.saveNow())
+      }
+      finish()
+
+      expect(await Promise.all(saves)).toEqual(Array(10).fill(true))
+      expect(files.writeFile).toHaveBeenCalledTimes(3)
+      expect((await written()).layers).toEqual([['Background', 18], ['Ink', 2]])
+    })
+
+    it('without storage, does not write the empty canvas over a file that could not be put into it', async () => {
+      await startUnsaved()
+      const handle = fileHandle('Landscape.qart')
+      files.pickOpenFile.mockResolvedValue({ file: await qartFile('Landscape.qart'), handle })
+      expect(await service.openFile()).toBe(true)
+      // The canvas made for it can't take the document (a GPU allocation failing, say).
+      const opened = new FakeDocumentEngine()
+      vi.spyOn(opened, 'loadDocument').mockImplementation(() => {
+        throw new Error('out of memory')
+      })
+
+      service.attachEngine(opened)
+
+      expect(toasts().at(-1)).toBe("Couldn't open “Landscape”: out of memory")
+      expect(store().openProgress).toBeNull()
+      opened.paint(5)
+      expect(await service.saveNow()).toBe(false)
+      expect(files.writeFile).not.toHaveBeenCalled()
+    })
+
+    it('without storage, still asks before leaving after a restart, when a write that was running finishes', async () => {
+      const engine = await startUnsaved()
+      files.canPickSaveFile.mockReturnValue(true)
+      files.pickSaveFile.mockResolvedValue(fileHandle('Untitled Project.qart'))
+      expect(await service.saveAsFile()).toBe(true)
+      for (let i = 1; i <= 3; i++) engine.paint(i)
+      let finish!: () => void
+      files.writeFile.mockImplementationOnce(() => new Promise<void>((resolve) => (finish = resolve)))
+      const saving = service.saveNow()
+      await vi.waitFor(() => expect(files.writeFile).toHaveBeenCalledTimes(2))
+
+      // Meanwhile the canvas restarts, empty: the counts start again.
+      const restarted = new FakeDocumentEngine()
+      service.attachEngine(restarted)
+      finish()
+      expect(await saving).toBe(true)
+      for (let i = 1; i <= 3; i++) restarted.paint(i)
+
+      expect(service.hasUnsavedChanges).toBe(true)
+    })
+
+    it('without storage, still asks before leaving a canvas only downloaded: the download may not have been kept', async () => {
+      const engine = await startUnsaved()
+      engine.paint(1)
+      expect(await service.saveAsFile()).toBe(true)
+      expect(files.downloadFile).toHaveBeenCalledOnce()
+      expect(service.hasUnsavedChanges).toBe(true)
+    })
+  })
+
   it('tells the user when a newer version in another tab takes over storage', async () => {
     await service.start()
     const newer = await openDB(DB_NAME, DB_VERSION + 1)
@@ -1332,6 +1968,26 @@ describe('import helpers', () => {
     expect(importKind({ name: 'c', type: 'image/png' })).toBe('image')
     expect(importKind({ name: 'd.jpeg', type: '' })).toBe('image')
     expect(importKind({ name: 'e.txt', type: 'text/plain' })).toBe('other')
+  })
+
+  it('sorts dropped files: images become layers, the first .qart file opens, and the rest are refused (plan M1.5)', () => {
+    const cat = new File(['png'], 'cat.png', { type: 'image/png' })
+    const dog = new File(['jpg'], 'dog.jpg')
+    const first = new File(['zip'], 'First.qart')
+    const second = new File(['zip'], 'Second.qart')
+    const scan = new File(['psd'], 'scan.psd')
+    const notes = new File(['text'], 'notes.txt', { type: 'text/plain' })
+
+    expect(sortDroppedFiles([notes, cat, first, scan, second, dog])).toEqual({
+      images: [cat, dog],
+      project: first,
+      refused: [
+        "“notes.txt” isn't a .qart file or an image",
+        "“scan.psd”: PSD files can't be opened yet",
+        "“Second.qart” wasn't opened: one project opens at a time",
+      ],
+    })
+    expect(sortDroppedFiles([])).toEqual({ images: [], project: null, refused: [] })
   })
 
   it('names a project after its file', () => {

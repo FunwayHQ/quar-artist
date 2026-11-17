@@ -78,19 +78,25 @@ describe('ExportDialog', () => {
     expect(screen.getByText('3')).toBeInTheDocument()
   })
 
-  it.each([
-    ['PSD', 'PSD'],
-    ['QART', '.qart'],
-  ])("says %s export isn't available yet, and doesn't offer it", async (tab, name) => {
+  it("says PSD export isn't available yet, and doesn't offer it", async () => {
     const user = userEvent.setup()
     render(<ExportDialog {...defaultProps} />)
     expect(screen.queryByRole('note')).toBeNull()
-    await user.click(screen.getByText(tab))
-    expect(screen.getByRole('note')).toHaveTextContent(`${name} export isn't available yet.`)
-    const exportButton = screen.getByRole('button', { name: `Export ${tab}` })
+    await user.click(screen.getByText('PSD'))
+    expect(screen.getByRole('note')).toHaveTextContent("PSD export isn't available yet.")
+    const exportButton = screen.getByRole('button', { name: 'Export PSD' })
     expect(exportButton).toBeDisabled()
     await user.click(exportButton)
     expect(defaultProps.onExport).not.toHaveBeenCalled()
+  })
+
+  it('exports a .qart file, which keeps every layer (plan M1.5)', async () => {
+    const user = userEvent.setup()
+    render(<ExportDialog {...defaultProps} />)
+    await user.click(screen.getByText('QART'))
+    expect(screen.getByRole('note')).toHaveTextContent('A .qart file keeps every layer')
+    await user.click(screen.getByRole('button', { name: 'Export QART' }))
+    expect(defaultProps.onExport).toHaveBeenCalledWith({ format: 'qart', jpegQuality: 0.85 })
   })
 
   it('calls onExport with PNG format', async () => {

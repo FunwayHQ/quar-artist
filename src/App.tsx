@@ -28,10 +28,12 @@ const TimelapseExportDialog = lazy(() => import('@components/dialogs/TimelapseEx
 const QuickMenuSettingsDialog = lazy(() => import('@components/dialogs/QuickMenuSettingsDialog.tsx').then(m => ({ default: m.QuickMenuSettingsDialog })))
 import { useEngine } from '@hooks/useEngine.ts'
 import { getBackend } from '@engine/renderer.ts'
-import { projectService } from './io/persistence/ProjectService.ts'
+import { projectService, sortDroppedFiles } from './io/persistence/ProjectService.ts'
+import type { CanvasManager } from '@engine/canvas/CanvasManager.ts'
 import type { GalleryActions } from '@components/gallery/GalleryView.tsx'
 import { useKeyboardShortcuts } from '@hooks/useKeyboardShortcuts.ts'
 import { useGlobalErrorToasts } from '@hooks/useGlobalErrorToasts.ts'
+import { useFileDrop } from '@hooks/useFileDrop.ts'
 import { useBrushStore } from '@stores/brushStore.ts'
 import { useColorStore } from '@stores/colorStore.ts'
 import { useToolStore } from '@stores/toolStore.ts'
@@ -45,7 +47,7 @@ import { useTextStore } from '@stores/textStore.ts'
 import { useQuickMenuStore } from '@stores/quickMenuStore.ts'
 import { useTransformStore } from '@stores/transformStore.ts'
 import { exportImage, downloadBlob } from './io/formats/image/ImageExporter.ts'
-import { getImageFromClipboard, getImageFromDrop, decodeImageBlob, pickImageFile } from './io/importImage.ts'
+import { getImageFromClipboard, decodeImageBlob, pickImageFile } from './io/importImage.ts'
 import { hsbToRgba, rgbaToHsb } from '@app-types/color.ts'
 import { isGoogleFontsConsented, isGoogleFontsDeclined, setGoogleFontsConsent, preloadGoogleFonts, GOOGLE_FONTS_POPULAR } from './utils/googleFonts.ts'
 import { WEB_SAFE_FONTS } from '@app-types/text.ts'
@@ -70,9 +72,23 @@ const GALLERY_ACTIONS: GalleryActions = {
   importFiles: (files) => void projectService.importFiles(files),
 }
 
+/** Add an image file to the canvas as a new layer, and say how it went. */
+async function addImageLayer(manager: CanvasManager, file: File) {
+  try {
+    const { pixels, width, height } = await decodeImageBlob(file)
+    const layerName = manager.importImageToNewLayer(pixels, width, height, file.name.replace(/\.[^.]+$/, ''))
+    if (layerName) {
+      useUIStore.getState().addToast(`Imported "${file.name}" (${width}×${height})`, 'success')
+    }
+  } catch (err) {
+    console.error('Import failed:', err)
+    useUIStore.getState().addToast(`Couldn't import \u201c${file.name}\u201d`, 'error')
+  }
+}
+
 export default function App() {
   const {
-    containerRef, container, manager, ready, error: engineError, undo, redo,
+    containerRef, manager, ready, error: engineError, undo, redo,
     commitTransform, cancelTransform,
     flipLayerHorizontal, flipLayerVertical,
     rotateLayer90CW, rotateLayer90CCW,
@@ -297,6 +313,12 @@ export default function App() {
 
   // Export handler
   const handleExport = useCallback(async (options: ExportOptions) => {
+    if (options.format === 'qart') {
+      // Within the click, which lets the browser show its picker (plan M1.5).
+      useUIStore.getState().setShowExportDialog(false)
+      void projectService.saveAsFile()
+      return
+    }
     if (!manager) return
     try {
       const result = manager.getCompositePixels()
@@ -324,9 +346,16 @@ export default function App() {
     void projectService.createProject(config)
   }, [])
 
-  // Ctrl+S and File › Save
+  // Ctrl+S and File › Save; Save as .qart… and Open… (plan M1.5). Each runs
+  // within the key press or click, which lets the browser show a picker.
   const handleSave = useCallback(() => {
     void projectService.saveNow()
+  }, [])
+  const handleSaveAs = useCallback(() => {
+    void projectService.saveAsFile()
+  }, [])
+  const handleOpen = useCallback(() => {
+    void projectService.openFile()
   }, [])
 
   // Canvas resize handler
@@ -360,55 +389,22 @@ export default function App() {
     return () => document.removeEventListener('paste', handlePaste)
   }, [manager])
 
-  // ── Image import: drag-and-drop ──
-  useEffect(() => {
-    if (!manager || !container) return
-
-    const handleDragOver = (e: DragEvent) => {
-      if (e.dataTransfer?.types.includes('Files')) {
-        e.preventDefault()
-        e.dataTransfer.dropEffect = 'copy'
-      }
-    }
-    const handleDrop = async (e: DragEvent) => {
-      if (useProjectStore.getState().openProgress !== null) return
-      const file = getImageFromDrop(e)
-      if (!file) return
-      e.preventDefault()
-      try {
-        const { pixels, width, height } = await decodeImageBlob(file)
-        const layerName = manager.importImageToNewLayer(pixels, width, height, file.name.replace(/\.[^.]+$/, ''))
-        if (layerName) {
-          useUIStore.getState().addToast(`Imported "${file.name}" (${width}×${height})`, 'success')
-        }
-      } catch (err) {
-        console.error('Drop import failed:', err)
-        useUIStore.getState().addToast('Failed to import dropped image', 'error')
-      }
-    }
-    container.addEventListener('dragover', handleDragOver)
-    container.addEventListener('drop', handleDrop)
-    return () => {
-      container.removeEventListener('dragover', handleDragOver)
-      container.removeEventListener('drop', handleDrop)
-    }
-  }, [manager, container])
+  // ── Files dropped on the canvas view (plan M1.5): images become layers, a .qart file opens ──
+  const handleDropFiles = useCallback((files: File[]) => {
+    if (!manager) return
+    const { images, project, refused } = sortDroppedFiles(files)
+    for (const message of refused) useUIStore.getState().addToast(message, 'error')
+    void (async () => {
+      for (const file of images) await addImageLayer(manager, file)
+      if (project) await projectService.openFromFile(project)
+    })()
+  }, [manager])
 
   // ── Image import: file picker (File > Import Image) ──
   const handleImportImage = useCallback(async () => {
     if (!manager) return
-    try {
-      const file = await pickImageFile()
-      if (!file) return
-      const { pixels, width, height } = await decodeImageBlob(file)
-      const layerName = manager.importImageToNewLayer(pixels, width, height, file.name.replace(/\.[^.]+$/, ''))
-      if (layerName) {
-        useUIStore.getState().addToast(`Imported "${file.name}" (${width}×${height})`, 'success')
-      }
-    } catch (err) {
-      console.error('Import failed:', err)
-      useUIStore.getState().addToast('Failed to import image', 'error')
-    }
+    const file = await pickImageFile()
+    if (file) await addImageLayer(manager, file)
   }, [manager])
 
   // ── Timelapse recording ──
@@ -586,7 +582,14 @@ export default function App() {
     onRotateCW: rotateLayer90CW,
     onRotateCCW: rotateLayer90CCW,
     onSave: handleSave,
+    onSaveAs: handleSaveAs,
+    onOpen: handleOpen,
   })
+
+  // Files dropped anywhere never open in the browser instead (plan M1.5). The
+  // canvas view takes them once its document is all in: dropped on a document
+  // still opening, they would be lost when its saved layers come in.
+  useFileDrop(appView === 'canvas' && ready && openProgress === null && !engineError ? handleDropFiles : null)
 
   // Canvas context menu
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null)
@@ -660,6 +663,8 @@ export default function App() {
             onUndo={undo}
             onRedo={redo}
             onSave={handleSave}
+            onSaveAs={handleSaveAs}
+            onOpen={handleOpen}
             onImportImage={handleImportImage}
             onStartRecording={handleStartRecording}
             onStopRecording={handleStopRecording}

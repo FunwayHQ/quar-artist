@@ -49,7 +49,9 @@ export const DEFAULT_SHORTCUTS: ShortcutDef[] = [
   // ── File ──
   { id: 'export',           label: 'Export',           category: 'file', keys: 'ctrl+e',       action: 'export' },
   { id: 'new-project',      label: 'New project',      category: 'file', keys: 'ctrl+n',       action: 'new-project' },
+  { id: 'open',             label: 'Open',             category: 'file', keys: 'ctrl+o',       action: 'open' },
   { id: 'save',             label: 'Save',             category: 'file', keys: 'ctrl+s',       action: 'save' },
+  { id: 'save-as',          label: 'Save as .qart',    category: 'file', keys: 'ctrl+shift+s', action: 'save-as' },
 
   // ── Filters ──
   { id: 'curves',           label: 'Curves',           category: 'filters', keys: 'ctrl+m',    action: 'open-filter:curves' },

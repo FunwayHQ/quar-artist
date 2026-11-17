@@ -44,6 +44,9 @@ export async function exportImage(
   })
 }
 
+/** How long a download's object URL is kept: Firefox and Safari read a large one after the click returns. */
+export const DOWNLOAD_URL_MS = 60_000
+
 /** Trigger a browser download of a Blob. */
 export function downloadBlob(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob)
@@ -53,5 +56,6 @@ export function downloadBlob(blob: Blob, filename: string): void {
   document.body.appendChild(a)
   a.click()
   document.body.removeChild(a)
-  URL.revokeObjectURL(url)
+  // Revoked at once, a large download can fail before the browser has read it.
+  setTimeout(() => URL.revokeObjectURL(url), DOWNLOAD_URL_MS)
 }

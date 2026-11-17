@@ -93,6 +93,9 @@ export class MetadataDB {
       const now = new Date()
       const copy: ProjectRecord = { ...original, id: createId(), name: newName, createdAt: now, updatedAt: now }
       delete copy.deletedAt
+      // The copy has its own work: Ctrl+S in it mustn't overwrite the original's file.
+      delete copy.fileHandle
+      delete copy.fileModified
       await tx.objectStore('projects').add(copy)
 
       for (const name of ['layers', 'tiles'] as const) {

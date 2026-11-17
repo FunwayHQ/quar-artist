@@ -64,8 +64,30 @@ describe('TitleBar', () => {
     const onSave = vi.fn()
     render(<TitleBar onSave={onSave} />)
     await user.click(screen.getByText('File'))
-    await user.click(screen.getByRole('menuitem', { name: /^Save/ }))
+    await user.click(screen.getByRole('menuitem', { name: /^Save\s?Ctrl\+S$/ }))
     expect(onSave).toHaveBeenCalledOnce()
+  })
+
+  it('saves as a .qart file from File › Save as .qart… (plan M1.5)', async () => {
+    const user = userEvent.setup()
+    const onSaveAs = vi.fn()
+    render(<TitleBar onSaveAs={onSaveAs} />)
+    await user.click(screen.getByText('File'))
+    const saveAs = screen.getByRole('menuitem', { name: /^Save as \.qart\.\.\./ })
+    expect(saveAs).toHaveTextContent('Ctrl+Shift+S')
+    await user.click(saveAs)
+    expect(onSaveAs).toHaveBeenCalledOnce()
+  })
+
+  it('opens a file from File › Open… (plan M1.5)', async () => {
+    const user = userEvent.setup()
+    const onOpen = vi.fn()
+    render(<TitleBar onOpen={onOpen} />)
+    await user.click(screen.getByText('File'))
+    const open = screen.getByRole('menuitem', { name: /^Open\.\.\./ })
+    expect(open).toHaveTextContent('Ctrl+O')
+    await user.click(open)
+    expect(onOpen).toHaveBeenCalledOnce()
   })
 
   it('renames the open project', async () => {

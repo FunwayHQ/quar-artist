@@ -3,12 +3,29 @@ import { useUIStore, type ToastOptions } from '../../stores/uiStore.ts'
 import { documentGuides, savedGuides, useGuideStore } from '../../stores/guideStore.ts'
 import { MetadataDB } from './MetadataDB.ts'
 import { DocumentSession, type DocumentEngine, type PlacedTile, type SavedBase } from './DocumentSession.ts'
-import { isStaleLoad, type DocumentOutline, type DocumentStore, type SaveLayer, type TileRequest } from '../tiles/TileStore.ts'
+import { isStaleLoad, type DocumentOutline, type DocumentStore, type TileRequest } from '../tiles/TileStore.ts'
 import { createDocumentStore } from '../tiles/WorkerDocumentStore.ts'
 import { TILE_SIZE, savedLayerInfo } from '../tiles/tileFormat.ts'
 import type { SaveStatus } from './AutoSave.ts'
 import { encodeLayersThumbnail } from './thumbnail.ts'
 import { readQart } from '../formats/qart/QartReader.ts'
+import { writeQart, type QartWriterInput } from '../formats/qart/QartWriter.ts'
+import {
+  QART_EXTENSION,
+  canPickSaveFile,
+  describeFileError,
+  downloadFile,
+  fileNameFor,
+  isFileGone,
+  lastModified,
+  mayWrite,
+  pickOpenFile,
+  pickSaveFile,
+  sameFile,
+  writeFile,
+  type FileHandle,
+  type PickedFile,
+} from '../files/fileAccess.ts'
 import { decodeImageBlob } from '../importImage.ts'
 import { canvasSizeProblem } from '../../utils/deviceLimits.ts'
 import { createId } from '../../utils/id.ts'
@@ -47,6 +64,32 @@ export function importKind(file: Pick<File, 'name' | 'type'>): 'qart' | 'psd' | 
     return 'image'
   }
   return 'other'
+}
+
+/** Why a file can't be opened or imported, or null when it can. */
+function refusal(file: Pick<File, 'name' | 'type'>): string | null {
+  const kind = importKind(file)
+  if (kind === 'psd') return `${q(file.name)}: PSD files can't be opened yet`
+  if (kind === 'other') return `${q(file.name)} isn't a .qart file or an image`
+  return null
+}
+
+/**
+ * Files dropped on the canvas, by what becomes of them (plan M1.5): images
+ * are added as layers, the first .qart file opens, and the rest are refused,
+ * each with the reason.
+ */
+export function sortDroppedFiles(files: readonly File[]): { images: File[]; project: File | null; refused: string[] } {
+  const images: File[] = []
+  let project: File | null = null
+  const refused: string[] = []
+  for (const file of files) {
+    const kind = importKind(file)
+    if (kind === 'image') images.push(file)
+    else if (kind === 'qart' && !project) project = file
+    else refused.push(refusal(file) ?? `${q(file.name)} wasn't opened: one project opens at a time`)
+  }
+  return { images, project, refused }
 }
 
 /** A file name without its extension, as a project name. */
@@ -103,10 +146,80 @@ interface LoadedDocument {
   outline: DocumentOutline | null
 }
 
+/** A document read from a .qart file or an image, to import or open (plan M1.5). */
+interface FileDocument {
+  config: NewProjectConfig
+  /** Bottom first, at the document's size. */
+  layers: StoredLayer[]
+  activeLayerId: string
+}
+
+/** A document opened from a file without storage, waiting for the canvas made for it. */
+interface UnsavedDocument {
+  sessionId: string
+  layers: StoredLayer[]
+  activeLayerId: string
+}
+
 /** A document waiting for its engine. */
 interface PendingDocument {
   sessionId: string
   doc: LoadedDocument
+}
+
+/**
+ * The file the open document writes to with Ctrl+S (plan M1.5): the one it
+ * was saved as or opened from, where the browser lets it be written again.
+ */
+interface FileLink {
+  handle: FileHandle
+  /** The project the file belongs to; null for the canvas that can't be saved in the browser. */
+  projectId: string | null
+  /**
+   * The file's last-modified time as the document last wrote it, or as it
+   * was when the document was made from it or opened. Null when that isn't
+   * known: the file may have work the document doesn't, and Ctrl+S leaves it.
+   */
+  modified: number | null
+  /** Whether the project's record has the link, so another tab or project taking the file shows there. */
+  kept: boolean
+}
+
+/** One write of the open document to a file, with its pixels as read from the canvas at a key press. */
+interface FileJob {
+  handle: FileHandle
+  /** The link Ctrl+S writes through, checked before writing; null for a file just picked to save to. */
+  link: FileLink | null
+  /** Let go of once written, or once a later Ctrl+S's pixels take their place. */
+  input: QartWriterInput | null
+  allowed: Promise<boolean>
+  sessionId: string | null
+  /** Without storage: how many changes the canvas had, and how many times it had restarted. */
+  edits: number
+  epoch: number
+}
+
+/** A write waiting for the one running. A later Ctrl+S's pixels take the place of an earlier one's. */
+interface QueuedWrite {
+  job: FileJob
+  waiting: { job: FileJob; resolve: (written: FileWritten) => void; reject: (err: unknown) => void }[]
+}
+
+/** A write that worked: the file's last-modified time after it, and whether the file has the caller's pixels or a later Ctrl+S's. */
+interface FileWritten {
+  modified: number | null
+  own: boolean
+}
+
+/** Why Ctrl+S left a file as it was: it may have work the document doesn't, or another project has it now. */
+class FileConflict extends Error {
+  readonly reason: 'changed' | 'taken'
+
+  constructor(reason: 'changed' | 'taken') {
+    super(reason === 'changed' ? 'the file changed since it was last saved to' : 'the file belongs to another project')
+    this.name = 'FileConflict'
+    this.reason = reason
+  }
 }
 
 /**
@@ -152,8 +265,24 @@ export class ProjectService {
   private queue: Promise<unknown> = Promise.resolve()
   /** True when the browser has no usable storage: documents open, but can't be saved. */
   private unsaved = false
-  /** The canvas that can't be saved has changes, which replacing it would lose. */
-  private unsavedChanged = false
+  /** Changes made to the canvas that can't be saved in the browser, and how many of them its file has. */
+  private unsavedEdits = 0
+  private unsavedEditsWritten = 0
+  /** A document opened from a file without storage, until its canvas is up. */
+  private unsavedDoc: UnsavedDocument | null = null
+  /** The engine showing the canvas that can't be saved, and the document (its session) it shows. */
+  private unsavedShownBy: { engine: DocumentEngine; sessionId: string | null } | null = null
+  /**
+   * The file the open document was saved as or opened from, where the
+   * browser lets it be written again (Chromium): Ctrl+S writes it too (plan M1.5).
+   */
+  private link: FileLink | null = null
+  /** Writes to files, one at a time, in order. */
+  private fileWrites: Promise<unknown> = Promise.resolve()
+  /** The write waiting for the one running, if there is one. */
+  private queuedWrite: QueuedWrite | null = null
+  /** How many times the canvas that can't be saved restarted: a write of what it had before says nothing about what it has now. */
+  private unsavedEpoch = 0
   /** Saves running whose failure the caller reports itself (Ctrl+S, closing a project). */
   private reporting = 0
   /** A save failure was shown, and no save has worked since: further failures stay quiet. */
@@ -182,6 +311,11 @@ export class ProjectService {
 
   private get store() {
     return useProjectStore
+  }
+
+  /** The canvas that can't be saved has changes its file doesn't have, which replacing it would lose. */
+  private get unsavedChanged(): boolean {
+    return this.unsavedEdits !== this.unsavedEditsWritten
   }
 
   private toast(message: string, type: 'info' | 'success' | 'error', options?: ToastOptions) {
@@ -355,21 +489,352 @@ export class ProjectService {
     })
   }
 
-  /** Save the open project now (Ctrl+S) and say how it went. */
+  /**
+   * Save the open project now (Ctrl+S) and say how it went. A project saved
+   * as a file, or opened from one, is written to it too (plan M1.5). Call it
+   * while handling the user's key press or click: the browser asks then
+   * whether the file may be written, if it has to.
+   */
   async saveNow(): Promise<boolean> {
+    const state = this.store.getState()
     // Nothing can have changed in a document still opening.
-    if (this.store.getState().view !== 'canvas' || this.store.getState().openProgress !== null) return true
+    if (state.view !== 'canvas' || state.openProgress !== null) return true
     const session = this.session
-    const name = q(this.store.getState().currentProjectName)
-    if (!session) {
-      this.toast(`${name} can't be saved in this browser`, 'error')
+    const link = this.link
+    const name = q(state.currentProjectName)
+    if (!session && !link) {
+      this.toast(`${name} can't be saved in this browser. Save it as a .qart file to keep it.`, 'error', {
+        durationMs: 10000,
+        action: this.saveAsAction(),
+      })
       return false
     }
-    const ok = await this.reported(() => session.saveNow())
-    if (ok) this.toast(`Saved ${name}`, 'success')
-    else if (isStorageFull(session.lastError)) this.storageFull(name)
+    // The file gets the document as it is at the key press, whatever happens meanwhile.
+    const written = link ? this.writeOpenDocument(link.handle, mayWrite(link.handle), link) : null
+    written?.catch(() => undefined)
+    let saved = true
+    if (session) {
+      saved = await this.reported(() => session.saveNow())
+      if (!saved) this.saveFailed(session, name)
+    }
+    if (!link || !written) {
+      if (saved) this.toast(`Saved ${name}`, 'success')
+      return saved
+    }
+    const fileName = q(link.handle.name)
+    let result: FileWritten
+    try {
+      result = await written
+    } catch (err) {
+      const reason = this.fileFailed(link, err, name)
+      this.toast(
+        session && saved
+          ? `Saved ${name} in the browser, but not to ${fileName}: ${reason}`
+          : `Couldn't save ${name} to ${fileName}: ${reason}`,
+        'error',
+        { durationMs: 10000, action: this.saveAsAction() },
+      )
+      return false
+    }
+    // The browser's copy has what the file has: when the project opens again, Ctrl+S may write the file.
+    if (session && saved && result.own) await this.confirmLink(link, result.modified)
+    this.toast(`Saved ${name} to ${fileName}`, 'success')
+    return saved
+  }
+
+  /** Say why a save of the open project failed. */
+  private saveFailed(session: DocumentSession, name: string) {
+    if (isStorageFull(session.lastError)) this.storageFull(name)
     else this.toast(`Couldn't save ${name}: ${describe(session.lastError)}`, 'error')
-    return ok
+  }
+
+  /**
+   * File › Save as .qart… (plan M1.5). Where the browser can, the user picks
+   * a file, which Ctrl+S writes again from then on; elsewhere the file is a
+   * download. Call it while handling the user's key press or click: the
+   * browser shows the picker only then.
+   */
+  async saveAsFile(): Promise<boolean> {
+    const state = this.store.getState()
+    if (state.view !== 'canvas' || state.openProgress !== null) return false
+    const name = q(state.currentProjectName)
+    const fileName = fileNameFor(state.currentProjectName, QART_EXTENSION)
+    if (!canPickSaveFile()) {
+      try {
+        downloadFile(await writeQart(this.qartInput()), fileName)
+      } catch (err) {
+        this.toast(`Couldn't save ${name} as a .qart file: ${describe(err)}`, 'error')
+        return false
+      }
+      this.toast(`Downloaded ${q(fileName)}`, 'success')
+      return true
+    }
+    let handle: FileHandle | null
+    try {
+      handle = await pickSaveFile(fileName)
+    } catch (err) {
+      this.toast(`Couldn't save ${name} as a .qart file: ${describe(err)}`, 'error')
+      return false
+    }
+    // Cancelled, or another document opened while the picker was up.
+    if (!handle || this.store.getState().sessionId !== state.sessionId) return false
+    const session = this.session
+    // A file just picked to save to can be written. What the browser's copy
+    // doesn't have yet is saved too: once it has what the file has, the
+    // project can write the file again when it next opens.
+    const written = this.writeOpenDocument(handle, Promise.resolve(true), null)
+    written.catch(() => undefined)
+    const browserSaved = session ? this.reported(() => session.flush()).catch(() => false) : Promise.resolve(false)
+    let result: FileWritten
+    try {
+      result = await written
+    } catch (err) {
+      this.toast(`Couldn't save ${name} to ${q(handle.name)}: ${describeFileError(err)}`, 'error')
+      return false
+    }
+    // Ctrl+S writes it from now on, and so does the project when it opens again, even if it closed meanwhile.
+    const link: FileLink = { handle, projectId: session?.projectId ?? null, modified: result.modified, kept: false }
+    if (link.projectId) {
+      const confirmed = result.own && result.modified !== null && (await browserSaved)
+      link.kept = await this.rememberFile(link.projectId, handle, confirmed ? (result.modified ?? undefined) : undefined)
+    }
+    if (this.store.getState().sessionId === state.sessionId) this.link = link
+    this.toast(`Saved ${name} to ${q(handle.name)}`, 'success')
+    return true
+  }
+
+  /** Toasts' way to keep a copy of the open project: save it as a .qart file. */
+  private saveAsAction(): ToastOptions['action'] {
+    return { label: 'Save as .qart…', run: () => void this.saveAsFile() }
+  }
+
+  /**
+   * Write the open document to a file as a .qart: read from the canvas now,
+   * then written once `allowed` says it may be and the writes before are
+   * done. Through `link` (Ctrl+S), only while the file is still the
+   * project's and as the document last wrote it (`checkLink`). A Ctrl+S
+   * that comes while an earlier one's write waits takes its place, so one
+   * copy of the document waits however often the key is pressed. Rejects
+   * with what went wrong. Without storage, a canvas whose file has its
+   * changes can be replaced without asking.
+   */
+  private writeOpenDocument(handle: FileHandle, allowed: Promise<boolean>, link: FileLink | null): Promise<FileWritten> {
+    // Awaited in the write: a refusal is its failure.
+    allowed.catch(() => undefined)
+    let input: QartWriterInput
+    try {
+      input = this.qartInput()
+    } catch (err) {
+      return Promise.reject(err)
+    }
+    const job: FileJob = {
+      handle,
+      link,
+      input,
+      allowed,
+      sessionId: this.store.getState().sessionId,
+      edits: this.unsavedEdits,
+      epoch: this.unsavedEpoch,
+    }
+    return new Promise((resolve, reject) => {
+      const queued = this.queuedWrite
+      if (queued && queued.job.handle === handle && queued.job.link === link && queued.job.sessionId === job.sessionId) {
+        // Its pixels are older: let them go, and write these in their place.
+        queued.job.input = null
+        queued.job = job
+        queued.waiting.push({ job, resolve, reject })
+        return
+      }
+      const entry: QueuedWrite = { job, waiting: [{ job, resolve, reject }] }
+      this.queuedWrite = entry
+      this.fileWrites = this.fileWrites.then(async () => {
+        // Running: a Ctrl+S from now on waits for it.
+        if (this.queuedWrite === entry) this.queuedWrite = null
+        try {
+          const modified = await this.runWrite(entry.job)
+          for (const w of entry.waiting) w.resolve({ modified, own: w.job === entry.job })
+        } catch (err) {
+          for (const w of entry.waiting) w.reject(err)
+        }
+      })
+    })
+  }
+
+  /** Write a job's pixels to its file. Returns the file's last-modified time after it, or null when that can't be read. */
+  private async runWrite(job: FileJob): Promise<number | null> {
+    const input = job.input
+    if (!input) throw new Error("the canvas couldn't be read")
+    if (!(await job.allowed)) throw new DOMException('Writing to the file was not allowed', 'NotAllowedError')
+    if (job.link) await this.checkLink(job.link)
+    await writeFile(job.handle, await writeQart(input))
+    job.input = null
+    const modified = await lastModified(job.handle).catch(() => null)
+    if (job.link) job.link.modified = modified
+    if (!this.session && this.store.getState().sessionId === job.sessionId && this.unsavedEpoch === job.epoch) {
+      this.unsavedEditsWritten = Math.max(this.unsavedEditsWritten, job.edits)
+    }
+    return modified
+  }
+
+  /**
+   * Before Ctrl+S writes a file: it must still be the project's, and as the
+   * document last wrote it. Otherwise it may have work the document doesn't:
+   * another tab or program wrote it, or Ctrl+S wrote it while the browser's
+   * storage was full and the project then opened from the older copy there.
+   */
+  private async checkLink(link: FileLink) {
+    if (link.projectId && link.kept) {
+      // Storage that can't be read doesn't keep the file from being written: it may be all there is.
+      const record = await this.db.getProject(link.projectId).catch(() => null)
+      if (record !== null && !(record?.fileHandle && (await sameFile(record.fileHandle, link.handle)))) {
+        throw new FileConflict('taken')
+      }
+    }
+    if (link.modified === null || (await lastModified(link.handle)) !== link.modified) throw new FileConflict('changed')
+  }
+
+  /** Why a write through the open document's link failed, as its toast says. A file gone, or that may have other work, is let go. */
+  private fileFailed(link: FileLink, err: unknown, name: string): string {
+    if (err instanceof FileConflict) {
+      // Nor do the writes still waiting go through.
+      link.modified = null
+      this.dropLink(link)
+      return err.reason === 'changed'
+        ? `it may have changed since ${name} was last saved to it. Open it with File › Open… to keep what it has, or Save as .qart… to replace it`
+        : 'it belongs to another project now. Save as .qart… to write to it anyway'
+    }
+    if (isFileGone(err)) this.dropLink(link)
+    return describeFileError(err)
+  }
+
+  /** The open document as a .qart file has it, read from its canvas now. */
+  private qartInput(): QartWriterInput {
+    const engine = this.engine
+    if (!engine || this.loadingInto === engine) throw new Error("the canvas isn't ready yet")
+    const { width, height } = engine.getDocumentSize()
+    const { currentProjectName: name, dpi } = this.store.getState()
+    const layers = engine.getLayerInfos().map((raw, order) => {
+      const pixels = engine.getLayerPixels(raw.id)
+      if (!pixels) throw new Error(`the layer ${q(raw.name)} can't be read right now. Try again in a moment`)
+      return { info: savedLayerInfo(raw), order, pixels }
+    })
+    return { name, width, height, dpi, layers, activeLayerId: engine.getActiveLayerId() }
+  }
+
+  /**
+   * Keep a project's file with it, with `modified` when the project's
+   * browser copy has what the file has (`ProjectRecord.fileModified`). One
+   * project per file: another that had it lets it go. Returns whether it was kept.
+   */
+  private async rememberFile(projectId: string, handle: FileHandle, modified: number | undefined): Promise<boolean> {
+    try {
+      for (const project of await this.db.getAllProjects()) {
+        if (project.id === projectId || !project.fileHandle) continue
+        if (await sameFile(project.fileHandle, handle)) {
+          await this.db.updateProject(project.id, { fileHandle: undefined, fileModified: undefined }, { touch: false })
+        }
+      }
+      return await this.db.updateProject(projectId, { fileHandle: handle, fileModified: modified }, { touch: false })
+    } catch (err) {
+      // Ctrl+S still writes it while the project is open.
+      console.warn('[QUAR] The file a project was saved to could not be kept with it:', err)
+      return false
+    }
+  }
+
+  /**
+   * The project's browser copy has what its file has, as last written: when
+   * the project opens again, Ctrl+S may write the file while it still has
+   * this last-modified time.
+   */
+  private async confirmLink(link: FileLink, modified: number | null) {
+    const { projectId, handle } = link
+    // A write since has its own say.
+    if (!projectId || !link.kept || modified === null || link.modified !== modified) return
+    try {
+      const record = await this.db.getProject(projectId)
+      if (record?.fileHandle && (await sameFile(record.fileHandle, handle))) {
+        await this.db.updateProject(projectId, { fileModified: modified }, { touch: false })
+      }
+    } catch (err) {
+      console.warn('[QUAR] A project could not note that its file has its work:', err)
+    }
+  }
+
+  /** Ctrl+S no longer writes the link's file, and its project lets it go, unless it has another file by now. */
+  private dropLink(link: FileLink) {
+    if (this.link === link) this.link = null
+    const { projectId, handle } = link
+    if (!projectId || !link.kept) return
+    link.kept = false
+    void (async () => {
+      const record = await this.db.getProject(projectId)
+      if (record?.fileHandle && (await sameFile(record.fileHandle, handle))) {
+        await this.db.updateProject(projectId, { fileHandle: undefined, fileModified: undefined }, { touch: false })
+      }
+    })().catch((err) => console.warn('[QUAR] A project could not let go of its file:', err))
+  }
+
+  /**
+   * File › Open… (plan M1.5): a .qart file or an image, opened as a new
+   * project once the open one is saved and closed. Call it while handling
+   * the user's key press or click: the browser shows the picker only then.
+   */
+  async openFile(): Promise<boolean> {
+    if (this.store.getState().openProgress !== null) return false
+    let picked: PickedFile | null
+    try {
+      picked = await pickOpenFile()
+    } catch (err) {
+      this.toast(`Couldn't open a file: ${describe(err)}`, 'error')
+      return false
+    }
+    return picked ? this.openFromFile(picked.file, picked.handle) : false
+  }
+
+  /**
+   * Open a file as a new project, after saving and closing the open one: a
+   * .qart file, which Ctrl+S then writes to when it came with its handle, or
+   * an image. Without storage, it takes the canvas's place.
+   */
+  async openFromFile(file: File, handle: FileHandle | null = null): Promise<boolean> {
+    const refused = refusal(file)
+    if (refused) {
+      this.toast(refused, 'error')
+      return false
+    }
+    const isQart = importKind(file) === 'qart'
+    const linked = isQart ? handle : null
+    let doc: FileDocument
+    let id: string
+    try {
+      doc = isQart ? await this.qartDocument(file) : await this.imageDocument(file)
+      if (this.unsaved) return this.openUnsavedFile(file, doc, linked)
+      id = await this.addProject(doc)
+    } catch (err) {
+      this.toast(`Couldn't open ${q(file.name)}: ${describe(err)}`, 'error')
+      return false
+    }
+    // The project is made from the file as it is: Ctrl+S may write it while it stays so.
+    if (linked) await this.rememberFile(id, linked, file.lastModified)
+    // In the Gallery even if the open project can't close for it.
+    await this.refresh().catch(() => undefined)
+    return this.openProject(id)
+  }
+
+  /** Without storage, a file opens in the canvas's place: asking first, when that loses changes. */
+  private openUnsavedFile(file: File, doc: FileDocument, handle: FileHandle | null): boolean {
+    const link: FileLink | null = handle ? { handle, projectId: null, modified: file.lastModified, kept: false } : null
+    const open = () => this.openUnsaved(doc.config, doc, link)
+    if (this.unsavedChanged) {
+      this.toast(`The open canvas can't be saved in this browser, so opening ${q(file.name)} loses it`, 'error', {
+        durationMs: 10000,
+        action: { label: 'Open anyway', run: open },
+      })
+      return false
+    }
+    open()
+    return true
   }
 
   /** Whether the open project has changes not saved yet. */
@@ -429,8 +894,18 @@ export class ProjectService {
       // Nothing is saved without storage, but note changes: replacing the canvas would lose them.
       if (!this.unsaved) return () => {}
       this.engine = engine
+      const sessionId = this.store.getState().sessionId
+      const doc = this.unsavedDoc
+      const shown = this.unsavedShownBy
+      if (doc && doc.sessionId === sessionId) {
+        this.unsavedDoc = null
+        this.loadUnsaved(engine, doc)
+      } else if (shown && shown.sessionId === sessionId && shown.engine !== engine) {
+        this.unsavedRestarted()
+      }
+      this.unsavedShownBy = { engine, sessionId }
       engine.setDocumentChangeCallback(() => {
-        this.unsavedChanged = true
+        this.unsavedEdits++
       })
       return () => {
         if (this.engine !== engine) return
@@ -461,6 +936,40 @@ export class ProjectService {
       if (this.engine !== engine) return
       this.engine = null
       session.detach()
+    }
+  }
+
+  /**
+   * A canvas that can't be saved restarted (a lost GPU context), empty: what
+   * it showed went with the old engine. Ctrl+S mustn't write the empty
+   * canvas over the file that has the last save of it.
+   */
+  private unsavedRestarted() {
+    this.unsavedEpoch++
+    this.unsavedEdits = 0
+    this.unsavedEditsWritten = 0
+    const link = this.link
+    if (!link) return
+    this.dropLink(link)
+    this.toast(
+      `The canvas restarted and lost what it showed. ${q(link.handle.name)} still has it as last saved: open it again with File › Open…`,
+      'error',
+      { durationMs: 15000 },
+    )
+  }
+
+  /** Put a document opened from a file without storage into the canvas made for it. */
+  private loadUnsaved(engine: DocumentEngine, doc: UnsavedDocument) {
+    try {
+      engine.loadDocument(doc.layers, doc.activeLayerId)
+      engine.finishLoading()
+    } catch (err) {
+      console.error('[QUAR] A file could not be put into the canvas:', err)
+      // The canvas stays empty: Ctrl+S mustn't write it over the file.
+      if (this.link) this.dropLink(this.link)
+      this.toast(`Couldn't open ${q(this.store.getState().currentProjectName)}: ${describe(err)}`, 'error')
+    } finally {
+      this.store.getState().setOpenProgress(null)
     }
   }
 
@@ -537,7 +1046,10 @@ export class ProjectService {
         session.setBase(baseOf(doc, made, unreadable))
         this.store.getState().setOpenProgress(null)
         session.attach(engine)
-        this.reportUnreadable(doc.project.name, unreadable)
+        // Its file may still have what the browser lost: Ctrl+S mustn't write the holes over it.
+        const link = unreadable > 0 ? this.link : null
+        if (link) this.dropLink(link)
+        this.reportUnreadable(doc.project.name, unreadable, link)
         return
       }
     } catch (err) {
@@ -609,6 +1121,7 @@ export class ProjectService {
     if (this.session === session) {
       this.session = null
       this.pending = null
+      this.link = null
     }
     this.store.getState().clearCurrentProject()
     await this.refresh().catch(() => undefined)
@@ -616,10 +1129,13 @@ export class ProjectService {
   }
 
   /** Say so when part of a document couldn't be read: it opened with those tiles transparent. */
-  private reportUnreadable(name: string, n: number) {
+  private reportUnreadable(name: string, n: number, link: FileLink | null) {
     if (n === 0) return
     const tiles = `${n} ${n === 1 ? 'tile' : 'tiles'} of ${TILE_SIZE} × ${TILE_SIZE} px`
-    this.toast(`Part of ${q(name)} couldn't be read and shows as transparent (${tiles})`, 'error', {
+    const file = link
+      ? `. ${q(link.handle.name)} may still have it, so Ctrl+S no longer writes to it: open it with File › Open…`
+      : ''
+    this.toast(`Part of ${q(name)} couldn't be read and shows as transparent (${tiles})${file}`, 'error', {
       durationMs: 15000,
     })
   }
@@ -638,11 +1154,29 @@ export class ProjectService {
   }
 
   private beginSession(
-    project: Pick<ProjectRecord, 'id' | 'name' | 'width' | 'height' | 'dpi' | 'colorSpace' | 'view' | 'guides' | 'activeLayerId'>,
+    project: Pick<
+      ProjectRecord,
+      | 'id'
+      | 'name'
+      | 'width'
+      | 'height'
+      | 'dpi'
+      | 'colorSpace'
+      | 'view'
+      | 'guides'
+      | 'activeLayerId'
+      | 'fileHandle'
+      | 'fileModified'
+    >,
     doc: LoadedDocument | null,
   ) {
     this.saveErrorShown = false
     this.loadingInto = null
+    this.unsavedDoc = null
+    // Ctrl+S writes the file it was saved as or opened from (plan M1.5), while it is as the project last wrote it.
+    this.link = project.fileHandle
+      ? { handle: project.fileHandle, projectId: project.id, modified: project.fileModified ?? null, kept: true }
+      : null
     // Its guides, or fresh ones centred on it (plan M1.4), before the session: showing them isn't a change.
     this.showGuides(project.guides, project.width, project.height)
     const session = new DocumentSession(
@@ -684,13 +1218,25 @@ export class ProjectService {
     }
   }
 
-  private openUnsaved(config: NewProjectConfig) {
+  /**
+   * A canvas that can't be saved in the browser: empty, or with a document
+   * opened from a file, which Ctrl+S writes to when it came with its handle.
+   */
+  private openUnsaved(
+    config: NewProjectConfig,
+    doc: Pick<FileDocument, 'layers' | 'activeLayerId'> | null = null,
+    link: FileLink | null = null,
+  ) {
     this.session = null
     this.pending = null
     this.loadingInto = null
-    this.unsavedChanged = false
+    this.unsavedEdits = 0
+    this.unsavedEditsWritten = 0
+    this.link = link
     this.showGuides(undefined, config.width, config.height)
-    this.store.getState().openDocument({ id: null, ...config })
+    this.store.getState().openDocument({ id: null, ...config, loadsSaved: doc !== null })
+    const sessionId = this.store.getState().sessionId
+    this.unsavedDoc = doc && sessionId ? { sessionId, layers: doc.layers, activeLayerId: doc.activeLayerId } : null
   }
 
   /** Save and end the open session. False, with the session still open, when saving failed. */
@@ -706,6 +1252,7 @@ export class ProjectService {
     this.session = null
     this.pending = null
     this.engine = null
+    this.link = null
     return true
   }
 
@@ -756,9 +1303,9 @@ export class ProjectService {
   private storageFull(name: string, staysOpen = false) {
     const what = staysOpen ? `${name} can't be saved, so it stays open` : `${name} isn't being saved`
     this.toast(
-      `The browser's storage is full: ${what}. Export it to keep a copy, and make room by deleting projects you don't need from the Gallery in another tab.`,
+      `The browser's storage is full: ${what}. Save it as a .qart file to keep a copy, and make room by deleting projects you don't need from the Gallery in another tab.`,
       'error',
-      { durationMs: 20000, action: { label: 'Export…', run: () => useUIStore.getState().setShowExportDialog(true) } },
+      { durationMs: 20000, action: this.saveAsAction() },
     )
   }
 
@@ -965,18 +1512,13 @@ export class ProjectService {
   async importFiles(files: readonly File[]): Promise<void> {
     const imported: string[] = []
     for (const file of files) {
-      const kind = importKind(file)
-      if (kind === 'psd') {
-        this.toast(`${q(file.name)}: PSD files can't be opened yet`, 'error')
-        continue
-      }
-      if (kind === 'other') {
-        this.toast(`${q(file.name)} isn't a .qart file or an image`, 'error')
+      const refused = refusal(file)
+      if (refused) {
+        this.toast(refused, 'error')
         continue
       }
       try {
-        if (kind === 'qart') await this.importQart(file)
-        else await this.importImage(file)
+        await this.addProject(importKind(file) === 'qart' ? await this.qartDocument(file) : await this.imageDocument(file))
         imported.push(baseName(file.name))
       } catch (err) {
         this.toast(`Couldn't import ${q(file.name)}: ${describe(err)}`, 'error')
@@ -987,17 +1529,19 @@ export class ProjectService {
     this.toast(imported.length === 1 ? `Imported ${q(imported[0])}` : `Imported ${imported.length} files`, 'success')
   }
 
-  private async importImage(file: File) {
+  /** An image as a one-layer document named after its file. */
+  private async imageDocument(file: File): Promise<FileDocument> {
     const { pixels, width, height } = await decodeImageBlob(file)
     const problem = canvasSizeProblem(width, height)
     if (problem) throw new Error(`it is ${width} × ${height} px. ${problem}`)
     const name = baseName(file.name)
     const info = newLayerInfo(name)
     const bytes = new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength)
-    await this.addProject({ name, width, height, dpi: 72, colorSpace: 'srgb' }, [{ info, pixels: bytes }], info.id)
+    return { config: { name, width, height, dpi: 72, colorSpace: 'srgb' }, layers: [{ info, pixels: bytes }], activeLayerId: info.id }
   }
 
-  private async importQart(file: File) {
+  /** A .qart file's document, named after its file. */
+  private async qartDocument(file: File): Promise<FileDocument> {
     const { manifest, layers } = await readQart(file)
     const { width, height, dpi } = manifest.canvas
     const problem = canvasSizeProblem(width, height)
@@ -1005,7 +1549,7 @@ export class ProjectService {
 
     // Fresh ids: the same file imported twice makes two independent projects.
     const ids = new Map<string, string>()
-    const stored: SaveLayer[] = [...layers]
+    const stored: StoredLayer[] = [...layers]
       .sort((a, b) => a.manifest.order - b.manifest.order)
       .slice(0, MAX_LAYERS)
       .map(({ manifest: layer, pixels }) => {
@@ -1024,14 +1568,19 @@ export class ProjectService {
       })
     if (stored.length === 0) throw new Error('it has no layers')
 
-    const active = ids.get(manifest.activeLayerId) ?? stored[stored.length - 1].info.id
+    const activeLayerId = ids.get(manifest.activeLayerId) ?? stored[stored.length - 1].info.id
     const config = { name: baseName(file.name), width, height, dpi: dpi > 0 ? dpi : 72, colorSpace: 'srgb' as const }
-    await this.addProject(config, stored, active)
+    return { config, layers: stored, activeLayerId }
   }
 
-  /** Create a project record with these layers and a thumbnail, in the open stack. */
-  private async addProject(config: NewProjectConfig, layers: SaveLayer[], activeLayerId: string) {
-    const stackId = this.store.getState().openStackId ?? undefined
+  /**
+   * Make a project of a document read from a file: its record, with a
+   * thumbnail, and its layers saved. In the stack open in the Gallery, if
+   * there is one. Returns its id.
+   */
+  private async addProject({ config, layers, activeLayerId }: FileDocument): Promise<string> {
+    const { view, openStackId } = this.store.getState()
+    const stackId = view === 'gallery' && openStackId ? openStackId : undefined
     // Before saving: the save hands the pixels over to the persistence worker.
     const thumbnail = await encodeLayersThumbnail(
       layers.flatMap(({ info, pixels }) =>

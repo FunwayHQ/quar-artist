@@ -56,5 +56,6 @@ export async function writeQart(input: QartWriterInput): Promise<Blob> {
   )
   zip.file('manifest.json', JSON.stringify(manifest, null, 2))
 
-  return zip.generateAsync({ type: 'blob' })
+  // Compressed: a layer's empty parts take next to nothing (plan M1.5; M1.6 stores tiles).
+  return zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } })
 }

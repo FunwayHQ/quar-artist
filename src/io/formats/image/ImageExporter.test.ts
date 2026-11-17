@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { downloadBlob } from './ImageExporter.ts'
+import { DOWNLOAD_URL_MS, downloadBlob } from './ImageExporter.ts'
 
 // Note: exportImage relies on canvas.getContext('2d'), canvas.toBlob, etc.
 // which are not fully available in jsdom. It is tested via integration tests.
@@ -36,11 +36,19 @@ describe('ImageExporter', () => {
         return origCreateElement(tag)
       })
 
-      downloadBlob(blob, 'test.txt')
+      vi.useFakeTimers()
+      try {
+        downloadBlob(blob, 'test.txt')
 
-      expect(mockAnchor.download).toBe('test.txt')
-      expect(clickSpy).toHaveBeenCalledOnce()
-      expect(URL.revokeObjectURL).toHaveBeenCalled()
+        expect(mockAnchor.download).toBe('test.txt')
+        expect(clickSpy).toHaveBeenCalledOnce()
+        // The browser may still be reading the file after the click: the URL stays a while.
+        expect(URL.revokeObjectURL).not.toHaveBeenCalled()
+        vi.advanceTimersByTime(DOWNLOAD_URL_MS)
+        expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:test-url')
+      } finally {
+        vi.useRealTimers()
+      }
 
       URL.createObjectURL = origCreateObjectURL
       URL.revokeObjectURL = origRevokeObjectURL

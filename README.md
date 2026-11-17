@@ -17,7 +17,7 @@
   <img src="https://img.shields.io/badge/Tests-Vitest_+_Playwright-brightgreen?style=flat-square" alt="Tests: Vitest and Playwright" />
 </p>
 
-> **In development.** Painting, layers, saving in the browser and PNG/JPEG export work. See [Status](#status) and the [completion plan](docs/completion-plan.md).
+> **In development.** Painting, layers, saving in the browser and to .qart files, and PNG/JPEG export work. See [Status](#status) and the [completion plan](docs/completion-plan.md).
 
 ---
 
@@ -59,7 +59,9 @@
 ### Export & Persistence
 - **PNG** export — full-resolution composite
 - **JPEG** export — with quality slider (Low/Medium/High/Max)
-- **PSD** and **.qart** (ZIP archive with a manifest and per-layer pixel data): the writers exist but aren't connected to the Export dialog yet
+- **.qart** (a ZIP archive with a manifest and each layer's pixels, compressed): File › Save as .qart… or the Export dialog. In Chromium the project remembers its file, and Ctrl+S writes it again, unless something else wrote it since; Firefox and Safari download it
+- **PSD**: the writer exists but isn't connected to the Export dialog yet
+- **Opening files:** File › Open… opens .qart files and images as new projects. Images dropped on the canvas become layers, and a dropped .qart file opens; a file dropped anywhere never opens in the tab in the app's place
 - **Saving:** projects save themselves in the browser two seconds after each change, writing only the 256 × 256 tiles that changed, compressed, from a background worker: in the origin private file system where the browser offers it, in IndexedDB otherwise. The title bar shows whether the work is saved, and the page saves when it's hidden or closed. A project opens a batch of tiles at a time, with a progress bar, as it was left: the same view, drawing guides and selected layer. The Gallery lists the projects and how much storage they use
 
 ### Undo/Redo
@@ -169,6 +171,8 @@ src/
 | Ctrl+Z | Undo |
 | Ctrl+Shift+Z / Ctrl+Y | Redo |
 | Ctrl+S | Save now |
+| Ctrl+Shift+S | Save as .qart |
+| Ctrl+O | Open a .qart file or an image |
 | Ctrl+A | Select All |
 | Ctrl+D | Deselect |
 | Ctrl+Shift+I | Invert Selection |
@@ -192,8 +196,8 @@ QUAR Artist is not ready for real work yet. The remaining work for the MVP and v
 | Colour | Works: colour disc, harmonies, palettes, recent colours. Palettes aren't saved yet (M1.9) |
 | Selection and transform | The tools work, but brush strokes and transforms ignore the selection, Feather does nothing, and transform handles misbehave after a rotation (M4.1–M4.3) |
 | Filters | Gaussian blur, sharpen, HSB adjustment, curves. Strokes made while a filter dialog is open are lost (M4.10) |
-| Saving | Projects save themselves in the browser two seconds after each change, when you go back to the Gallery or press Ctrl+S, and when the page is hidden or closed, which asks first while changes aren't saved. A save reads back and writes only the 256 × 256 tiles that changed, compressed, from a background worker, and lands whole or not at all. The title bar shows whether the work is saved, and the app asks the browser to keep its storage. Opening a project streams its tiles to the GPU a batch at a time, with a progress bar, and brings back its view, drawing guides and selected layer. The Gallery lists projects with thumbnails, stacks, sorting, rename, duplicate, delete with undo, and import of .qart files and images, and shows the storage used. There's no saving to a file on disk yet (M1.5) |
-| Export | PNG and JPEG work. PSD and .qart aren't connected yet (M1.6, M1.7) |
+| Saving | Projects save themselves in the browser two seconds after each change, when you go back to the Gallery or press Ctrl+S, and when the page is hidden or closed, which asks first while changes aren't saved. A save reads back and writes only the 256 × 256 tiles that changed, compressed, from a background worker, and lands whole or not at all. The title bar shows whether the work is saved, and the app asks the browser to keep its storage. Opening a project streams its tiles to the GPU a batch at a time, with a progress bar, and brings back its view, drawing guides and selected layer. The Gallery lists projects with thumbnails, stacks, sorting, rename, duplicate, delete with undo, and import of .qart files and images, and shows the storage used. File › Save as .qart… writes the project to a file, which Ctrl+S then writes again (Chromium; Firefox and Safari download it), File › Open… opens .qart files and images, and dropped files never take the app away. The .qart format isn't final yet (M1.6) |
+| Export | PNG, JPEG and .qart work. PSD isn't connected yet (M1.7) |
 | Rendering | WebGPU, or WebGL 2 where WebGPU isn't available |
 | Tests | Vitest unit tests, plus Playwright end-to-end and real-GPU pixel tests in Chromium (WebGPU and WebGL 2), Firefox and WebKit |
 

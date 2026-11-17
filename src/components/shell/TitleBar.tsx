@@ -15,6 +15,10 @@ interface TitleBarProps {
   onUndo?: () => void
   onRedo?: () => void
   onSave?: () => void
+  /** Save as .qart…: called within the click, which lets the browser show a picker. */
+  onSaveAs?: () => void
+  /** Open…, likewise. */
+  onOpen?: () => void
   onImportImage?: () => void
   onStartRecording?: () => void
   onStopRecording?: () => void
@@ -24,7 +28,7 @@ interface TitleBarProps {
 
 type MenuName = 'file' | 'edit' | 'view' | 'adjustments' | 'selection' | 'help'
 
-export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, onStartRecording, onStopRecording, onDiscardRecording, manager }: TitleBarProps) {
+export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onSaveAs, onOpen, onImportImage, onStartRecording, onStopRecording, onDiscardRecording, manager }: TitleBarProps) {
   const [openMenu, setOpenMenu] = useState<{ name: MenuName; anchor: HTMLElement } | null>(null)
   const zoom = useUIStore((s) => s.zoom)
   const projectName = useProjectStore((s) => s.currentProjectName)
@@ -71,12 +75,14 @@ export function TitleBar({ onOpenFilter, onUndo, onRedo, onSave, onImportImage, 
       case 'file':
         return [
           { label: 'New', shortcut: 'Ctrl+N', action: () => useUIStore.getState().setShowNewProjectDialog(true) },
+          { label: 'Open...', shortcut: 'Ctrl+O', action: () => onOpen?.() },
           { separator: true, label: '' },
           { label: 'Canvas Size...', action: () => useUIStore.getState().setShowCanvasSizeDialog(true) },
           { label: 'Import Image...', action: () => onImportImage?.() },
           { separator: true, label: '' },
-          { label: 'Export...', shortcut: 'Ctrl+E', action: () => useUIStore.getState().setShowExportDialog(true) },
           { label: 'Save', shortcut: 'Ctrl+S', action: () => onSave?.() },
+          { label: 'Save as .qart...', shortcut: 'Ctrl+Shift+S', action: () => onSaveAs?.() },
+          { label: 'Export...', shortcut: 'Ctrl+E', action: () => useUIStore.getState().setShowExportDialog(true) },
           { separator: true, label: '' },
           ...(recordingState === 'idle'
             ? [{ label: 'Start Recording', shortcut: 'Ctrl+Shift+R', action: () => onStartRecording?.() }]

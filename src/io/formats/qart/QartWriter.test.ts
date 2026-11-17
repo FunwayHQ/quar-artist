@@ -35,6 +35,17 @@ describe('QartWriter', () => {
     expect(blob.size).toBeGreaterThan(0)
   })
 
+  it('compresses the layers, so their empty parts take next to nothing', async () => {
+    const pixels = new Uint8Array(128 * 128 * 4)
+    pixels.fill(200, 0, 1024)
+    const blob = await writeQart(createInput({ width: 128, height: 128, layers: [{ ...createInput().layers[0], pixels }] }))
+    // The manifest and the ZIP's own records take most of it.
+    expect(blob.size).toBeLessThan(pixels.byteLength / 20)
+    const zip = await JSZip.loadAsync(blob)
+    const stored = await zip.file('layers/layer-1.bin')!.async('uint8array')
+    expect(stored).toEqual(pixels)
+  })
+
   it('produces a ZIP with manifest.json', async () => {
     const blob = await writeQart(createInput())
     const zip = await JSZip.loadAsync(blob)

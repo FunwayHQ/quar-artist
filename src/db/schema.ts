@@ -3,6 +3,7 @@ import type { ColorSpace, StoredImage } from '../types/project.ts'
 import type { SavedView } from '../types/engine.ts'
 import type { DocumentGuides } from '../types/guides.ts'
 import type { DocumentManifest } from '../io/tiles/tileFormat.ts'
+import type { FileHandle } from '../io/files/fileAccess.ts'
 import { createId } from '../utils/id.ts'
 
 export interface ProjectRecord {
@@ -27,6 +28,20 @@ export interface ProjectRecord {
   guides?: DocumentGuides
   /** Set when the project is deleted. The Gallery hides it until the delete is undone or made final. */
   deletedAt?: Date
+  /**
+   * The file the project was last saved as or opened from, where the browser
+   * can write it again (Chromium's File System Access API): Ctrl+S writes it
+   * too (plan M1.5). Never copied with the project.
+   */
+  fileHandle?: FileHandle
+  /**
+   * The file's last-modified time when the project's browser copy last had
+   * what the file has. Ctrl+S writes the file only while it still has this
+   * time: otherwise the file may have work the browser copy doesn't (written
+   * while the browser's storage was full, or by another tab or program).
+   * Missing when that isn't known.
+   */
+  fileModified?: number
 }
 
 /** A Gallery stack: a named folder of projects (PRD 4.9). */

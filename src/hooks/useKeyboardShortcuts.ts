@@ -10,6 +10,9 @@ import type { CanvasManager } from '@engine/canvas/CanvasManager.ts'
 import type { ToolType } from '@app-types/engine.ts'
 import type { FilterType } from '@app-types/filter.ts'
 
+/** Shortcuts that save or open files: each press reads or writes the whole document, so a held key doesn't repeat them. */
+const FILE_ACTIONS: ReadonlySet<string> = new Set(['save', 'save-as', 'open'])
+
 interface UseKeyboardShortcutsOptions {
   manager: CanvasManager | null
   undo: () => void
@@ -25,9 +28,13 @@ interface UseKeyboardShortcutsOptions {
   onRotateCW?: () => void
   onRotateCCW?: () => void
   onSave?: () => void
+  /** Save as .qart… (Ctrl+Shift+S): call it within the key press, which lets the browser show a picker. */
+  onSaveAs?: () => void
+  /** Open… (Ctrl+O), likewise. */
+  onOpen?: () => void
 }
 
-export function useKeyboardShortcuts({ manager, undo, redo, onOpenFilter, onToggleRecording, onQuickMenu, onClearLayer, onCommitTransform, onCancelTransform, onFlipHorizontal, onFlipVertical, onRotateCW, onRotateCCW, onSave }: UseKeyboardShortcutsOptions) {
+export function useKeyboardShortcuts({ manager, undo, redo, onOpenFilter, onToggleRecording, onQuickMenu, onClearLayer, onCommitTransform, onCancelTransform, onFlipHorizontal, onFlipVertical, onRotateCW, onRotateCCW, onSave, onSaveAs, onOpen }: UseKeyboardShortcutsOptions) {
   const shortcutMap = useMemo(() => buildShortcutMap(DEFAULT_SHORTCUTS), [])
 
   const dispatch = useCallback(
@@ -100,6 +107,12 @@ export function useKeyboardShortcuts({ manager, undo, redo, onOpenFilter, onTogg
         case 'save':
           onSave?.()
           break
+        case 'save-as':
+          onSaveAs?.()
+          break
+        case 'open':
+          onOpen?.()
+          break
         case 'new-layer':
           if (manager) {
             manager.layerManager.createLayer()
@@ -145,7 +158,7 @@ export function useKeyboardShortcuts({ manager, undo, redo, onOpenFilter, onTogg
           break
       }
     },
-    [manager, undo, redo, onOpenFilter, onToggleRecording, onQuickMenu, onClearLayer, onCommitTransform, onCancelTransform, onFlipHorizontal, onFlipVertical, onRotateCW, onRotateCCW, onSave],
+    [manager, undo, redo, onOpenFilter, onToggleRecording, onQuickMenu, onClearLayer, onCommitTransform, onCancelTransform, onFlipHorizontal, onFlipVertical, onRotateCW, onRotateCCW, onSave, onSaveAs, onOpen],
   )
 
   useEffect(() => {
@@ -153,17 +166,19 @@ export function useKeyboardShortcuts({ manager, undo, redo, onOpenFilter, onTogg
       // Skip if typing in an input
       const tag = (e.target as HTMLElement).tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
-      // Nothing works on a document still opening: its saved layers would replace what was done (plan M1.4).
-      if (useProjectStore.getState().openProgress !== null) return
 
       const normalized = normalizeKeyEvent(e)
       if (!normalized) return
 
       const def = shortcutMap.get(normalized)
-      if (def) {
-        e.preventDefault()
-        dispatch(def.action)
-      }
+      if (!def) return
+      // The app's keys, never the browser's (Save Page, Open File, screenshots), even while they do nothing (plan M1.5).
+      e.preventDefault()
+      // Nothing works on a document still opening: its saved layers would replace what was done (plan M1.4).
+      if (useProjectStore.getState().openProgress !== null) return
+      // A held Ctrl+S would read the whole document again for every repeat.
+      if (e.repeat && FILE_ACTIONS.has(def.action)) return
+      dispatch(def.action)
     }
 
     // Alt hold → temporary eyedropper
