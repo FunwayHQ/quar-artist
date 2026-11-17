@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { ProjectRecord, StackRecord } from '../db/schema.ts'
 import type { ColorSpace, GallerySort } from '../types/project.ts'
+import type { SavedView } from '../types/engine.ts'
 import { createId } from '../utils/id.ts'
 
 export type SaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
@@ -16,6 +17,10 @@ export interface OpenDocument {
   height: number
   dpi: number
   colorSpace: ColorSpace
+  /** How the canvas showed it last time, to show it the same way (plan M1.4). */
+  view?: SavedView | null
+  /** Whether a saved document is to load into the canvas: `openProgress` starts at 0. */
+  loadsSaved?: boolean
 }
 
 interface ProjectStore {
@@ -40,6 +45,14 @@ interface ProjectStore {
   lastSaved: Date | null
   /** How saving the open project goes: pending while changes wait for the next save. */
   saveStatus: SaveStatus
+  /**
+   * How much of the open document's saved tiles has loaded into the canvas,
+   * from 0 to 1, while it opens (plan M1.4); null once it is open. Nothing on
+   * the canvas can be used until then.
+   */
+  openProgress: number | null
+  /** The view the canvas shows the document with first, if it has one to come back to. Taken once. */
+  initialView: SavedView | null
 
   setView: (view: AppView) => void
   setCurrentProject: (id: string, name: string, width: number, height: number, dpi: number) => void
@@ -54,10 +67,13 @@ interface ProjectStore {
   setGallerySort: (sort: GallerySort) => void
   setOpenStack: (stackId: string | null) => void
   setLastProjectId: (id: string | null) => void
+  setOpenProgress: (progress: number | null) => void
+  /** The view to show the document with first, once: later the canvas fits the document instead. */
+  takeInitialView: () => SavedView | null
   clearCurrentProject: () => void
 }
 
-export const useProjectStore = create<ProjectStore>((set) => ({
+export const useProjectStore = create<ProjectStore>((set, get) => ({
   view: 'loading',
   sessionId: null,
   currentProjectId: null,
@@ -74,6 +90,8 @@ export const useProjectStore = create<ProjectStore>((set) => ({
   isSaving: false,
   lastSaved: null,
   saveStatus: 'idle',
+  openProgress: null,
+  initialView: null,
 
   setView: (view) => set({ view }),
 
@@ -100,6 +118,8 @@ export const useProjectStore = create<ProjectStore>((set) => ({
       isSaving: false,
       lastSaved: null,
       saveStatus: 'idle',
+      openProgress: doc.loadsSaved ? 0 : null,
+      initialView: doc.view ?? null,
     }),
 
   setProjects: (projects) => set({ projects }),
@@ -125,11 +145,21 @@ export const useProjectStore = create<ProjectStore>((set) => ({
 
   setLastProjectId: (lastProjectId) => set({ lastProjectId }),
 
+  setOpenProgress: (openProgress) => set({ openProgress }),
+
+  takeInitialView: () => {
+    const view = get().initialView
+    if (view) set({ initialView: null })
+    return view
+  },
+
   clearCurrentProject: () =>
     set({
       sessionId: null,
       currentProjectId: null,
       currentProjectName: 'Untitled Project',
       view: 'gallery',
+      openProgress: null,
+      initialView: null,
     }),
 }))

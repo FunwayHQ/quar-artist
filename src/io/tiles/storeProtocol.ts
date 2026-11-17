@@ -65,6 +65,14 @@ export function buffersOf(arrays: readonly (Uint8Array | null | undefined)[]): A
   return [...buffers]
 }
 
+/** The pixels in a store's answer, which move to the app without a copy: loaded layers, and tiles read. */
+function pixelsOf(method: StoreMethod, value: unknown): (Uint8Array | null)[] {
+  if (!value) return []
+  if (method === 'load') return (value as { layers: { pixels: Uint8Array | null }[] }).layers.map((l) => l.pixels)
+  if (method === 'readTiles') return value as (Uint8Array | null)[]
+  return []
+}
+
 /** Call one of a store's methods by name. */
 export function callStore(store: DocumentStore, method: StoreMethod, args: unknown[]): Promise<unknown> {
   const fn = store[method] as (this: DocumentStore, ...a: unknown[]) => Promise<unknown>
@@ -90,9 +98,7 @@ export function serveDocumentStore(
     void (async () => {
       try {
         const value = await callStore(store, method, args)
-        // Loaded layers move to the app without a copy.
-        const layers = method === 'load' && value ? (value as { layers: { pixels: Uint8Array | null }[] }).layers : []
-        port.postMessage({ id, ok: true, value } satisfies StoreReply, buffersOf(layers.map((l) => l.pixels)))
+        port.postMessage({ id, ok: true, value } satisfies StoreReply, buffersOf(pixelsOf(method, value)))
       } catch (err) {
         port.postMessage({ id, ok: false, error: toWireError(err) } satisfies StoreReply, [])
       }

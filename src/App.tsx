@@ -99,6 +99,7 @@ export default function App() {
   const canvasHeight = useProjectStore((s) => s.canvasHeight)
   const projectName = useProjectStore((s) => s.currentProjectName)
   const sessionId = useProjectStore((s) => s.sessionId)
+  const openProgress = useProjectStore((s) => s.openProgress)
 
   // Open the Gallery, or a new project when there are none (M1.1)
   useEffect(() => {
@@ -196,18 +197,24 @@ export default function App() {
     })
   }, [manager])
 
-  // Sync document size to engine and fit to viewport
+  // Sync document size to engine, and show the document: as it was last
+  // viewed when it opens with a saved view (plan M1.4), otherwise fitted
   useEffect(() => {
     if (!manager || !ready) return
     manager.setDocumentSize(canvasWidth, canvasHeight)
     // Use double-RAF to ensure the browser has fully laid out the container
     // before we measure its dimensions for fit-to-document calculation
-    const rafId = requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        manager.fitToDocument()
+    let inner = 0
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => {
+        const view = useProjectStore.getState().takeInitialView()
+        if (!view || !manager.restoreView(view)) manager.fitToDocument()
       })
     })
-    return () => cancelAnimationFrame(rafId)
+    return () => {
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+    }
   }, [manager, ready, canvasWidth, canvasHeight])
 
   // Wire filter store to engine: begin/update/apply/cancel
@@ -333,6 +340,8 @@ export default function App() {
   useEffect(() => {
     if (!manager) return
     const handlePaste = async (e: ClipboardEvent) => {
+      // A document still opening would lose the layer when its saved layers come in.
+      if (useProjectStore.getState().openProgress !== null) return
       const blob = getImageFromClipboard(e)
       if (!blob) return
       e.preventDefault()
@@ -362,6 +371,7 @@ export default function App() {
       }
     }
     const handleDrop = async (e: DragEvent) => {
+      if (useProjectStore.getState().openProgress !== null) return
       const file = getImageFromDrop(e)
       if (!file) return
       e.preventDefault()
@@ -459,13 +469,14 @@ export default function App() {
     return () => manager.timelapseRecorder.setFrameCountCallback(null)
   }, [manager])
 
-  // ── Symmetry center dragging ──
+  // ── Guides moved on the canvas: the store keeps them, and the project saves them ──
   useEffect(() => {
     if (!manager) return
     manager.setSymmetryCenterChangedCallback((cx, cy) => {
-      useGuideStore.getState().setSymmetryCenterX(cx)
-      useGuideStore.getState().setSymmetryCenterY(cy)
+      useGuideStore.setState({ symmetryCenterX: cx, symmetryCenterY: cy })
     })
+    manager.setVanishingPointsChangedCallback((points) => useGuideStore.getState().setVanishingPoints(points))
+    return () => manager.setVanishingPointsChangedCallback(null)
   }, [manager])
 
   // ── Transform tool actions ──
@@ -629,7 +640,14 @@ export default function App() {
   // Canvas view
   return (
     <>
-    {engineError ? <EngineErrorScreen error={engineError} /> : !ready && <LoadingOverlay />}
+    {engineError ? (
+      <EngineErrorScreen error={engineError} />
+    ) : openProgress !== null ? (
+      // Opening a saved project: nothing on the canvas can be used until it is all in (plan M1.4).
+      <LoadingOverlay label={`Opening \u201c${projectName}\u201d`} progress={ready ? openProgress : undefined} />
+    ) : (
+      !ready && <LoadingOverlay />
+    )}
     <div
       className={styles.app}
       data-fullscreen={fullscreen || undefined}
@@ -660,7 +678,12 @@ export default function App() {
 
         {/* Center: Canvas */}
         <div onContextMenu={handleCanvasContextMenu} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          <CanvasViewport key={sessionId ?? 'unsaved'} ref={containerRef} engineReady={ready} renderer={(ready && getBackend()) || undefined} />
+          <CanvasViewport
+            key={sessionId ?? 'unsaved'}
+            ref={containerRef}
+            engineReady={ready && openProgress === null}
+            renderer={(ready && getBackend()) || undefined}
+          />
         </div>
 
         {showPanels && rightPanelOpen && (

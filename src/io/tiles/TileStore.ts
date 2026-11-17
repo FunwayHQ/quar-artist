@@ -74,6 +74,46 @@ export interface SaveReport {
   bytes: number
 }
 
+/**
+ * A document saved since its outline was read (another tab saved it while it
+ * opened): its tiles may be gone. Read the outline again.
+ */
+export class StaleLoadError extends Error {
+  constructor() {
+    super('the project was saved elsewhere while it opened')
+    this.name = 'StaleLoadError'
+  }
+}
+
+/** Whether an error, maybe from across the worker, is a StaleLoadError. */
+export function isStaleLoad(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'StaleLoadError'
+}
+
+/**
+ * A saved document without its pixels: its size, its layers bottom first and
+ * where their tiles are (plan M1.4). Opening reads this first, makes the
+ * layers, and then reads the tiles a batch at a time (`readTiles`).
+ */
+export interface DocumentOutline {
+  /** The save it is. */
+  seq: number
+  width: number
+  height: number
+  /** Where its tiles are kept. */
+  backend: TileBackendKind
+  layers: ManifestLayer[]
+}
+
+/** Some tiles of one layer of an outline, to read. */
+export interface TileRequest {
+  /** The outline's save. */
+  seq: number
+  backend: TileBackendKind
+  layerId: string
+  tiles: TileEntry[]
+}
+
 export interface SavedDocument {
   /** The save's number, to build the next save on. */
   seq: number
@@ -95,6 +135,15 @@ export interface DocumentStore {
   save(projectId: string, doc: DocumentToSave): Promise<SaveReport>
   /** The project's saved document, or null when it has none (it was never saved, or saved before the tile store). */
   load(projectId: string): Promise<SavedDocument | null>
+  /** The project's saved document without its pixels, or null when it has none: the first step of opening it. */
+  outline(projectId: string): Promise<DocumentOutline | null>
+  /**
+   * Tiles of an outline, decoded: premultiplied RGBA8, 256 × 256, in the
+   * order asked for. A tile missing or that doesn't decode is null. Rejects
+   * with a StaleLoadError when the project was saved again since the outline,
+   * and its tiles may be gone.
+   */
+  readTiles(projectId: string, request: TileRequest): Promise<(Uint8Array | null)[]>
   /** Copy a saved document to another project. False when there is none to copy. */
   copy(fromProjectId: string, toProjectId: string): Promise<boolean>
   /** Remove a project's saved document. Nothing to remove is fine. */
@@ -320,6 +369,41 @@ export class TileStore implements DocumentStore {
         layers.push({ info, pixels: new Uint8Array(pixels.buffer) })
       }
       return { seq: manifest.seq, width, height, layers, unreadableTiles }
+    })
+  }
+
+  outline(projectId: string): Promise<DocumentOutline | null> {
+    return withDocumentLock(projectId, 'shared', async () => {
+      const manifest = await readManifest(projectId)
+      if (!manifest) return null
+      if (manifest.format !== TILE_FORMAT) throw new Error('it was saved by a newer version of QUAR Artist')
+      if (!(await this.backends).read[manifest.backend]) {
+        throw new Error("its layers are kept in storage this browser can't open now")
+      }
+      const { seq, width, height, backend } = manifest
+      return { seq, width, height, backend, layers: manifest.layers.map((l) => ({ info: savedLayerInfo(l.info), tiles: l.tiles })) }
+    })
+  }
+
+  readTiles(projectId: string, { seq, backend, layerId, tiles }: TileRequest): Promise<(Uint8Array | null)[]> {
+    // Shared, so no save removes tiles while they are read. Saves can come in
+    // between two reads, though: tiles never change once written, so the
+    // outline's are good until a later save removes them.
+    return withDocumentLock(projectId, 'shared', async () => {
+      const source = (await this.backends).read[backend]
+      if (!source) throw new Error("its layers are kept in storage this browser can't open now")
+      const found = await source.readLayer(projectId, layerId, tiles.map((t) => t.ref))
+      const decoded: (Uint8Array | null)[] = []
+      for (const tile of tiles) {
+        this.onProgress?.()
+        const data = found.get(tile.ref)
+        decoded.push(data ? await decodeTile(tile.codec, data).catch(() => null) : null)
+      }
+      // A tile that isn't there: removed by a save made since, or lost.
+      if (tiles.some((t) => !found.has(t.ref))) {
+        if ((await readManifest(projectId))?.seq !== seq) throw new StaleLoadError()
+      }
+      return decoded
     })
   }
 

@@ -15,7 +15,8 @@ import { CanvasManager } from '@engine/canvas/CanvasManager.ts'
 import { getBackend } from '@engine/renderer.ts'
 import { DEFAULT_PRESETS } from '@engine/brush/BrushParams.ts'
 import { exportImage } from '../../src/io/formats/image/ImageExporter.ts'
-import { cutTiles, tileBounds, tileKey } from '../../src/utils/tiles.ts'
+import { cutTiles, tileBounds, tileColumns, tileKey, tileRows } from '../../src/utils/tiles.ts'
+import { cutTile, isEmptyTile } from '../../src/io/tiles/tileFormat.ts'
 import type {
   BrushOptions,
   EncodedPixels,
@@ -213,13 +214,35 @@ function createHarness(manager: CanvasManager, overlay: HTMLCanvasElement, info:
     undo: () => manager.performUndo(),
     redo: () => manager.performRedo(),
 
-    reopen() {
+    reopen(via = 'tiles') {
       const saved = manager.getLayerInfos().map((info) => {
         const pixels = manager.getLayerPixels(info.id)
-        // AutoSave stores a copy, as IndexedDB would.
+        // A save keeps a copy, as storage would.
         return { info, pixels: pixels && new Uint8Array(pixels) }
       })
-      manager.loadDocument(saved, manager.getActiveLayerId())
+      const active = manager.getActiveLayerId()
+      if (via === 'layers') {
+        manager.loadDocument(saved, active)
+        return
+      }
+      // As the tile store keeps them: premultiplied, padded, only those with something in them.
+      const stored = saved.map(({ pixels }) => {
+        const tiles: { x: number; y: number; data: Uint8Array }[] = []
+        if (!pixels) return tiles
+        for (let y = 0; y < tileRows(info.height); y++) {
+          for (let x = 0; x < tileColumns(info.width); x++) {
+            const data = cutTile(pixels, info.width, info.height, x, y)
+            if (!isEmptyTile(data)) tiles.push({ x, y, data })
+          }
+        }
+        return tiles
+      })
+      const made = manager.loadDocument(saved.map(({ info }) => ({ info, pixels: null })), active)
+      made.forEach((id, i) => {
+        // A couple at a time, as batches arrive from storage.
+        for (let start = 0; start < stored[i].length; start += 2) manager.placeTiles(id, stored[i].slice(start, start + 2))
+      })
+      manager.finishLoading()
     },
 
     readTiles(layerId, tiles) {

@@ -4,6 +4,7 @@ import { useKeyboardShortcuts } from './useKeyboardShortcuts.ts'
 import { useToolStore } from '@stores/toolStore.ts'
 import { useBrushStore } from '@stores/brushStore.ts'
 import { useUIStore } from '@stores/uiStore.ts'
+import { useProjectStore } from '@stores/projectStore.ts'
 
 function fireKey(key: string, opts: Partial<KeyboardEvent> = {}) {
   const event = new KeyboardEvent('keydown', {
@@ -42,6 +43,21 @@ describe('useKeyboardShortcuts', () => {
       }),
     )
   }
+
+  it('ignores shortcuts while a saved document is still loading into the canvas (plan M1.4)', () => {
+    mount()
+    useProjectStore.setState({ openProgress: 0.25 })
+    try {
+      fireKey('e')
+      fireKey('z', { ctrlKey: true })
+      expect(useToolStore.getState().activeTool).toBe('brush')
+      expect(undo).not.toHaveBeenCalled()
+    } finally {
+      useProjectStore.setState({ openProgress: null })
+    }
+    fireKey('e')
+    expect(useToolStore.getState().activeTool).toBe('eraser')
+  })
 
   it('switches to eraser on E key', () => {
     mount()

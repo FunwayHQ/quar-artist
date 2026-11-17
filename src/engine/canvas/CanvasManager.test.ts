@@ -61,6 +61,12 @@ vi.mock('../renderer.ts', () => ({
   }),
 }))
 
+// Uploading saved tiles needs a GPU: only which tiles go where matters here.
+vi.mock('../utils/readback.ts', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../utils/readback.ts')>()),
+  writeTiles: vi.fn(),
+}))
+
 // Mock ResizeObserver (not available in jsdom)
 const mockObserve = vi.fn()
 const mockDisconnect = vi.fn()
@@ -79,7 +85,10 @@ vi.stubGlobal('ResizeObserver', MockResizeObserver)
 import { CanvasManager } from './CanvasManager.ts'
 import { FilterManager } from '../filters/FilterManager.ts'
 import { createRenderer } from '../renderer.ts'
+import { writeTiles } from '../utils/readback.ts'
 import type { LayerInfo } from '../../types/layer.ts'
+import type { PointerState } from '../../types/engine.ts'
+import { defaultGuides, useGuideStore } from '../../stores/guideStore.ts'
 
 describe('CanvasManager', () => {
   let cm: CanvasManager
@@ -312,6 +321,109 @@ describe('CanvasManager', () => {
     })
   })
 
+  describe('guides moved on the canvas, which are saved with the project (plan M1.4)', () => {
+    beforeEach(async () => {
+      await cm.init(container, 400, 300)
+      vi.spyOn(cm.layerManager, 'updateThumbnails').mockImplementation(() => {})
+    })
+
+    /** The engine's own pointer handlers, as its input manager calls them. */
+    const input = () =>
+      cm as unknown as {
+        handlePointerDown(ps: PointerState): void
+        handlePointerMove(ps: PointerState, coalesced: PointerState[]): void
+        handlePointerUp(): void
+      }
+    const at = (canvasX: number, canvasY: number): PointerState => {
+      const { x, y, zoom } = cm.viewTransform.getState()
+      return { x: canvasX * zoom + x, y: canvasY * zoom + y, pressure: 0.5, tiltX: 0, tiltY: 0, pointerId: 1, pointerType: 'mouse' }
+    }
+
+    it('reports a vanishing point dragged on the canvas once the drag ends', () => {
+      useGuideStore.getState().loadGuides({ ...defaultGuides(400, 300), perspectiveEnabled: true })
+      cm.applyGuideSettings(useGuideStore.getState())
+      expect(cm.guideManager.vanishingPoints).toEqual([{ x: 200, y: 150 }])
+      const reported = vi.fn()
+      cm.setVanishingPointsChangedCallback(reported)
+
+      input().handlePointerDown(at(200, 150))
+      input().handlePointerMove(at(50, 60), [])
+      // Not while dragging: each report is a guide change, which saves.
+      expect(reported).not.toHaveBeenCalled()
+      input().handlePointerUp()
+
+      expect(reported).toHaveBeenCalledTimes(1)
+      const [[points]] = reported.mock.calls as [[{ x: number; y: number }[]]]
+      expect(points).toHaveLength(1)
+      expect(points[0].x).toBeCloseTo(50, 6)
+      expect(points[0].y).toBeCloseTo(60, 6)
+      // A copy: the store's points don't change under it.
+      expect(points).not.toBe(cm.guideManager.vanishingPoints)
+    })
+
+    it('centres symmetry on a new document size and reports it, and keeps the centre the document has otherwise', () => {
+      const reported = vi.fn()
+      cm.setSymmetryCenterChangedCallback(reported)
+      // As a project opens with a centre of its own.
+      cm.guideManager.symmetryCenterX = 30
+      cm.symmetryEngine.centerX = 30
+
+      cm.setDocumentSize(400, 300)
+      expect(reported).not.toHaveBeenCalled()
+      expect(cm.guideManager.symmetryCenterX).toBe(30)
+      expect(cm.symmetryEngine.centerX).toBe(30)
+
+      // Canvas Size.
+      cm.setDocumentSize(800, 500)
+      expect(reported).toHaveBeenCalledWith(400, 250)
+      expect([cm.guideManager.symmetryCenterX, cm.guideManager.symmetryCenterY]).toEqual([400, 250])
+      expect([cm.symmetryEngine.centerX, cm.symmetryEngine.centerY]).toEqual([400, 250])
+    })
+  })
+
+  describe('the view saved with a project (plan M1.4)', () => {
+    beforeEach(async () => {
+      await cm.init(container, 1000, 500)
+    })
+
+    it('gives the point at the middle of the viewport, the zoom and the rotation', () => {
+      cm.viewTransform.centerOn(250.123, 100, 2.5, -0.5, 400, 300)
+      const view = cm.getView()!
+      expect(view.x).toBeCloseTo(250.12, 2)
+      expect(view.y).toBeCloseTo(100, 2)
+      expect(view.zoom).toBe(2.5)
+      // As a turn from 0 to 2π.
+      expect(view.rotation).toBeCloseTo(2 * Math.PI - 0.5, 4)
+    })
+
+    it('shows a saved view again, centred in a viewport of any size', () => {
+      Object.defineProperty(container, 'clientWidth', { value: 1200, configurable: true })
+      expect(cm.restoreView({ x: 700, y: 120, zoom: 3, rotation: 0.25 })).toBe(true)
+      const centre = cm.viewTransform.screenToCanvas(600, 300)
+      expect(centre.x).toBeCloseTo(700, 6)
+      expect(centre.y).toBeCloseTo(120, 6)
+      expect(cm.viewTransform.getState()).toMatchObject({ zoom: 3, rotation: 0.25 })
+    })
+
+    it('moves a point off the document onto it, and keeps the zoom within its limits', () => {
+      expect(cm.restoreView({ x: -5000, y: 9000, zoom: 500, rotation: 0 })).toBe(true)
+      const centre = cm.viewTransform.screenToCanvas(400, 300)
+      expect(centre.x).toBeCloseTo(0, 6)
+      expect(centre.y).toBeCloseTo(500, 6)
+      expect(cm.viewTransform.getState().zoom).toBe(64)
+    })
+
+    it("leaves the view as it is for one that isn't a view, or with no viewport to show it in", () => {
+      const before = { ...cm.viewTransform.getState() }
+      expect(cm.restoreView({ x: Number.NaN, y: 0, zoom: 1, rotation: 0 })).toBe(false)
+      expect(cm.restoreView({ x: 0, y: 0, zoom: 0, rotation: 0 })).toBe(false)
+      Object.defineProperty(container, 'clientWidth', { value: 0, configurable: true })
+      expect(cm.restoreView({ x: 1, y: 1, zoom: 1, rotation: 0 })).toBe(false)
+      expect(cm.getView()).toBeNull()
+      expect(cm.viewTransform.getState()).toEqual(before)
+    })
+  })
+
   describe('documents (M1.1)', () => {
     const info = (id: string, name: string): LayerInfo => ({
       id,
@@ -328,6 +440,43 @@ describe('CanvasManager', () => {
       await cm.init(container, 4, 4)
       // Layer thumbnails read pixels back, which the mocked renderer can't.
       vi.spyOn(cm.layerManager, 'updateThumbnails').mockImplementation(() => {})
+    })
+
+    it('says which layers it made for a document: the saved ones, and a fresh id for one repeated (plan M1.4)', () => {
+      const made = cm.loadDocument(
+        [{ info: info('a', 'A'), pixels: null }, { info: info('b', 'B'), pixels: null }, { info: info('a', 'Again'), pixels: null }],
+        'b',
+      )
+      expect(made).toHaveLength(3)
+      expect(made.slice(0, 2)).toEqual(['a', 'b'])
+      expect(made[2]).not.toBe('a')
+      expect(cm.getLayerInfos().map((l) => l.id)).toEqual(made)
+      expect(cm.getActiveLayerId()).toBe('b')
+    })
+
+    it('puts saved tiles into a layer without counting them as a change (plan M1.4)', () => {
+      const onChange = vi.fn()
+      const [bottom] = cm.loadDocument([{ info: info('a', 'A'), pixels: null }], 'a')
+      cm.setDocumentChangeCallback(onChange)
+      const clear = vi.spyOn(cm.brushEngine, 'clearSnapshotCache')
+      vi.mocked(writeTiles).mockClear()
+
+      const tiles = [{ x: 0, y: 0, data: new Uint8Array(256 * 256 * 4) }]
+      cm.placeTiles(bottom, tiles)
+      expect(writeTiles).toHaveBeenCalledTimes(1)
+      const [, target, placed] = vi.mocked(writeTiles).mock.calls[0]
+      expect(target).toBe(cm.layerManager.getLayerById(bottom)!.texture)
+      expect(placed).toBe(tiles)
+      // The brush mustn't paint over a snapshot of the layer from before them.
+      expect(clear).toHaveBeenCalled()
+
+      cm.placeTiles('missing', tiles)
+      cm.placeTiles(bottom, [])
+      expect(writeTiles).toHaveBeenCalledTimes(1)
+
+      cm.finishLoading()
+      expect(onChange).not.toHaveBeenCalled()
+      expect(cm.takeChanges().size).toBe(0)
     })
 
     it('reports layer changes and history steps as changes worth saving', () => {
@@ -348,8 +497,28 @@ describe('CanvasManager', () => {
       cm.setLayerChangeCallback(onLayers)
       cm.setDocumentChangeCallback(onChange)
       cm.layerManager.createLayer('Ink')
-      expect(onLayers).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ name: 'Ink' })]), expect.any(String))
+      expect(onLayers).toHaveBeenCalledWith(
+        expect.arrayContaining([expect.objectContaining({ name: 'Ink' })]),
+        expect.any(String),
+        'document',
+      )
       expect(onChange).toHaveBeenCalled()
+    })
+
+    it("tells the layers panel which layer is chosen, which isn't a change to save (plan M1.4)", () => {
+      const second = cm.layerManager.createLayer('Ink')!
+      const first = cm.getLayerInfos()[0].id
+      const onLayers = vi.fn()
+      const onChange = vi.fn()
+      cm.setLayerChangeCallback(onLayers)
+      cm.setDocumentChangeCallback(onChange)
+
+      cm.layerManager.setActiveLayer(first)
+      cm.syncBrushToActiveLayer()
+      expect(onLayers).toHaveBeenLastCalledWith(expect.any(Array), first, 'selection')
+      expect(cm.getActiveLayerId()).toBe(first)
+      cm.layerManager.setActiveLayer(second)
+      expect(onChange).not.toHaveBeenCalled()
     })
 
     it('loads saved layers, with an empty history, without reporting a change', () => {
@@ -361,7 +530,7 @@ describe('CanvasManager', () => {
       cm.loadDocument([{ info: info('a', 'Sky'), pixels: null }, { info: info('b', 'Ink'), pixels: null }], 'a')
 
       expect(onChange).not.toHaveBeenCalled()
-      expect(onLayers).toHaveBeenCalledWith([info('a', 'Sky'), info('b', 'Ink')], 'a')
+      expect(onLayers).toHaveBeenCalledWith([info('a', 'Sky'), info('b', 'Ink')], 'a', 'document')
       expect(cm.getLayerInfos()).toEqual([info('a', 'Sky'), info('b', 'Ink')])
       expect(cm.getActiveLayerId()).toBe('a')
       expect(cm.brushEngine.undoManager.canUndo).toBe(false)

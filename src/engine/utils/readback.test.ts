@@ -28,14 +28,22 @@ vi.mock('pixi.js', () => {
   }
   class Sprite {
     texture: Texture
+    x = 0
+    y = 0
+    position = { set: (x: number, y: number) => { this.x = x; this.y = y } }
     destroy = vi.fn()
     constructor(texture: Texture) { this.texture = texture }
   }
-  return { RendererType: { WEBGL: 1, WEBGPU: 2, CANVAS: 4 }, BufferImageSource, Rectangle, Texture, Sprite }
+  class Container {
+    children: Sprite[] = []
+    destroy = vi.fn()
+    addChild(child: Sprite) { this.children.push(child); return child }
+  }
+  return { RendererType: { WEBGL: 1, WEBGPU: 2, CANVAS: 4 }, BufferImageSource, Rectangle, Texture, Sprite, Container }
 })
 
 import { Texture, type Renderer, type RenderTexture } from 'pixi.js'
-import { premultiply, readPixels, readRegions, unpremultiply, writePixels } from './readback.ts'
+import { premultiply, readPixels, readRegions, unpremultiply, writePixels, writeTiles } from './readback.ts'
 
 describe('unpremultiply', () => {
   it('restores straight colour from premultiplied pixels', () => {
@@ -116,6 +124,48 @@ describe('writePixels', () => {
     expect([...(options.resource as Uint8Array)]).toEqual([100, 50, 25, 128, 0, 0, 0, 4])
     expect(container.destroy).toHaveBeenCalled()
     expect(container.texture.destroy).toHaveBeenCalledWith(true)
+  })
+})
+
+describe('writeTiles (plan M1.4)', () => {
+  type Rendered = {
+    container: { children: { x: number; y: number; texture: Texture & { source: { options: Record<string, unknown> } } }[]; destroy: ReturnType<typeof vi.fn> }
+    target: unknown
+    clear: boolean
+  }
+
+  it('uploads saved tiles as they are, each at its place, in one render that keeps the rest of the target', () => {
+    const render = vi.fn()
+    const target = {} as RenderTexture
+    const a = new Uint8Array(256 * 256 * 4).fill(7)
+    const b = new Uint8Array(256 * 256 * 4).fill(9)
+    writeTiles({ render } as unknown as Renderer, target, [{ x: 0, y: 0, data: a }, { x: 2, y: 1, data: b }])
+
+    expect(render).toHaveBeenCalledTimes(1)
+    const { container, target: to, clear } = render.mock.calls[0][0] as Rendered
+    expect(to).toBe(target)
+    expect(clear).toBe(false)
+    expect(container.children.map((s) => [s.x, s.y])).toEqual([[0, 0], [512, 256]])
+    // Already premultiplied: uploaded as they are, without a conversion, and sampled without blending neighbours.
+    const { resource, ...options } = container.children[0].texture.source.options
+    expect(resource).toBe(a)
+    expect(options).toEqual({
+      width: 256,
+      height: 256,
+      format: 'rgba8unorm',
+      alphaMode: 'premultiplied-alpha',
+      scaleMode: 'nearest',
+    })
+    expect(container.children[1].texture.source.options.resource).toBe(b)
+    // Nothing is left on the GPU but the target's pixels.
+    expect(container.destroy).toHaveBeenCalledWith({ children: true })
+    for (const sprite of container.children) expect(sprite.texture.destroy).toHaveBeenCalledWith(true)
+  })
+
+  it('renders nothing for no tiles', () => {
+    const render = vi.fn()
+    writeTiles({ render } as unknown as Renderer, {} as RenderTexture, [])
+    expect(render).not.toHaveBeenCalled()
   })
 })
 

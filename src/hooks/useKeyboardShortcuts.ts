@@ -5,6 +5,7 @@ import { useToolStore } from '@stores/toolStore.ts'
 import { useColorStore } from '@stores/colorStore.ts'
 import { useBrushStore } from '@stores/brushStore.ts'
 import { useUIStore } from '@stores/uiStore.ts'
+import { useProjectStore } from '@stores/projectStore.ts'
 import type { CanvasManager } from '@engine/canvas/CanvasManager.ts'
 import type { ToolType } from '@app-types/engine.ts'
 import type { FilterType } from '@app-types/filter.ts'
@@ -152,6 +153,8 @@ export function useKeyboardShortcuts({ manager, undo, redo, onOpenFilter, onTogg
       // Skip if typing in an input
       const tag = (e.target as HTMLElement).tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      // Nothing works on a document still opening: its saved layers would replace what was done (plan M1.4).
+      if (useProjectStore.getState().openProgress !== null) return
 
       const normalized = normalizeKeyEvent(e)
       if (!normalized) return

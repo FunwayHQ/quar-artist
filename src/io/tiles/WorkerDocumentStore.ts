@@ -1,4 +1,12 @@
-import { TileStore, type DocumentStore, type DocumentToSave, type SaveReport, type SavedDocument } from './TileStore.ts'
+import {
+  TileStore,
+  type DocumentOutline,
+  type DocumentStore,
+  type DocumentToSave,
+  type SaveReport,
+  type SavedDocument,
+  type TileRequest,
+} from './TileStore.ts'
 import {
   buffersOf,
   callStore,
@@ -113,6 +121,14 @@ export class WorkerDocumentStore implements DocumentStore {
 
   load(projectId: string): Promise<SavedDocument | null> {
     return this.call('load', [projectId])
+  }
+
+  outline(projectId: string): Promise<DocumentOutline | null> {
+    return this.call('outline', [projectId])
+  }
+
+  readTiles(projectId: string, request: TileRequest): Promise<(Uint8Array | null)[]> {
+    return this.call('readTiles', [projectId, request])
   }
 
   copy(fromProjectId: string, toProjectId: string): Promise<boolean> {

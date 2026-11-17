@@ -20,6 +20,7 @@ import type {
   PointInput,
   Rect,
   RendererPreference,
+  ReopenVia,
   RGBA,
   SelectionState,
   TileAt,
@@ -123,8 +124,9 @@ export class Quar {
     return this.page.evaluate(() => window.__quar!.redo())
   }
 
-  reopen(): Promise<void> {
-    return this.page.evaluate(() => window.__quar!.reopen())
+  /** Save every layer and open the document again: as tiles, as projects open now, or as whole layers. */
+  reopen(via: ReopenVia = 'tiles'): Promise<void> {
+    return this.page.evaluate((v) => window.__quar!.reopen(v), via)
   }
 
   /** Tiles of a layer as an incremental save reads them, each with the same tile from a whole-layer read. */

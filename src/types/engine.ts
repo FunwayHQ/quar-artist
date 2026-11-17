@@ -5,6 +5,19 @@ export interface ViewState {
   rotation: number
 }
 
+/**
+ * How the canvas showed a document, saved with its project (plan M1.4): the
+ * point of the document at the middle of the viewport, the zoom and the
+ * rotation in radians. Kept apart from the viewport's size, which may differ
+ * when the project opens again.
+ */
+export interface SavedView {
+  x: number
+  y: number
+  zoom: number
+  rotation: number
+}
+
 export interface CanvasSize {
   width: number
   height: number

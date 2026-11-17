@@ -8,6 +8,7 @@ import { DB_NAME, resetDB } from '../../db/schema.ts'
 import { IdbTileBackend } from '../tiles/IdbTileBackend.ts'
 import { TileStore, type DocumentToSave } from '../tiles/TileStore.ts'
 import { FakeDocumentEngine } from '../../test/fakeDocumentEngine.ts'
+import { defaultGuides } from '../../stores/guideStore.ts'
 import { sameBytes } from '../../test/bytes.ts'
 
 describe('DocumentSession', () => {
@@ -206,6 +207,173 @@ describe('DocumentSession', () => {
     await new Promise((resolve) => setTimeout(resolve, 30))
     expect(await firstByte(projectId, 'default')).toBeNull()
   })
+  describe('the view and guides saved with the project (plan M1.4)', () => {
+    const guides = { ...defaultGuides(2, 2), gridEnabled: true }
+
+    it('writes them to the project record with every save', async () => {
+      const session = new DocumentSession(projectId, db, store, undefined, 10)
+      session.setSettingsSource(() => ({ guides }))
+      const engine = new FakeDocumentEngine()
+      engine.view = { x: 1, y: 1, zoom: 4, rotation: 0 }
+      session.attach(engine)
+      engine.paint(3)
+      expect(await session.flush()).toBe(true)
+      expect(await db.getProject(projectId)).toMatchObject({ view: engine.view, guides })
+      await session.close()
+    })
+
+    it("writes the view when the project closes or the page is hidden, without counting it as a change", async () => {
+      const session = new DocumentSession(projectId, db, store, undefined, 10)
+      session.setSettingsSource(() => ({ guides }))
+      const engine = new FakeDocumentEngine()
+      session.attach(engine)
+      engine.paint(3)
+      await session.flush()
+      const modified = (await db.getProject(projectId))!.updatedAt
+
+      // Zooming isn't an edit: nothing waits to be saved.
+      engine.view = { x: 0.5, y: 1.5, zoom: 8, rotation: 1 }
+      expect(session.hasUnsavedChanges).toBe(false)
+      expect(await session.capture()).toBe(true)
+      await vi.waitFor(async () => expect((await db.getProject(projectId))!.view).toEqual(engine.view))
+
+      engine.view = { x: 1, y: 1, zoom: 2, rotation: 0 }
+      expect(await session.close()).toBe(true)
+      const record = (await db.getProject(projectId))!
+      expect(record.view).toEqual(engine.view)
+      // The Gallery's order stays: the project wasn't modified.
+      expect(record.updatedAt).toEqual(modified)
+    })
+
+    it("doesn't write them again when they didn't change", async () => {
+      const view = { x: 1, y: 1, zoom: 4, rotation: 0 }
+      const session = new DocumentSession(projectId, db, store, undefined, 10)
+      session.setSettingsSource(() => ({ guides }), { view, guides, activeLayerId: 'default' })
+      const engine = new FakeDocumentEngine()
+      engine.view = { ...view }
+      session.attach(engine)
+      const update = vi.spyOn(db, 'updateProject')
+      expect(await session.capture()).toBe(true)
+      expect(await session.close()).toBe(true)
+      expect(update).not.toHaveBeenCalled()
+    })
+
+    it('writes the selected layer when the project closes, though choosing one is no edit', async () => {
+      const session = new DocumentSession(projectId, db, store, undefined, 10)
+      session.setSettingsSource(() => ({ guides }), { guides, activeLayerId: 'default' })
+      const engine = new FakeDocumentEngine()
+      session.attach(engine)
+      engine.addLayer('ink', 'Ink')
+      await session.flush()
+      expect((await db.getProject(projectId))!.activeLayerId).toBe('ink')
+
+      engine.activeLayerId = 'default'
+      expect(session.hasUnsavedChanges).toBe(false)
+      expect(await session.close()).toBe(true)
+      expect((await db.getProject(projectId))!.activeLayerId).toBe('default')
+    })
+
+    it('keeps the view the user left when the page is hidden while a save finishes', async () => {
+      const session = new DocumentSession(projectId, db, store, undefined, 10)
+      session.setSettingsSource(() => ({ guides }), { guides })
+      const engine = new FakeDocumentEngine()
+      const before = { x: 1, y: 1, zoom: 1, rotation: 0 }
+      const after = { x: 0.5, y: 0.5, zoom: 8, rotation: 0 }
+      engine.view = before
+      session.attach(engine)
+
+      // A save of a stroke, read while the view was `before`, is finishing.
+      let release!: () => void
+      const held = new Promise<void>((resolve) => (release = resolve))
+      let written = false
+      const save = store.save.bind(store)
+      vi.spyOn(store, 'save').mockImplementationOnce(async (...args) => {
+        const report = await save(...args)
+        written = true
+        await held
+        return report
+      })
+      engine.paint(3)
+      const saving = session.saveNow()
+      await vi.waitFor(() => expect(written).toBe(true))
+
+      // The user zooms (not an edit) and the page is hidden: the view is written now.
+      engine.view = after
+      const update = vi.spyOn(db, 'updateProject')
+      const capturing = session.capture()
+      release()
+      expect(await capturing).toBe(true)
+      expect(await saving).toBe(true)
+      expect(await session.close()).toBe(true)
+
+      // The save's record went after, without the view it would have read first.
+      expect(update.mock.calls.map(([, changes, options]) => [changes.view?.zoom, options?.touch ?? true])).toEqual([
+        [8, false],
+        [undefined, true],
+      ])
+      expect((await db.getProject(projectId))!.view).toEqual(after)
+    })
+
+    it("doesn't overwrite guides another tab saved since, when only the view changed here", async () => {
+      const opened = defaultGuides(2, 2)
+      const here = new DocumentSession(projectId, db, store, undefined, 10)
+      here.setSettingsSource(() => ({ guides: opened }), { guides: opened, activeLayerId: 'default' })
+      const hereEngine = new FakeDocumentEngine()
+      here.attach(hereEngine)
+
+      // Another tab turns the grid on: an edit, saved with its document.
+      const gridOn = { ...opened, gridEnabled: true }
+      const there = new DocumentSession(projectId, db, store, undefined, 10)
+      there.setSettingsSource(() => ({ guides: gridOn }), { guides: opened, activeLayerId: 'default' })
+      there.attach(new FakeDocumentEngine())
+      there.noteSettingsChange()
+      expect(await there.flush()).toBe(true)
+      expect((await db.getProject(projectId))!.guides).toEqual(gridOn)
+
+      // Here, the user only zoomed, and closes.
+      hereEngine.view = { x: 1, y: 1, zoom: 4, rotation: 0 }
+      expect(await here.close()).toBe(true)
+
+      const record = (await db.getProject(projectId))!
+      expect(record.view).toEqual(hereEngine.view)
+      expect(record.guides).toEqual(gridOn)
+      await there.close()
+    })
+
+    it('writes the settings with the next save when the record could not be written', async () => {
+      const session = new DocumentSession(projectId, db, store, undefined, 10)
+      session.setSettingsSource(() => ({ guides }))
+      const engine = new FakeDocumentEngine()
+      engine.view = { x: 1, y: 1, zoom: 4, rotation: 0 }
+      session.attach(engine)
+      vi.spyOn(db, 'updateProject').mockRejectedValueOnce(new Error('the disk went away'))
+
+      engine.paint(3)
+      expect(await session.flush()).toBe(false)
+      expect(await db.getProject(projectId)).not.toHaveProperty('guides')
+
+      expect(await session.flush()).toBe(true)
+      expect(await db.getProject(projectId)).toMatchObject({ view: engine.view, guides, activeLayerId: 'default' })
+      await session.close()
+    })
+
+    it('saves soon after the guides change, as after any change, once it has an engine', async () => {
+      const session = new DocumentSession(projectId, db, store, undefined, 10)
+      let current = defaultGuides(2, 2)
+      session.setSettingsSource(() => ({ guides: current }))
+      // Not yet showing the document: there is nothing to save from.
+      session.noteSettingsChange()
+      expect(session.hasUnsavedChanges).toBe(false)
+
+      session.attach(new FakeDocumentEngine())
+      current = guides
+      session.noteSettingsChange()
+      expect(session.hasUnsavedChanges).toBe(true)
+      await vi.waitFor(async () => expect((await db.getProject(projectId))!.guides).toEqual(guides))
+      await session.close()
+    })
+  })
+
   describe('incremental saves (plan M1.3)', () => {
     // 600 × 300 is 3 × 2 tiles.
     const W = 600

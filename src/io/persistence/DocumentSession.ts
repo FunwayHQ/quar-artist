@@ -3,13 +3,40 @@ import type { MetadataDB } from './MetadataDB.ts'
 import { encodeThumbnail } from './thumbnail.ts'
 import { StaleSaveError, isStaleSave, type DocumentStore, type SaveLayer } from '../tiles/TileStore.ts'
 import { savedLayerInfo } from '../tiles/tileFormat.ts'
+import type { ProjectRecord } from '../../db/schema.ts'
+import type { SavedView } from '../../types/engine.ts'
 import type { LayerInfo, StoredLayer } from '../../types/layer.ts'
 import { parseTileKey, type TileChanges, type TilePixels, type TilePosition } from '../../utils/tiles.ts'
 
+/** A saved tile to put into a layer: premultiplied RGBA8, 256 × 256, as the tile store keeps it. */
+export interface PlacedTile {
+  x: number
+  y: number
+  data: Uint8Array
+}
+
+/**
+ * What a project keeps besides its pixels (plan M1.4): how it was left (the
+ * view and the selected layer) and its guides. Written with every save, and
+ * when it closes, since choosing a layer or zooming isn't an edit.
+ */
+export type DocumentSettings = Partial<Pick<ProjectRecord, 'view' | 'guides' | 'activeLayerId'>>
+
 /** What a document session needs from the engine showing it. CanvasManager implements it. */
 export interface DocumentEngine {
-  /** Replace every layer with stored ones, keeping their ids, and start an empty history. */
-  loadDocument(layers: readonly StoredLayer[], activeLayerId: string | null): void
+  /**
+   * Replace every layer with stored ones, keeping their ids, and start an
+   * empty history. A layer without pixels starts empty. Returns the ids of
+   * the layers made, bottom first (a repeated id gets a fresh one, and
+   * layers past the limit are left out).
+   */
+  loadDocument(layers: readonly StoredLayer[], activeLayerId: string | null): readonly string[]
+  /** Put saved tiles into a layer loaded empty (plan M1.4). Not a change to save. */
+  placeTiles(layerId: string, tiles: readonly PlacedTile[]): void
+  /** Every saved tile is in place: show the document. */
+  finishLoading(): void
+  /** How the document is shown, to save with it; null when it can't be measured. */
+  getView(): SavedView | null
   getDocumentSize(): { width: number; height: number }
   getLayerInfos(): LayerInfo[]
   getActiveLayerId(): string
@@ -51,6 +78,19 @@ export const THUMBNAIL_EVERY_MS = 30_000
 /** Closing saves at most this many times over, for changes made while it saves. */
 const CLOSE_PASSES = 5
 
+type SettingsKey = keyof DocumentSettings
+const SETTINGS_KEYS: readonly SettingsKey[] = ['view', 'guides', 'activeLayerId']
+
+/** Each setting there is, as it compares: as JSON. */
+function settingsJson(settings: DocumentSettings): Partial<Record<SettingsKey, string>> {
+  const json: Partial<Record<SettingsKey, string>> = {}
+  for (const key of SETTINGS_KEYS) {
+    const value = settings[key]
+    if (value !== undefined && value !== null && value !== '') json[key] = JSON.stringify(value)
+  }
+  return json
+}
+
 function mergeChange(into: Map<string, Set<string> | 'all'>, layerId: string, change: TileChanges) {
   const known = into.get(layerId)
   if (known === 'all') return
@@ -86,6 +126,15 @@ export class DocumentSession {
   /** When the thumbnail was last brought up to date, and whether the document changed since. */
   private thumbnailAt = 0
   private thumbnailStale = false
+  private readonly metaDb: MetadataDB
+  /** Where the settings saved with the document come from, besides the engine's view. */
+  private settingsSource: (() => DocumentSettings) | null = null
+  /** The settings as last written to the project record, to write them only when they changed. */
+  /**
+   * Each setting as the project record has it, as far as this session knows:
+   * as the project opened, then as this session last wrote it (plan M1.4).
+   */
+  private settingsWritten: Partial<Record<SettingsKey, string>> = {}
 
   constructor(
     projectId: string,
@@ -96,6 +145,7 @@ export class DocumentSession {
     maxWaitMs?: number,
   ) {
     this.projectId = projectId
+    this.metaDb = metaDb
     this.autosave = new AutoSave(metaDb, store, debounceMs, maxWaitMs)
     this.autosave.setProjectId(projectId)
     if (onStatus) this.autosave.setStatusCallback(onStatus)
@@ -129,6 +179,30 @@ export class DocumentSession {
   setBase(base: SavedBase | null) {
     this.base = base
     this.pending.clear()
+  }
+
+  /**
+   * The document is being loaded into this engine (plan M1.4). It isn't
+   * saved from it until `attach`, once it has all of it; and another engine
+   * from now on is a new one, that it has to be loaded into again.
+   */
+  beginLoad(engine: DocumentEngine) {
+    this.lastEngine = engine
+  }
+
+  /**
+   * Where the settings saved with the document come from (its guides), and
+   * how they were when it opened. The engine gives its view and selected layer.
+   */
+  setSettingsSource(source: (() => DocumentSettings) | null, opened: DocumentSettings = {}) {
+    this.settingsSource = source
+    this.settingsWritten = settingsJson(opened)
+  }
+
+  /** The settings changed (the guides): save them with the next save, as any change. */
+  noteSettingsChange() {
+    // Without an engine there is nothing to save yet; the next save writes them.
+    if (this.engine) this.autosave.scheduleSave()
   }
 
   /** Save the engine's document from now on, after each change. */
@@ -168,7 +242,65 @@ export class DocumentSession {
    */
   capture(): Promise<boolean> {
     if (!this.engine) return this.autosave.settled().then(() => !this.autosave.hasUnsavedChanges)
+    // The view and selected layer too, which don't count as changes: the page may not come back.
+    void this.writeSettings()
     return this.autosave.capture(this.thumbnailDue())
+  }
+
+  /** The settings to keep with the document now: the engine's view and selected layer, and the rest from the source. */
+  private currentSettings(): DocumentSettings {
+    let settings: DocumentSettings = {}
+    try {
+      settings = { ...this.settingsSource?.() }
+      const view = this.engine?.getView()
+      if (view) settings.view = view
+      const active = this.engine?.getActiveLayerId()
+      if (active) settings.activeLayerId = active
+    } catch (err) {
+      console.warn('[QUAR] The view, guides and selected layer could not be read for saving:', err)
+    }
+    return settings
+  }
+
+  /**
+   * The settings that changed since the record last had them, counted as
+   * written from now on: for a write of the project record about to start.
+   * The record's writes land in the order they start, so it ends up with what
+   * was taken last. Only what changed here is written: a setting another tab
+   * changed since stays as that tab left it.
+   */
+  private takeSettingsChanges(): DocumentSettings {
+    const settings = this.currentSettings()
+    const json = settingsJson(settings)
+    const changes: Record<string, unknown> = {}
+    for (const key of SETTINGS_KEYS) {
+      if (json[key] === undefined || json[key] === this.settingsWritten[key]) continue
+      changes[key] = settings[key]
+      this.settingsWritten[key] = json[key]
+    }
+    return changes as DocumentSettings
+  }
+
+  /** Settings taken for a write that failed: unknown again, so the next write has them. */
+  private settingsNotWritten(changes: DocumentSettings) {
+    for (const key of Object.keys(changes) as SettingsKey[]) delete this.settingsWritten[key]
+  }
+
+  /**
+   * Write the settings that changed to the project record: the view and the
+   * selected layer change without a save (neither is an edit), so closing and
+   * hiding the page write them. Its modified date stays.
+   */
+  private async writeSettings(): Promise<void> {
+    const changes = this.takeSettingsChanges()
+    if (Object.keys(changes).length === 0) return
+    try {
+      await this.metaDb.updateProject(this.projectId, changes, { touch: false })
+    } catch (err) {
+      this.settingsNotWritten(changes)
+      // A nicety: the project opens fitted to the window instead.
+      console.warn('[QUAR] The view, guides and selected layer could not be saved:', err)
+    }
   }
 
   /** Whether the thumbnail is behind the document, and can be made now (not under a preview). */
@@ -198,6 +330,8 @@ export class DocumentSession {
       if (!(await this.flush())) return false
       if (this.engine === null || !this.autosave.hasUnsavedChanges || pass === CLOSE_PASSES) break
     }
+    // While the engine is still there to give its view.
+    if (this.engine) await this.writeSettings()
     this.detach()
     this.autosave.destroy()
     return true
@@ -305,12 +439,16 @@ export class DocumentSession {
     }
     this.outstanding.add(toRead)
 
+    // The settings, unlike the pixels, as they are when the record is written.
+    let settings: DocumentSettings = {}
+
     return {
       layers,
       width,
       height,
       ...(base ? { base: queued ? () => this.baseSeq(width, height) : base.seq } : {}),
-      activeLayerId: engine.getActiveLayerId(),
+      settings: () => (settings = this.takeSettingsChanges()),
+      recordFailed: () => this.settingsNotWritten(settings),
       thumbnail: composite
         ? () => encodeThumbnail(composite.pixels, composite.width, composite.height)
         : undefined,

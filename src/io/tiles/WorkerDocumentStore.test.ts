@@ -4,7 +4,8 @@ import { resetDB } from '../../db/schema.ts'
 import type { LayerInfo } from '../../types/layer.ts'
 import { IdbTileBackend } from './IdbTileBackend.ts'
 import { serveDocumentStore, type ServedStore, type StorePort } from './storeProtocol.ts'
-import { TileStore, isStaleSave } from './TileStore.ts'
+import { TileStore, isStaleLoad, isStaleSave } from './TileStore.ts'
+import { TILE_BYTES } from './tileFormat.ts'
 import { WorkerDocumentStore, type WorkerLike } from './WorkerDocumentStore.ts'
 import { sameBytes } from '../../test/bytes.ts'
 
@@ -141,6 +142,26 @@ describe('WorkerDocumentStore', () => {
     expect(doc.seq).toBe(2)
     expect(doc.layers[0].pixels![(10 * 300 + 280) * 4]).toBe(90)
     expect(await store.storedProjects()).toEqual(['p'])
+  })
+
+  it('opens a document a batch of tiles at a time through the worker, moving the tiles back without copies (plan M1.4)', async () => {
+    const inner = idbStore()
+    const store = new WorkerDocumentStore(() => new LoopbackWorker(inner), idbStore)
+    await store.save('p', { width: 300, height: 20, layers: [{ info, pixels: opaque(300, 20) }] })
+    const outline = (await store.outline('p'))!
+    expect(outline.layers[0].tiles.map((t) => [t.x, t.y])).toEqual([[0, 0], [1, 0]])
+
+    const read = vi.spyOn(inner, 'readTiles')
+    const request = { seq: outline.seq, backend: outline.backend, layerId: info.id, tiles: outline.layers[0].tiles }
+    const tiles = await store.readTiles('p', request)
+    expect(tiles.map((t) => t?.byteLength)).toEqual([TILE_BYTES, TILE_BYTES])
+    // The worker's own buffers were handed over, not copied.
+    const theirs: (Uint8Array | null)[] = await read.mock.results[0].value
+    expect(theirs.map((t) => t?.byteLength)).toEqual([0, 0])
+
+    // A read made stale by a later save stays recognisable across the worker.
+    await store.save('p', { width: 300, height: 20, layers: [{ info, pixels: opaque(300, 20, 7) }] })
+    await expect(store.readTiles('p', request)).rejects.toSatisfy(isStaleLoad)
   })
 
   it("keeps an error's name across the worker, so a full storage is reported as one", async () => {

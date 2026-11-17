@@ -1,6 +1,7 @@
 import type { MetadataDB } from './MetadataDB.ts'
 import { isStaleSave, type DocumentStore, type SaveLayer, type SaveReport } from '../tiles/TileStore.ts'
 import type { StoredImage } from '../../types/project.ts'
+import type { ProjectRecord } from '../../db/schema.ts'
 
 /** Pending: changes are waiting for the next save. */
 export type SaveStatus = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
@@ -300,13 +301,21 @@ export class AutoSave {
     // The thumbnail is a nicety: failing to encode it doesn't fail the save
     const thumbnail = data.thumbnail ? await data.thumbnail().catch(() => null) : null
 
-    // Update the project record, which also stamps it as modified
-    await this.metaDb.updateProject(projectId, {
-      width: data.width,
-      height: data.height,
-      ...(data.activeLayerId !== undefined ? { activeLayerId: data.activeLayerId } : {}),
-      ...(thumbnail ? { thumbnail } : {}),
-    })
+    // Update the project record, which also stamps it as modified. The
+    // settings are taken as it is written: they may have changed meanwhile.
+    const settings = data.settings?.() ?? {}
+    try {
+      await this.metaDb.updateProject(projectId, {
+        width: data.width,
+        height: data.height,
+        ...(data.activeLayerId !== undefined ? { activeLayerId: data.activeLayerId } : {}),
+        ...(thumbnail ? { thumbnail } : {}),
+        ...settings,
+      })
+    } catch (err) {
+      data.recordFailed?.()
+      throw err
+    }
 
     this.error = null
     // Changes made while it ran are still waiting for the next save.
@@ -335,6 +344,14 @@ export interface LayerDataSet {
    */
   base?: number | (() => number)
   activeLayerId?: string
+  /**
+   * What the project keeps besides its pixels (its view, guides and selected
+   * layer) that its record doesn't have yet, written to the record with the
+   * save. Called as the record is written, after the layers.
+   */
+  settings?: () => Partial<Pick<ProjectRecord, 'view' | 'guides' | 'activeLayerId'>>
+  /** Told when the record couldn't be written: the settings taken for it weren't. */
+  recordFailed?: () => void
   /** Encodes the Gallery thumbnail. Called after the layers are written. */
   thumbnail?: () => Promise<StoredImage | null>
   /** Told how saving the layers went: the store's report, or null and why it failed. */

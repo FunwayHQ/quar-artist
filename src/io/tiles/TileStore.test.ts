@@ -8,8 +8,8 @@ import { FakeDirectory } from '../../test/fakeOpfs.ts'
 import { FakeLocks } from '../../test/fakeLocks.ts'
 import { IdbTileBackend } from './IdbTileBackend.ts'
 import { OpfsTileBackend, openOpfsRoot } from './OpfsTileBackend.ts'
-import { TileStore, isStaleSave, openBackends, type SaveLayer } from './TileStore.ts'
-import { TILE_FORMAT, TILE_SIZE } from './tileFormat.ts'
+import { TileStore, isStaleLoad, isStaleSave, openBackends, type SaveLayer } from './TileStore.ts'
+import { TILE_FORMAT, TILE_SIZE, cutTile } from './tileFormat.ts'
 import { cutTiles, type TilePosition } from '../../utils/tiles.ts'
 
 const W = 600
@@ -551,6 +551,86 @@ describe('TileStore', () => {
     })
   })
 
+  describe('opening a batch of tiles at a time (plan M1.4)', () => {
+    let store: TileStore
+    beforeEach(() => {
+      const idb = new IdbTileBackend()
+      store = new TileStore({ write: idb, read: { idb } })
+    })
+
+    it('outlines a saved document: its size, its layers and where their tiles are, without their pixels', async () => {
+      await store.save('p', {
+        width: W,
+        height: H,
+        layers: [layer('paper', blank()), { info: { ...info('ink'), opacity: 0.4 }, pixels: painted([[0, 0], [2, 1]]) }],
+      })
+      const outline = (await store.outline('p'))!
+      expect(outline).toMatchObject({ seq: 1, width: W, height: H, backend: 'idb' })
+      expect(outline.layers.map((l) => l.info)).toEqual([info('paper'), { ...info('ink'), opacity: 0.4 }])
+      expect(outline.layers.map((l) => l.tiles.map((t) => [t.x, t.y]))).toEqual([[], [[0, 0], [2, 1]]])
+      expect(outline.layers[1].tiles).toEqual((await manifest('p'))!.layers[1].tiles)
+    })
+
+    it('has no outline for a project never saved here, and refuses a newer format', async () => {
+      expect(await store.outline('nope')).toBeNull()
+      await (await getDB()).put('documents', {
+        projectId: 'future',
+        seq: 1,
+        backend: 'idb',
+        format: 'rgba16f-1024' as never,
+        width: 1,
+        height: 1,
+        layers: [],
+        savedAt: new Date(),
+      })
+      await expect(store.outline('future')).rejects.toThrow('newer version')
+    })
+
+    it('reads tiles as they are saved, premultiplied and padded past the edges, in the order asked for', async () => {
+      const ink = painted([[0, 0], [2, 1], [1, 0]])
+      await store.save('p', { width: W, height: H, layers: [layer('ink', ink)] })
+      const { seq, backend, layers } = (await store.outline('p'))!
+      const tiles = [...layers[0].tiles].reverse()
+
+      const read = await store.readTiles('p', { seq, backend, layerId: 'ink', tiles })
+      expect(read).toHaveLength(3)
+      tiles.forEach(({ x, y }, i) => expect(sameBytes(read[i]!, cutTile(ink, W, H, x, y))).toBe(true))
+    })
+
+    it("gives null for a tile that is lost or doesn't decode, while the save it belongs to is the last", async () => {
+      await store.save('p', { width: W, height: H, layers: [layer('ink', painted([[0, 0], [1, 0], [2, 0]]))] })
+      const { seq, backend, layers } = (await store.outline('p'))!
+      const [lost, garbled, fine] = layers[0].tiles
+      await (await getDB()).delete('tileData', ['p', 'ink', lost.ref])
+      await (await getDB()).put('tileData', { projectId: 'p', layerId: 'ink', key: garbled.ref, data: new Uint8Array([1, 2]).buffer })
+
+      const read = await store.readTiles('p', { seq, backend, layerId: 'ink', tiles: [lost, garbled, fine] })
+      expect(read.map((t) => t !== null)).toEqual([false, false, true])
+    })
+
+    it('says so when a save made since removed the tiles, and reads on when a save kept them', async () => {
+      const ink = painted([[0, 0], [1, 0]])
+      await store.save('p', { width: W, height: H, layers: [layer('ink', ink)] })
+      const first = (await store.outline('p'))!
+      const request = { seq: first.seq, backend: first.backend, layerId: 'ink', tiles: first.layers[0].tiles }
+
+      // Another tab saves the same pixels: every tile is kept.
+      await store.save('p', { width: W, height: H, layers: [layer('ink', ink.slice())] })
+      expect((await store.readTiles('p', request)).every((t) => t !== null)).toBe(true)
+
+      // Then paints over tile (0, 0): the tile the outline names is removed.
+      await store.save('p', { width: W, height: H, layers: [layer('ink', touched(ink, 5, 5))] })
+      const stale = await store.readTiles('p', request).catch((err: unknown) => err)
+      expect(isStaleLoad(stale)).toBe(true)
+    })
+
+    it("refuses to read from storage it can't open", async () => {
+      await expect(store.readTiles('p', { seq: 1, backend: 'opfs', layerId: 'ink', tiles: [] })).rejects.toThrow(
+        "can't open now",
+      )
+    })
+  })
+
   describe('in OPFS', () => {
     let root: FakeDirectory
     let store: TileStore
@@ -627,6 +707,21 @@ describe('TileStore', () => {
       await store.delete('p')
       expect(root.children.has('p-p')).toBe(false)
       expect(sameBytes((await store.load('copy'))!.layers[0].pixels!, ink)).toBe(true)
+    })
+
+    it('reads the tiles of a project saved in OPFS, and of one saved in IndexedDB', async () => {
+      const ink = painted([[1, 1]])
+      await store.save('p', { width: W, height: H, layers: [layer('ink', ink)] })
+      const here = (await store.outline('p'))!
+      expect(here.backend).toBe('opfs')
+      const [tile] = await store.readTiles('p', { seq: here.seq, backend: 'opfs', layerId: 'ink', tiles: here.layers[0].tiles })
+      expect(sameBytes(tile!, cutTile(ink, W, H, 1, 1))).toBe(true)
+
+      const idb = new IdbTileBackend()
+      await new TileStore({ write: idb, read: { idb } }).save('q', { width: W, height: H, layers: [layer('ink', ink)] })
+      const there = (await store.outline('q'))!
+      const [moved] = await store.readTiles('q', { seq: there.seq, backend: 'idb', layerId: 'ink', tiles: there.layers[0].tiles })
+      expect(sameBytes(moved!, cutTile(ink, W, H, 1, 1))).toBe(true)
     })
 
     it('opens and moves projects saved in the other backend', async () => {

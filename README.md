@@ -60,7 +60,7 @@
 - **PNG** export — full-resolution composite
 - **JPEG** export — with quality slider (Low/Medium/High/Max)
 - **PSD** and **.qart** (ZIP archive with a manifest and per-layer pixel data): the writers exist but aren't connected to the Export dialog yet
-- **Saving:** projects save themselves in the browser two seconds after each change, writing only the 256 × 256 tiles that changed, compressed, from a background worker: in the origin private file system where the browser offers it, in IndexedDB otherwise. The title bar shows whether the work is saved, and the page saves when it's hidden or closed. The Gallery lists the projects and how much storage they use
+- **Saving:** projects save themselves in the browser two seconds after each change, writing only the 256 × 256 tiles that changed, compressed, from a background worker: in the origin private file system where the browser offers it, in IndexedDB otherwise. The title bar shows whether the work is saved, and the page saves when it's hidden or closed. A project opens a batch of tiles at a time, with a progress bar, as it was left: the same view, drawing guides and selected layer. The Gallery lists the projects and how much storage they use
 
 ### Undo/Redo
 - Full-layer snapshot undo with 50-state history
@@ -192,7 +192,7 @@ QUAR Artist is not ready for real work yet. The remaining work for the MVP and v
 | Colour | Works: colour disc, harmonies, palettes, recent colours. Palettes aren't saved yet (M1.9) |
 | Selection and transform | The tools work, but brush strokes and transforms ignore the selection, Feather does nothing, and transform handles misbehave after a rotation (M4.1–M4.3) |
 | Filters | Gaussian blur, sharpen, HSB adjustment, curves. Strokes made while a filter dialog is open are lost (M4.10) |
-| Saving | Projects save themselves in the browser two seconds after each change, when you go back to the Gallery or press Ctrl+S, and when the page is hidden or closed, which asks first while changes aren't saved. A save reads back and writes only the 256 × 256 tiles that changed, compressed, from a background worker, and lands whole or not at all. The title bar shows whether the work is saved, and the app asks the browser to keep its storage. The Gallery lists projects with thumbnails, stacks, sorting, rename, duplicate, delete with undo, and import of .qart files and images, and shows the storage used. There's no saving to a file on disk yet (M1.5) |
+| Saving | Projects save themselves in the browser two seconds after each change, when you go back to the Gallery or press Ctrl+S, and when the page is hidden or closed, which asks first while changes aren't saved. A save reads back and writes only the 256 × 256 tiles that changed, compressed, from a background worker, and lands whole or not at all. The title bar shows whether the work is saved, and the app asks the browser to keep its storage. Opening a project streams its tiles to the GPU a batch at a time, with a progress bar, and brings back its view, drawing guides and selected layer. The Gallery lists projects with thumbnails, stacks, sorting, rename, duplicate, delete with undo, and import of .qart files and images, and shows the storage used. There's no saving to a file on disk yet (M1.5) |
 | Export | PNG and JPEG work. PSD and .qart aren't connected yet (M1.6, M1.7) |
 | Rendering | WebGPU, or WebGL 2 where WebGPU isn't available |
 | Tests | Vitest unit tests, plus Playwright end-to-end and real-GPU pixel tests in Chromium (WebGPU and WebGL 2), Firefox and WebKit |

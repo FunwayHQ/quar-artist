@@ -97,6 +97,9 @@ export interface ReadTile extends TileAt {
 /** What changed since the last call, by layer id: the tiles touched ("x_y", sorted), or 'all'. */
 export type ChangedTiles = Record<string, string[] | 'all'>
 
+/** How `reopen` opens the saved document again. */
+export type ReopenVia = 'tiles' | 'layers'
+
 /** The API the harness page exposes as `window.__quar`. */
 export interface QuarHarness {
   readonly info: HarnessInfo
@@ -131,10 +134,13 @@ export interface QuarHarness {
   redo(): Promise<boolean>
 
   /**
-   * Read every layer as autosave does and load them back as opening a
-   * project does (M1.1): the round trip a saved document makes.
+   * Read every layer as a save does and open them again as opening a project
+   * does: the round trip a saved document makes. By default as tiles (plan
+   * M1.4): empty layers, then the tiles with something in them, premultiplied
+   * and padded as they are stored, put in a few at a time. Or as whole layers,
+   * as projects saved before M1.2 open (M1.1).
    */
-  reopen(): void
+  reopen(via?: ReopenVia): void
 
   /**
    * Read tiles of a layer back as an incremental save does, each with the

@@ -12,6 +12,8 @@ import { useUIStore } from '../../stores/uiStore.ts'
 import { decodeImageBlob } from '../importImage.ts'
 import { writeQart } from '../formats/qart/QartWriter.ts'
 import { FakeDocumentEngine, layerInfo } from '../../test/fakeDocumentEngine.ts'
+import { sameBytes } from '../../test/bytes.ts'
+import { defaultGuides, documentGuides, useGuideStore } from '../../stores/guideStore.ts'
 
 vi.mock('../importImage.ts', () => ({ decodeImageBlob: vi.fn() }))
 // jsdom has no 2D canvas to draw thumbnails with.
@@ -83,10 +85,12 @@ describe('ProjectService', () => {
     return (await tiles.load(projectId))?.layers.map((l) => l.info.id) ?? []
   }
 
-  async function openAndAttach(id: string) {
+  /** Open a project, hand it an engine of the project's size, and wait until its saved document is in (plan M1.4). */
+  async function openAndAttach(id: string, width = 2, height = 2) {
     expect(await service.openProject(id)).toBe(true)
-    const engine = new FakeDocumentEngine()
+    const engine = new FakeDocumentEngine(width, height)
     const detach = service.attachEngine(engine)
+    await service.settled()
     return { engine, detach }
   }
 
@@ -314,7 +318,8 @@ describe('ProjectService', () => {
       await service.start()
 
       const { engine } = await openAndAttach(id)
-      expect(engine.loads[0].layers.map((l) => l.pixels === null)).toEqual([false, false])
+      // The layer whose tile is gone opens transparent; the other as saved.
+      expect(engine.loads[0].layers.map((l) => l.pixels?.[0] ?? null)).toEqual([null, 2])
       expect(toasts()).toEqual([
         'Part of “Painting” couldn\'t be read and shows as transparent (1 tile of 256 × 256 px)',
       ])
@@ -502,6 +507,7 @@ describe('ProjectService', () => {
       // The canvas starts again for the new session, at the saved size.
       const reopened = new FakeDocumentEngine(2, 2)
       service.attachEngine(reopened)
+      await service.settled()
       expect(reopened.loads[0].layers.map((l) => l.pixels?.[0])).toEqual([1, 2])
       expect(reopened.following).toBe(true)
     })
@@ -1005,6 +1011,309 @@ describe('ProjectService', () => {
         'Imported “Good”',
       ])
       expect(store().projects.map((p) => p.name).sort()).toEqual(['Existing', 'Good'])
+    })
+  })
+
+  describe('opening a saved document (plan M1.4)', () => {
+    const W = 600
+    const H = 300
+    // 600 × 300 is 3 × 2 tiles.
+
+    /** Opaque pixels of one grey in the given tiles of a 600 × 300 layer. */
+    function inTiles(value: number, tiles: [number, number][]) {
+      const pixels = new Uint8Array(W * H * 4)
+      for (const [tx, ty] of tiles) {
+        for (let y = ty * 256; y < Math.min(H, ty * 256 + 256); y++) {
+          for (let x = tx * 256; x < Math.min(W, tx * 256 + 256); x++) pixels.set([value, value, value, 255], (y * W + x) * 4)
+        }
+      }
+      return pixels
+    }
+
+    const ALL: [number, number][] = [[0, 0], [1, 0], [2, 0], [0, 1], [1, 1], [2, 1]]
+
+    /** A saved 600 × 300 project: a background painted in all 6 tiles, ink in one. */
+    async function seedTiled(extra: Partial<ProjectRecord> = {}) {
+      const id = await db.createProject('Painting', W, H, 72)
+      await tiles.save(id, {
+        width: W,
+        height: H,
+        layers: [
+          { info: layerInfo('bg', 'Background'), pixels: inTiles(10, ALL) },
+          { info: layerInfo('ink', 'Ink'), pixels: inTiles(20, [[1, 1]]) },
+        ],
+      })
+      await db.updateProject(id, { activeLayerId: 'bg', ...extra }, { touch: false })
+      return id
+    }
+
+    beforeEach(() => {
+      service = new ProjectService(db, { debounceMs: 10, store: tiles, loadBatchTiles: 2 })
+    })
+
+    it('puts the tiles into the canvas a batch at a time, saving from it only once they are all in', async () => {
+      const id = await seedTiled()
+      await service.start()
+      const progress: (number | null)[] = []
+      const stop = useProjectStore.subscribe((s, prev) => {
+        if (s.openProgress !== prev.openProgress) progress.push(s.openProgress)
+      })
+      const events: string[] = []
+      const read = tiles.readTiles.bind(tiles)
+      vi.spyOn(tiles, 'readTiles').mockImplementation(async (...args) => {
+        events.push('read')
+        return read(...args)
+      })
+
+      expect(await service.openProject(id)).toBe(true)
+      // The canvas can't be used until it is in.
+      expect(store()).toMatchObject({ view: 'canvas', openProgress: 0 })
+      expect(await service.saveNow()).toBe(true)
+      expect(toasts()).toEqual([])
+
+      const engine = new FakeDocumentEngine(W, H)
+      const savingWhilePlaced: boolean[] = []
+      const place = engine.placeTiles.bind(engine)
+      vi.spyOn(engine, 'placeTiles').mockImplementation((...args) => {
+        events.push('place')
+        savingWhilePlaced.push(engine.following)
+        place(...args)
+      })
+      service.attachEngine(engine)
+      await service.settled()
+      stop()
+
+      // Background: 3 batches of 2; ink: 1 of 1.
+      expect(engine.placed.map((p) => [p.id, p.tiles.length])).toEqual([['bg', 2], ['bg', 2], ['bg', 2], ['ink', 1]])
+      // Each batch is read while the one before goes in: never more than two batches held.
+      expect(events).toEqual(['read', 'read', 'place', 'read', 'place', 'read', 'place', 'place'])
+      expect(progress).toEqual([0, 2 / 7, 4 / 7, 6 / 7, 1, null])
+      expect(savingWhilePlaced).toEqual([false, false, false, false])
+      expect(engine.following).toBe(true)
+
+      const [load] = engine.loads
+      expect(load.activeLayerId).toBe('bg')
+      expect(sameBytes(load.layers[0].pixels!, inTiles(10, ALL))).toBe(true)
+      expect(sameBytes(load.layers[1].pixels!, inTiles(20, [[1, 1]]))).toBe(true)
+      expect(store().openProgress).toBeNull()
+      // Opening isn't a change, and the next save builds on the save it opened.
+      expect(service.hasUnsavedChanges).toBe(false)
+      engine.paint(99, 300, 10)
+      await vi.waitFor(async () => expect((await (await getDB()).get('documents', id))?.seq).toBe(2))
+      expect(engine.tileReads).toEqual([{ id: 'bg', tiles: ['1_0'] }])
+    })
+
+    it('starts over from the new save when another tab saves the project while it opens', async () => {
+      const id = await seedTiled()
+      await service.start()
+      const read = tiles.readTiles.bind(tiles)
+      const spy = vi.spyOn(tiles, 'readTiles').mockImplementationOnce(async (...args) => {
+        // Another tab paints the background over: the tiles the outline names go.
+        await tiles.save(id, {
+          width: W,
+          height: H,
+          layers: [{ info: layerInfo('bg', 'Background'), pixels: inTiles(30, ALL) }],
+        })
+        return read(...args)
+      })
+
+      const { engine } = await openAndAttach(id, W, H)
+
+      expect(spy.mock.calls.length).toBeGreaterThan(3)
+      expect(engine.loads).toHaveLength(1)
+      expect(engine.loads[0].layers.map((l) => l.info.id)).toEqual(['bg'])
+      expect(sameBytes(engine.loads[0].layers[0].pixels!, inTiles(30, ALL))).toBe(true)
+      expect(engine.following).toBe(true)
+      expect(toasts()).toEqual([])
+    })
+
+    it("leaves the project as saved and shows the Gallery when its tiles can't be read", async () => {
+      const id = await seedTiled()
+      await service.start()
+      vi.spyOn(tiles, 'readTiles').mockRejectedValue(new Error('the disk went away'))
+
+      const { engine } = await openAndAttach(id, W, H)
+
+      expect(store()).toMatchObject({ view: 'gallery', currentProjectId: null, openProgress: null })
+      expect(toasts()).toEqual(["Couldn't open “Painting”: the disk went away"])
+      expect(engine.following).toBe(false)
+      expect(engine.loads).toEqual([])
+      expect(service.hasUnsavedChanges).toBe(false)
+      expect(await (await getDB()).get('documents', id)).toMatchObject({ seq: 1 })
+    })
+
+    it('loads into the new engine when the canvas restarts while it opens, and stops loading into the old one', async () => {
+      const id = await seedTiled()
+      await service.start()
+      let release!: () => void
+      const held = new Promise<void>((resolve) => (release = resolve))
+      const read = tiles.readTiles.bind(tiles)
+      const spy = vi.spyOn(tiles, 'readTiles').mockImplementationOnce(async (...args) => {
+        await held
+        return read(...args)
+      })
+
+      expect(await service.openProject(id)).toBe(true)
+      const first = new FakeDocumentEngine(W, H)
+      const detach = service.attachEngine(first)
+      await vi.waitFor(() => expect(spy).toHaveBeenCalled())
+      detach()
+      const second = new FakeDocumentEngine(W, H)
+      service.attachEngine(second)
+      release()
+      await service.settled()
+
+      expect(first.placed).toEqual([])
+      expect(first.following).toBe(false)
+      expect(second.loads).toHaveLength(1)
+      expect(sameBytes(second.loads[0].layers[0].pixels!, inTiles(10, ALL))).toBe(true)
+      expect(second.following).toBe(true)
+      expect(store().openProgress).toBeNull()
+    })
+
+    it('loads once into an engine that comes back while its document loads (React StrictMode)', async () => {
+      const id = await seedTiled()
+      await service.start()
+      expect(await service.openProject(id)).toBe(true)
+      const engine = new FakeDocumentEngine(W, H)
+      service.attachEngine(engine)()
+      service.attachEngine(engine)
+      // Not saved from until the document is in.
+      expect(engine.following).toBe(false)
+      await service.settled()
+
+      expect(engine.loads).toHaveLength(1)
+      expect(engine.placed).toHaveLength(4)
+      expect(engine.following).toBe(true)
+    })
+
+    it('keeps a restarted canvas from being used until the last save is in it again', async () => {
+      const id = await seedProject('Painting')
+      await service.start()
+      const { detach } = await openAndAttach(id)
+      expect(store().openProgress).toBeNull()
+
+      let release!: () => void
+      const held = new Promise<void>((resolve) => (release = resolve))
+      const read = tiles.readTiles.bind(tiles)
+      const spy = vi.spyOn(tiles, 'readTiles').mockImplementationOnce(async (...args) => {
+        await held
+        return read(...args)
+      })
+      // The canvas restarts (the error screen's Retry, a lost GPU context): a new, empty engine.
+      detach()
+      const restarted = new FakeDocumentEngine()
+      service.attachEngine(restarted)
+      // At once: the overlay covers it, and shortcuts, paste and drop wait.
+      expect(store().openProgress).toBe(0)
+      await vi.waitFor(() => expect(spy).toHaveBeenCalled())
+      expect(store().openProgress).toBe(0)
+      // Ctrl+S doesn't claim to have saved what the canvas doesn't have yet.
+      expect(await service.saveNow()).toBe(true)
+      expect(toasts()).toEqual([])
+
+      release()
+      await service.settled()
+      expect(store().openProgress).toBeNull()
+      expect(restarted.loads.map((l) => l.layers.map((layer) => layer.pixels?.[0]))).toEqual([[1, 2]])
+      expect(restarted.following).toBe(true)
+    })
+
+    it('keeps a restarted canvas from being used while a project saved the old way loads into it again', async () => {
+      const id = await db.createProject('Old', 2, 2, 72)
+      await writeLegacyLayers(id, [{ info: layerInfo('bg', 'Background'), pixels: filled(5) }])
+      await service.start()
+      const { detach } = await openAndAttach(id)
+      expect(store().openProgress).toBeNull()
+
+      let release!: () => void
+      const held = new Promise<void>((resolve) => (release = resolve))
+      const getProject = db.getProject.bind(db)
+      const spy = vi.spyOn(db, 'getProject').mockImplementationOnce(async (...args) => {
+        await held
+        return getProject(...args)
+      })
+      detach()
+      const restarted = new FakeDocumentEngine()
+      service.attachEngine(restarted)
+      await vi.waitFor(() => expect(spy).toHaveBeenCalled())
+      expect(store().openProgress).toBe(0)
+
+      release()
+      await service.settled()
+      expect(store().openProgress).toBeNull()
+      expect(restarted.loads.map((l) => l.layers.map((layer) => layer.pixels?.[0]))).toEqual([[5]])
+    })
+
+    it('opens a new project at once, with nothing to load', async () => {
+      await service.start()
+      expect(store()).toMatchObject({ view: 'canvas', openProgress: null })
+      const engine = new FakeDocumentEngine()
+      service.attachEngine(engine)
+      expect(engine.following).toBe(true)
+    })
+
+    it('opens a project with the view and guides it was saved with', async () => {
+      const view = { x: 120, y: 80, zoom: 3, rotation: 0.5 }
+      const guides = { ...defaultGuides(W, H), gridEnabled: true, gridSpacing: 64, symmetryEnabled: true, symmetryCenterX: 100 }
+      const id = await seedTiled({ view, guides })
+      useGuideStore.getState().setQuickShapeEnabled(true)
+      await service.start()
+
+      const { engine } = await openAndAttach(id, W, H)
+      expect(store().initialView).toEqual(view)
+      expect(documentGuides(useGuideStore.getState())).toEqual(guides)
+      // QuickShape is the user's, not the project's.
+      expect(useGuideStore.getState().quickShapeEnabled).toBe(true)
+      expect(engine.loads[0].activeLayerId).toBe('bg')
+      // Showing them isn't a change.
+      expect(service.hasUnsavedChanges).toBe(false)
+      expect(store().takeInitialView()).toEqual(view)
+      expect(store().takeInitialView()).toBeNull()
+    })
+
+    it("gives a project without guides fresh ones centred on it, not the last project's", async () => {
+      const id = await seedTiled({ guides: { ...defaultGuides(W, H), gridEnabled: true } })
+      await service.start()
+      await openAndAttach(id, W, H)
+      expect(useGuideStore.getState().gridEnabled).toBe(true)
+
+      expect(await service.createProject({ name: 'Next', width: 640, height: 480, dpi: 72, colorSpace: 'srgb' })).toBe(true)
+      expect(useGuideStore.getState()).toMatchObject({ gridEnabled: false, symmetryCenterX: 320, symmetryCenterY: 240 })
+      expect(store().initialView).toBeNull()
+    })
+
+    it('saves the guides soon after they change, and the view when the project closes', async () => {
+      const id = await seedTiled()
+      await service.start()
+      const { engine } = await openAndAttach(id, W, H)
+
+      useGuideStore.getState().setSymmetryEnabled(true)
+      expect(service.hasUnsavedChanges).toBe(true)
+      await vi.waitFor(async () => expect((await db.getProject(id))!.guides?.symmetryEnabled).toBe(true))
+
+      // QuickShape isn't the project's: no save for it.
+      await vi.waitFor(() => expect(service.hasUnsavedChanges).toBe(false))
+      useGuideStore.getState().setQuickShapeEnabled(true)
+      expect(service.hasUnsavedChanges).toBe(false)
+
+      // Zooming and choosing a layer aren't edits: they are written as the project closes.
+      engine.view = { x: 10, y: 20, zoom: 0.5, rotation: 0 }
+      engine.activeLayerId = 'ink'
+      expect(service.hasUnsavedChanges).toBe(false)
+      const modified = (await db.getProject(id))!.updatedAt
+      expect(await service.goToGallery()).toBe(true)
+      expect(await db.getProject(id)).toMatchObject({ view: engine.view, activeLayerId: 'ink', updatedAt: modified })
+    })
+
+    it('writes nothing when a project is opened and closed as it was', async () => {
+      const id = await seedTiled({ view: { x: 300, y: 150, zoom: 1, rotation: 0 } })
+      await service.start()
+      const { engine } = await openAndAttach(id, W, H)
+      engine.view = { x: 300, y: 150, zoom: 1, rotation: 0 }
+      const update = vi.spyOn(db, 'updateProject')
+      expect(await service.goToGallery()).toBe(true)
+      expect(update).not.toHaveBeenCalled()
     })
   })
 

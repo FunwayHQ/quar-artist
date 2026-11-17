@@ -1,8 +1,9 @@
 import { useProjectStore } from '../../stores/projectStore.ts'
 import { useUIStore, type ToastOptions } from '../../stores/uiStore.ts'
+import { documentGuides, savedGuides, useGuideStore } from '../../stores/guideStore.ts'
 import { MetadataDB } from './MetadataDB.ts'
-import { DocumentSession, type DocumentEngine, type SavedBase } from './DocumentSession.ts'
-import type { DocumentStore, SaveLayer } from '../tiles/TileStore.ts'
+import { DocumentSession, type DocumentEngine, type PlacedTile, type SavedBase } from './DocumentSession.ts'
+import { isStaleLoad, type DocumentOutline, type DocumentStore, type SaveLayer, type TileRequest } from '../tiles/TileStore.ts'
 import { createDocumentStore } from '../tiles/WorkerDocumentStore.ts'
 import { TILE_SIZE, savedLayerInfo } from '../tiles/tileFormat.ts'
 import type { SaveStatus } from './AutoSave.ts'
@@ -33,6 +34,9 @@ export const DEFAULT_PROJECT: NewProjectConfig = {
 }
 
 const GALLERY_SORTS: readonly GallerySort[] = ['updated', 'created', 'name']
+
+/** Tiles read and put into the canvas at a time while a document opens: 16 MB of pixels (plan M1.4). */
+export const LOAD_BATCH_TILES = 64
 
 /** What kind of file the Gallery was given to import. */
 export function importKind(file: Pick<File, 'name' | 'type'>): 'qart' | 'psd' | 'image' | 'other' {
@@ -86,40 +90,47 @@ function newLayerInfo(name: string): LayerInfo {
   }
 }
 
-/** A saved document: the project record, at the document's size, and its layers, bottom first. */
+/** A saved document, ready to load into an engine: the project record, at the document's size, and its layers. */
 interface LoadedDocument {
   project: ProjectRecord
+  /**
+   * The layers to make, bottom first: whole, for a document saved before the
+   * tile store, or without pixels, for one whose tiles load into them next.
+   */
   layers: StoredLayer[]
   activeLayerId: string | null
-  /** Tiles that couldn't be read, which show as transparent. */
-  unreadableTiles: number
-  /** The save it is (`SaveReport.seq`), or null for one saved before the tile store. */
-  seq: number | null
+  /** Where the tiles to load are, and the save they belong to; null for a document saved before the tile store. */
+  outline: DocumentOutline | null
 }
 
 /** A document waiting for its engine. */
 interface PendingDocument {
   sessionId: string
-  layers: StoredLayer[]
-  activeLayerId: string | null
-  base: SavedBase | null
+  doc: LoadedDocument
 }
 
 /**
  * The save a loaded document is, for its next saves to build on (plan M1.3).
  * None for one saved before the tile store, or with tiles that couldn't be
  * read: they show as transparent, so its next save writes whole layers and
- * saves what it shows.
+ * saves what it shows. None either when the engine didn't make the saved
+ * layers as they were (repeated ids, too many layers).
  */
-function baseOf(doc: LoadedDocument): SavedBase | null {
-  if (doc.seq === null || doc.unreadableTiles > 0) return null
-  return {
-    seq: doc.seq,
-    width: doc.project.width,
-    height: doc.project.height,
-    layers: new Set(doc.layers.map((l) => l.info.id)),
-  }
+function baseOf(doc: LoadedDocument, made: readonly string[], unreadableTiles: number): SavedBase | null {
+  const { outline } = doc
+  if (!outline || unreadableTiles > 0) return null
+  const saved = outline.layers.map((l) => l.info.id)
+  if (made.length !== saved.length || made.some((id, i) => id !== saved[i])) return null
+  return { seq: outline.seq, width: outline.width, height: outline.height, layers: new Set(saved) }
 }
+
+/** Whether two guide settings are the same for a document. */
+function sameGuides(a: Parameters<typeof documentGuides>[0], b: Parameters<typeof documentGuides>[0]): boolean {
+  return JSON.stringify(documentGuides(a)) === JSON.stringify(documentGuides(b))
+}
+
+/** Stops the started service hearing about guide changes. */
+let unwatchGuides: (() => void) | null = null
 
 /**
  * The project lifecycle and the Gallery: create, open, close, rename, delete,
@@ -133,6 +144,7 @@ export class ProjectService {
   private readonly db: MetadataDB
   private readonly tiles: DocumentStore
   private readonly debounceMs: number | undefined
+  private readonly loadBatchTiles: number
   private session: DocumentSession | null = null
   private pending: PendingDocument | null = null
   private engine: DocumentEngine | null = null
@@ -148,11 +160,24 @@ export class ProjectService {
   private saveErrorShown = false
   /** Whether the browser was asked to keep this site's storage (once a save worked). */
   private persistAsked = false
+  /** The engine the open document is loading into, until it is all in and saved from (plan M1.4). */
+  private loadingInto: DocumentEngine | null = null
+  /** True while a document's guides are being shown: that isn't a change to save. */
+  private showingGuides = false
 
-  constructor(db = new MetadataDB(), options: { debounceMs?: number; store?: DocumentStore } = {}) {
+  constructor(
+    db = new MetadataDB(),
+    options: { debounceMs?: number; store?: DocumentStore; loadBatchTiles?: number } = {},
+  ) {
     this.db = db
     this.tiles = options.store ?? createDocumentStore()
     this.debounceMs = options.debounceMs
+    this.loadBatchTiles = Math.max(1, options.loadBatchTiles ?? LOAD_BATCH_TILES)
+  }
+
+  /** Wait for the lifecycle steps asked for so far (opening, loading into the canvas, closing) to finish. */
+  settled(): Promise<void> {
+    return this.queue.then(() => undefined)
   }
 
   private get store() {
@@ -188,6 +213,12 @@ export class ProjectService {
    */
   start(): Promise<void> {
     setDatabaseEventListener((event) => this.onDatabaseEvent(event))
+    // The guides are the document's: changing them is a change to save (plan M1.4).
+    // Like storage events, they go to the service that started last.
+    unwatchGuides?.()
+    unwatchGuides = useGuideStore.subscribe((state, prev) => {
+      if (!this.showingGuides && !sameGuides(state, prev)) this.session?.noteSettingsChange()
+    })
     this.started ??= this.run(async () => {
       try {
         await this.purgeDeleted()
@@ -298,8 +329,8 @@ export class ProjectService {
           this.toast(`${name} no longer exists`, 'error')
           return false
         }
+        // Its tiles load once the canvas is up (`attachEngine`).
         this.beginSession(doc.project, doc)
-        this.reportUnreadable(doc)
         await this.rememberLast(id)
         return true
       } catch (err) {
@@ -326,7 +357,8 @@ export class ProjectService {
 
   /** Save the open project now (Ctrl+S) and say how it went. */
   async saveNow(): Promise<boolean> {
-    if (this.store.getState().view !== 'canvas') return true
+    // Nothing can have changed in a document still opening.
+    if (this.store.getState().view !== 'canvas' || this.store.getState().openProgress !== null) return true
     const session = this.session
     const name = q(this.store.getState().currentProjectName)
     if (!session) {
@@ -409,15 +441,17 @@ export class ProjectService {
 
     const pending = this.pending
     if (pending && pending.sessionId === this.store.getState().sessionId) {
-      engine.loadDocument(pending.layers, pending.activeLayerId)
-      session.setBase(pending.base)
+      // The document the session opened with: load it, then save from it.
       this.pending = null
-      session.attach(engine)
+      this.startLoad(session, engine, pending.doc)
+    } else if (this.loadingInto === engine) {
+      // Back while its document loads (React runs effects twice in
+      // development): the load saves from it once it is all in.
     } else if (session.isNewEngine(engine)) {
       // The canvas restarted with a new, empty engine. What the old one had
       // since the last save went with it: bring the last save back first.
       session.forgetUnsaved()
-      void this.run(() => this.reloadInto(session, engine))
+      this.startLoad(session, engine, null)
     } else {
       session.attach(engine)
     }
@@ -430,58 +464,162 @@ export class ProjectService {
     }
   }
 
-  /**
-   * Load the last save into a restarted canvas's engine, then save from it.
-   * If that fails, the project is left as saved: saving the empty engine would wipe it.
-   */
-  private async reloadInto(session: DocumentSession, engine: DocumentEngine) {
-    if (this.session !== session || this.engine !== engine) return
-    // A save of what the old engine had may still be running: load what it leaves.
-    await session.settled()
-    if (this.session !== session || this.engine !== engine) return
-    const name = q(this.store.getState().currentProjectName)
-    let doc: LoadedDocument | null = null
-    let failure: unknown = null
-    try {
-      doc = await this.loadDocument(session.projectId)
-    } catch (err) {
-      failure = err
-    }
-    if (this.session !== session || this.engine !== engine) return
+  /** Load a document into an engine, after the lifecycle steps before. `doc` null reads the last save again. */
+  private startLoad(session: DocumentSession, engine: DocumentEngine, doc: LoadedDocument | null) {
+    session.beginLoad(engine)
+    this.loadingInto = engine
+    // Every load keeps the canvas from being used until it is all in, a
+    // restarted canvas loading the last save again too: what it took would be
+    // replaced by the load, and never saved.
+    this.store.getState().setOpenProgress(0)
+    void this.run(() => this.loadInto(session, engine, doc))
+  }
 
-    if (!doc) {
-      session.discard()
+  /** Whether the session is still the open one, shown by this engine. */
+  private current(session: DocumentSession, engine: DocumentEngine): boolean {
+    return this.session === session && this.engine === engine
+  }
+
+  /**
+   * Load the session's document into its engine, then save from it (plan
+   * M1.4). The layers are made first, empty, and the saved tiles go into them
+   * a batch at a time while the canvas shows how far it has got. Without
+   * `given`, the last save is read again: the canvas restarted, and what the
+   * old engine had since went with it.
+   *
+   * Nothing is saved from the engine until the document is all in: saving it
+   * half-loaded would lose the rest. If it can't be loaded, the project is
+   * left as saved and the Gallery shows.
+   */
+  private async loadInto(session: DocumentSession, engine: DocumentEngine, given: LoadedDocument | null) {
+    const reopening = given === null
+    const name = () => q(this.store.getState().currentProjectName)
+    try {
+      for (let attempt = 0; ; attempt++) {
+        if (!this.current(session, engine)) return
+        let doc = given
+        given = null
+        if (!doc) {
+          // A save of what an old engine had may still be running: load what it leaves.
+          await session.settled()
+          if (!this.current(session, engine)) return
+          doc = await this.loadDocument(session.projectId)
+          if (!this.current(session, engine)) return
+          if (!doc) {
+            await this.closeFailed(session, `${name()} no longer exists`)
+            return
+          }
+        }
+
+        const size = engine.getDocumentSize()
+        if (size.width !== doc.project.width || size.height !== doc.project.height) {
+          // The canvas has another size than the save (a Canvas Size not saved
+          // yet, or another tab resized it): open it again at the saved size.
+          session.discard()
+          this.beginSession(doc.project, doc)
+          return
+        }
+
+        const made = engine.loadDocument(doc.layers, doc.activeLayerId)
+        let unreadable = 0
+        if (doc.outline) {
+          try {
+            const result = await this.streamTiles(session, engine, doc.outline, made)
+            if (result === null) return
+            unreadable = result
+          } catch (err) {
+            // Saved again meanwhile (another tab), so its tiles may be gone: start over from that save.
+            if (isStaleLoad(err) && attempt < 2) continue
+            throw err
+          }
+        }
+        engine.finishLoading()
+        session.setBase(baseOf(doc, made, unreadable))
+        this.store.getState().setOpenProgress(null)
+        session.attach(engine)
+        this.reportUnreadable(doc.project.name, unreadable)
+        return
+      }
+    } catch (err) {
+      if (!this.current(session, engine)) return
+      await this.closeFailed(
+        session,
+        reopening ? `Couldn't reopen ${name()} after the canvas restarted: ${describe(err)}` : `Couldn't open ${name()}: ${describe(err)}`,
+      )
+    } finally {
+      if (this.loadingInto === engine) this.loadingInto = null
+    }
+  }
+
+  /**
+   * Put an outline's tiles into the layers the engine made for it, a batch at
+   * a time, reading the next batch while one goes in: only two batches of
+   * pixels are ever held, never the whole document. Returns how many tiles
+   * couldn't be read (they stay transparent), or null when the session or
+   * its engine went meanwhile.
+   */
+  private async streamTiles(
+    session: DocumentSession,
+    engine: DocumentEngine,
+    outline: DocumentOutline,
+    made: readonly string[],
+  ): Promise<number | null> {
+    const batches: { layerId: string; request: TileRequest }[] = []
+    outline.layers.forEach((layer, i) => {
+      // Past the layer limit, the engine made none.
+      const layerId = made[i]
+      if (layerId === undefined) return
+      for (let start = 0; start < layer.tiles.length; start += this.loadBatchTiles) {
+        const tiles = layer.tiles.slice(start, start + this.loadBatchTiles)
+        batches.push({ layerId, request: { seq: outline.seq, backend: outline.backend, layerId: layer.info.id, tiles } })
+      }
+    })
+    const total = batches.reduce((n, b) => n + b.request.tiles.length, 0)
+    const read = (b: number) => {
+      const reading = this.tiles.readTiles(session.projectId, batches[b].request)
+      // Awaited below, unless loading stops first: then its failure doesn't matter.
+      reading.catch(() => undefined)
+      return reading
+    }
+
+    let unreadable = 0
+    let done = 0
+    let next = batches.length > 0 ? read(0) : null
+    for (let b = 0; b < batches.length; b++) {
+      const tiles = await next!
+      next = b + 1 < batches.length ? read(b + 1) : null
+      if (!this.current(session, engine)) return null
+      const { layerId, request } = batches[b]
+      const placed: PlacedTile[] = []
+      request.tiles.forEach(({ x, y }, t) => {
+        const data = tiles[t]
+        if (data) placed.push({ x, y, data })
+        else unreadable++
+      })
+      engine.placeTiles(layerId, placed)
+      done += request.tiles.length
+      this.store.getState().setOpenProgress(done / total)
+    }
+    return unreadable
+  }
+
+  /** A document that couldn't be loaded closes without saving, leaving the project as saved, and the Gallery says why. */
+  private async closeFailed(session: DocumentSession, message: string) {
+    session.discard()
+    if (this.session === session) {
       this.session = null
       this.pending = null
-      this.store.getState().clearCurrentProject()
-      await this.refresh().catch(() => undefined)
-      this.toast(
-        failure ? `Couldn't reopen ${name} after the canvas restarted: ${describe(failure)}` : `${name} no longer exists`,
-        'error',
-      )
-      return
     }
-
-    const size = engine.getDocumentSize()
-    if (size.width !== doc.project.width || size.height !== doc.project.height) {
-      // The canvas restarted at a size the project wasn't saved at (a Canvas
-      // Size not saved yet): open it again at its saved size.
-      session.discard()
-      this.beginSession(doc.project, doc)
-      this.reportUnreadable(doc)
-      return
-    }
-    engine.loadDocument(doc.layers, doc.activeLayerId)
-    session.setBase(baseOf(doc))
-    session.attach(engine)
-    this.reportUnreadable(doc)
+    this.store.getState().clearCurrentProject()
+    await this.refresh().catch(() => undefined)
+    this.toast(message, 'error')
   }
 
   /** Say so when part of a document couldn't be read: it opened with those tiles transparent. */
-  private reportUnreadable({ project, unreadableTiles: n }: LoadedDocument) {
+  private reportUnreadable(name: string, n: number) {
     if (n === 0) return
     const tiles = `${n} ${n === 1 ? 'tile' : 'tiles'} of ${TILE_SIZE} × ${TILE_SIZE} px`
-    this.toast(`Part of ${q(project.name)} couldn't be read and shows as transparent (${tiles})`, 'error', {
+    this.toast(`Part of ${q(name)} couldn't be read and shows as transparent (${tiles})`, 'error', {
       durationMs: 15000,
     })
   }
@@ -500,17 +638,27 @@ export class ProjectService {
   }
 
   private beginSession(
-    project: Pick<ProjectRecord, 'id' | 'name' | 'width' | 'height' | 'dpi' | 'colorSpace'>,
+    project: Pick<ProjectRecord, 'id' | 'name' | 'width' | 'height' | 'dpi' | 'colorSpace' | 'view' | 'guides' | 'activeLayerId'>,
     doc: LoadedDocument | null,
   ) {
     this.saveErrorShown = false
-    this.session = new DocumentSession(
+    this.loadingInto = null
+    // Its guides, or fresh ones centred on it (plan M1.4), before the session: showing them isn't a change.
+    this.showGuides(project.guides, project.width, project.height)
+    const session = new DocumentSession(
       project.id,
       this.db,
       this.tiles,
       (status, error) => this.onSaveStatus(status, error),
       this.debounceMs,
     )
+    // The guides as shown (checked, or fresh ones): a project left as it opened writes nothing when it closes.
+    session.setSettingsSource(() => ({ guides: documentGuides(useGuideStore.getState()) }), {
+      view: project.view,
+      guides: documentGuides(useGuideStore.getState()),
+      activeLayerId: project.activeLayerId,
+    })
+    this.session = session
     this.store.getState().openDocument({
       id: project.id,
       name: project.name,
@@ -518,16 +666,30 @@ export class ProjectService {
       height: project.height,
       dpi: project.dpi,
       colorSpace: project.colorSpace ?? 'srgb',
+      view: project.view ?? null,
+      // Until it is in, the canvas can't be used: whatever was done on it would be lost.
+      loadsSaved: doc !== null,
     })
     const sessionId = this.store.getState().sessionId
-    this.pending =
-      doc && sessionId ? { sessionId, layers: doc.layers, activeLayerId: doc.activeLayerId, base: baseOf(doc) } : null
+    this.pending = doc && sessionId ? { sessionId, doc } : null
+  }
+
+  /** Show a document's guides: the ones it saved, or none, centred on it. */
+  private showGuides(saved: unknown, width: number, height: number) {
+    this.showingGuides = true
+    try {
+      useGuideStore.getState().loadGuides(savedGuides(saved, width, height))
+    } finally {
+      this.showingGuides = false
+    }
   }
 
   private openUnsaved(config: NewProjectConfig) {
     this.session = null
     this.pending = null
+    this.loadingInto = null
     this.unsavedChanged = false
+    this.showGuides(undefined, config.width, config.height)
     this.store.getState().openDocument({ id: null, ...config })
   }
 
@@ -562,21 +724,27 @@ export class ProjectService {
     this.saveErrorShown = true
   }
 
+  /**
+   * A saved project, ready to load: its record and the outline of its saved
+   * document, whose tiles load into the canvas once it is up (plan M1.4).
+   * Null when the project is gone.
+   */
   private async loadDocument(id: string): Promise<LoadedDocument | null> {
     const project = await this.db.getProject(id)
     if (!project || project.deletedAt) return null
     const activeLayerId = project.activeLayerId ?? null
     // A project saved the old way can move to tiles, in another tab, between the two reads: then read again.
     for (let attempt = 0; attempt < 3; attempt++) {
-      const saved = await this.tiles.load(id)
-      if (saved) {
+      const outline = await this.tiles.outline(id)
+      if (outline) {
         // The saved document's size wins over the record's, which a failed save may not have updated.
-        const { width, height, layers, unreadableTiles, seq } = saved
-        return { project: { ...project, width, height }, layers, activeLayerId, unreadableTiles, seq }
+        const { width, height } = outline
+        const layers = outline.layers.map(({ info }) => ({ info, pixels: null }))
+        return { project: { ...project, width, height }, layers, activeLayerId, outline }
       }
       // Saved before the tile store, as whole layers: its next save moves it to tiles.
       const layers = await this.db.loadLegacyLayers(id, project.width, project.height)
-      if (layers) return { project, layers, activeLayerId, unreadableTiles: 0, seq: null }
+      if (layers) return { project, layers, activeLayerId, outline: null }
     }
     throw new Error('another tab kept saving it while it opened')
   }

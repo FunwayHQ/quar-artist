@@ -177,4 +177,25 @@ describe('ViewTransform', () => {
       expect(() => vt.pan(1, 1)).not.toThrow()
     })
   })
+
+  describe('centerOn (plan M1.4)', () => {
+    it('shows a canvas point at a screen point, at the zoom and rotation asked for', () => {
+      const onChange = vi.fn()
+      vt.setChangeCallback(onChange)
+      vt.centerOn(300, 120, 2.5, 0.7, 400, 250)
+
+      const at = vt.screenToCanvas(400, 250)
+      expect(at.x).toBeCloseTo(300, 9)
+      expect(at.y).toBeCloseTo(120, 9)
+      expect(vt.getState()).toMatchObject({ zoom: 2.5, rotation: 0.7 })
+      expect(onChange).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps the zoom within its limits', () => {
+      vt.centerOn(0, 0, 1000, 0, 0, 0)
+      expect(vt.getState().zoom).toBe(64)
+      vt.centerOn(0, 0, 0.001, 0, 0, 0)
+      expect(vt.getState().zoom).toBe(0.1)
+    })
+  })
 })

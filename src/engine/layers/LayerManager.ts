@@ -14,7 +14,13 @@ export interface Layer {
   tileManager: TileManager
 }
 
-export type LayerChangeCallback = (layers: LayerInfo[], activeId: string) => void
+/**
+ * What a layer notice is about: the document (layers made, deleted,
+ * reordered, resized or changed), only which layer is selected, or only the
+ * Layers panel's thumbnails. Only the first is an edit to save (plan M1.4).
+ */
+export type LayerChangeKind = 'document' | 'selection' | 'thumbnails'
+export type LayerChangeCallback = (layers: LayerInfo[], activeId: string, kind: LayerChangeKind) => void
 export type StructuralChangeCallback = () => void
 /**
  * A layer's pixels changed outside the undo history: throughout ('all'), or
@@ -290,7 +296,7 @@ export class LayerManager {
     if (this.layers.find((l) => l.info.id === id)) {
       this.activeLayerId = id
       this.notifyStructuralChange()
-      this.notifyChange()
+      this.notifyChange('selection')
     }
   }
 
@@ -420,7 +426,7 @@ export class LayerManager {
     layerSprite.destroy?.()
     thumbContainer.destroy?.({ children: true })
     thumbTex.destroy(true)
-    this.notifyChange()
+    this.notifyChange('thumbnails')
   }
 
   /** Destroy all layers and free GPU resources. */
@@ -433,8 +439,8 @@ export class LayerManager {
     this.app = null
   }
 
-  private notifyChange() {
-    this.onChange?.(this.getLayerInfos(), this.activeLayerId)
+  private notifyChange(kind: LayerChangeKind = 'document') {
+    this.onChange?.(this.getLayerInfos(), this.activeLayerId, kind)
   }
 
   private notifyStructuralChange() {

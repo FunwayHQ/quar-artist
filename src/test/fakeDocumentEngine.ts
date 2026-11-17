@@ -1,4 +1,6 @@
-import type { DocumentEngine } from '../io/persistence/DocumentSession.ts'
+import type { DocumentEngine, PlacedTile } from '../io/persistence/DocumentSession.ts'
+import { placeTile } from '../io/tiles/tileFormat.ts'
+import type { SavedView } from '../types/engine.ts'
 import type { LayerInfo, StoredLayer } from '../types/layer.ts'
 import { TILE_SIZE, cutTiles, tileKey, type TileChanges, type TilePosition } from '../utils/tiles.ts'
 
@@ -26,8 +28,17 @@ export class FakeDocumentEngine implements DocumentEngine {
   readonly height: number
   layers: { info: LayerInfo; pixels: Uint8Array }[]
   activeLayerId: string
-  /** Every document loaded into this engine, in order. */
+  /**
+   * Every document loaded into this engine, in order, once it finished
+   * loading: its layers with the pixels they got (null for one left empty).
+   */
   readonly loads: { layers: readonly StoredLayer[]; activeLayerId: string | null }[] = []
+  /** The tiles placed into each layer while documents loaded, in order. */
+  readonly placed: { id: string; tiles: string[] }[] = []
+  /** The view `getView` gives. */
+  view: SavedView | null = null
+  /** A document being loaded: which of its layers have pixels so far. */
+  private loading: { activeLayerId: string | null; filled: boolean[] } | null = null
   /** Stands in for a filter or transform preview on screen. */
   previewing = false
   /** Stands in for a stroke being drawn. */
@@ -64,12 +75,38 @@ export class FakeDocumentEngine implements DocumentEngine {
   }
 
   loadDocument(layers: readonly StoredLayer[], activeLayerId: string | null) {
-    this.loads.push({ layers, activeLayerId })
     this.layers = layers.map((l) => ({ info: { ...l.info }, pixels: l.pixels ? new Uint8Array(l.pixels) : this.blank() }))
-    if (this.layers.length === 0) this.layers = [{ info: layerInfo('default', 'Layer 1'), pixels: this.blank() }]
+    this.loading = { activeLayerId, filled: layers.map((l) => l.pixels !== null) }
+    if (this.layers.length === 0) {
+      this.layers = [{ info: layerInfo('default', 'Layer 1'), pixels: this.blank() }]
+      this.loading.filled = [false]
+    }
     const ids = this.layers.map((l) => l.info.id)
     this.activeLayerId = activeLayerId && ids.includes(activeLayerId) ? activeLayerId : ids[ids.length - 1]
     this.changes.clear()
+    return ids
+  }
+
+  placeTiles(id: string, tiles: readonly PlacedTile[]) {
+    const index = this.layers.findIndex((l) => l.info.id === id)
+    if (index < 0 || tiles.length === 0) return
+    const pixels = new Uint8ClampedArray(this.layers[index].pixels.buffer)
+    for (const tile of tiles) placeTile(tile.data, pixels, this.width, this.height, tile.x, tile.y)
+    this.placed.push({ id, tiles: tiles.map((t) => tileKey(t.x, t.y)) })
+    if (this.loading) this.loading.filled[index] = true
+  }
+
+  finishLoading() {
+    const filled = this.loading?.filled ?? []
+    this.loads.push({
+      layers: this.layers.map((l, i) => ({ info: { ...l.info }, pixels: filled[i] ? l.pixels.slice() : null })),
+      activeLayerId: this.loading?.activeLayerId ?? null,
+    })
+    this.loading = null
+  }
+
+  getView() {
+    return this.view
   }
 
   getDocumentSize() {

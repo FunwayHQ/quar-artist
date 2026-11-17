@@ -1,7 +1,7 @@
 import type { ViewState } from '../../types/engine.ts'
 
-const MIN_ZOOM = 0.1
-const MAX_ZOOM = 64
+export const MIN_ZOOM = 0.1
+export const MAX_ZOOM = 64
 const ZOOM_SENSITIVITY = 0.001
 
 /**
@@ -84,6 +84,24 @@ export class ViewTransform {
     const x = (viewportW - docW * zoom) / 2
     const y = (viewportH - docH * zoom) / 2
     this.state = { x, y, zoom, rotation: 0 }
+    this.notify()
+  }
+
+  /**
+   * Show the canvas point (`canvasX`, `canvasY`) at the screen point
+   * (`screenX`, `screenY`), at this zoom and rotation.
+   */
+  centerOn(canvasX: number, canvasY: number, zoom: number, rotation: number, screenX: number, screenY: number) {
+    const z = clamp(zoom, MIN_ZOOM, MAX_ZOOM)
+    const cos = Math.cos(rotation)
+    const sin = Math.sin(rotation)
+    // A canvas point p shows at R(rotation) * p * zoom + (x, y).
+    this.state = {
+      x: screenX - z * (cos * canvasX - sin * canvasY),
+      y: screenY - z * (sin * canvasX + cos * canvasY),
+      zoom: z,
+      rotation,
+    }
     this.notify()
   }
 

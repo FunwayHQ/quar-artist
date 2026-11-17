@@ -1,16 +1,17 @@
 import {
   BufferImageSource,
+  Container,
   Rectangle,
   RendererType,
   Sprite,
   Texture,
-  type Container,
   type Renderer,
   type RenderTexture,
   type WebGPURenderer,
 } from 'pixi.js'
 import { premultiply, unpremultiply } from '../../utils/alpha.ts'
 import { get2dContext } from '../../utils/canvas2d.ts'
+import { TILE_SIZE } from '../../utils/tiles.ts'
 
 // The conversions live in utils/alpha.ts, which workers can use without PixiJS.
 export { premultiply, unpremultiply }
@@ -161,4 +162,43 @@ export function writePixels(
   renderer.render({ container: sprite, target, clear: true })
   sprite.destroy()
   texture.destroy(true)
+}
+
+/** A tile as the tile store keeps it: premultiplied RGBA8, 256 × 256, padded past the document's edges. */
+export interface PremultipliedTile {
+  /** The tile's column and row. */
+  x: number
+  y: number
+  data: Uint8Array
+}
+
+/**
+ * Write saved tiles into a texture that is transparent where they go, as
+ * opening a document does (plan M1.4). The bytes are uploaded as they are,
+ * already premultiplied, so nothing is converted or rounded on the way:
+ * drawn over transparent pixels, a tile's pixels land unchanged. Padding past
+ * the texture's edges is cut off.
+ */
+export function writeTiles(renderer: Renderer, target: RenderTexture, tiles: readonly PremultipliedTile[]): void {
+  if (tiles.length === 0) return
+  const container = new Container()
+  const textures: Texture[] = []
+  for (const { x, y, data } of tiles) {
+    const source = new BufferImageSource({
+      resource: data,
+      width: TILE_SIZE,
+      height: TILE_SIZE,
+      format: 'rgba8unorm',
+      alphaMode: 'premultiplied-alpha',
+      scaleMode: 'nearest',
+    })
+    const texture = new Texture({ source })
+    textures.push(texture)
+    const sprite = new Sprite(texture)
+    sprite.position.set(x * TILE_SIZE, y * TILE_SIZE)
+    container.addChild(sprite)
+  }
+  renderer.render({ container, target, clear: false })
+  container.destroy({ children: true })
+  for (const texture of textures) texture.destroy(true)
 }

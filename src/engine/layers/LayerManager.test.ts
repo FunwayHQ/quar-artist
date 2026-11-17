@@ -16,6 +16,7 @@ vi.mock('pixi.js', () => {
     texture: unknown
     alpha = 1
     mask: unknown = null
+    scale = { set: vi.fn() }
     constructor(texture?: unknown) {
       this.texture = texture
     }
@@ -35,6 +36,12 @@ vi.mock('pixi.js', () => {
     Application: class {},
   }
 })
+
+// Thumbnails are read back from the GPU and drawn on a 2D canvas, neither of which jsdom has.
+vi.mock('../utils/readback.ts', () => ({
+  readPixels: vi.fn(() => ({ pixels: new Uint8Array(40 * 40 * 4), width: 40, height: 40 })),
+}))
+vi.mock('../../utils/canvas2d.ts', () => ({ get2dContext: vi.fn(() => ({ putImageData: vi.fn() })) }))
 
 import { LayerManager } from './LayerManager.ts'
 import { MAX_LAYERS, type LayerInfo } from '../../types/layer.ts'
@@ -312,6 +319,7 @@ describe('LayerManager', () => {
       expect(cb).toHaveBeenCalledWith(
         expect.any(Array),
         expect.any(String),
+        'document',
       )
     })
 
@@ -332,6 +340,38 @@ describe('LayerManager', () => {
       lm.setChangeCallback(cb)
       lm.setActiveLayer(id1)
       expect(cb).toHaveBeenCalledTimes(1)
+      // Only which layer is chosen: not an edit to save (plan M1.4).
+      expect(cb).toHaveBeenCalledWith(expect.any(Array), id1, 'selection')
+    })
+
+    it("says a thumbnail redraw is only that, which isn't an edit to save either (plan M1.4)", () => {
+      vi.stubGlobal(
+        'ImageData',
+        class {
+          data: unknown
+          width: number
+          height: number
+          constructor(data: unknown, width: number, height: number) {
+            this.data = data
+            this.width = width
+            this.height = height
+          }
+        },
+      )
+      vi.spyOn(HTMLCanvasElement.prototype, 'toDataURL').mockReturnValue('data:image/png;base64,AA==')
+      try {
+        lm.setApp({ renderer: { render: vi.fn() } } as never)
+        lm.init()
+        const cb = vi.fn()
+        lm.setChangeCallback(cb)
+        lm.updateThumbnails()
+        expect(cb).toHaveBeenCalledTimes(1)
+        expect(cb).toHaveBeenCalledWith(expect.any(Array), lm.getActiveLayerId(), 'thumbnails')
+        expect(lm.getLayerInfos()[0].thumbnail).toBe('data:image/png;base64,AA==')
+      } finally {
+        vi.unstubAllGlobals()
+        vi.restoreAllMocks()
+      }
     })
   })
 
@@ -435,7 +475,7 @@ describe('LayerManager', () => {
       const onChange = vi.fn()
       lm.setChangeCallback(onChange)
       lm.replaceLayers([info('a', 'Sky')], 'a')
-      expect(onChange).toHaveBeenCalledWith([info('a', 'Sky')], 'a')
+      expect(onChange).toHaveBeenCalledWith([info('a', 'Sky')], 'a', 'document')
     })
   })
   describe('pixel changes outside the history (plan M1.3)', () => {

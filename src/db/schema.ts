@@ -1,5 +1,7 @@
 import { openDB, type IDBPDatabase, type IDBPTransaction, type DBSchema, type StoreNames } from 'idb'
 import type { ColorSpace, StoredImage } from '../types/project.ts'
+import type { SavedView } from '../types/engine.ts'
+import type { DocumentGuides } from '../types/guides.ts'
 import type { DocumentManifest } from '../io/tiles/tileFormat.ts'
 import { createId } from '../utils/id.ts'
 
@@ -19,6 +21,10 @@ export interface ProjectRecord {
   stackId?: string
   /** The layer that was active at the last save. */
   activeLayerId?: string
+  /** How the canvas showed the project when it was last saved or closed (plan M1.4). */
+  view?: SavedView
+  /** The project's drawing guides and symmetry (plan M1.4). */
+  guides?: DocumentGuides
   /** Set when the project is deleted. The Gallery hides it until the delete is undone or made final. */
   deletedAt?: Date
 }

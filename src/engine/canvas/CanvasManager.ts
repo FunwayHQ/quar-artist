@@ -1,5 +1,5 @@
 import { type Application, Texture, Sprite, Container, RenderTexture } from 'pixi.js'
-import { ViewTransform } from './ViewTransform.ts'
+import { MAX_ZOOM, MIN_ZOOM, ViewTransform } from './ViewTransform.ts'
 import { InputManager } from '../input/InputManager.ts'
 import { BrushEngine } from '../brush/BrushEngine.ts'
 import { LayerManager, type LayerChangeCallback } from '../layers/LayerManager.ts'
@@ -17,7 +17,7 @@ import { QuickShape, type DetectedShape } from '../tools/QuickShape.ts'
 import { TextTool } from '../tools/TextTool.ts'
 import { TimelapseRecorder } from '../timelapse/TimelapseRecorder.ts'
 import { createRenderer, type RendererOptions } from '../renderer.ts'
-import type { ViewState, PointerState, ToolType } from '../../types/engine.ts'
+import type { ViewState, PointerState, SavedView, ToolType } from '../../types/engine.ts'
 import type { LayerInfo, StoredLayer } from '../../types/layer.ts'
 import type { StrokePoint } from '../../types/brush.ts'
 import type { FilterParams } from '../../types/filter.ts'
@@ -28,7 +28,7 @@ import type { RGBAColor } from '../../types/color.ts'
 import type { TextProperties } from '../../types/text.ts'
 import { get2dContext } from '../../utils/canvas2d.ts'
 import { asClampedBytes } from '../../utils/typedArrays.ts'
-import { readPixels, readRegions, writePixels } from '../utils/readback.ts'
+import { readPixels, readRegions, writePixels, writeTiles, type PremultipliedTile } from '../utils/readback.ts'
 import { cutTiles, splitRun, tileRuns, type TileChanges, type TilePixels, type TilePosition } from '../../utils/tiles.ts'
 import { strokePressure } from '../input/pressure.ts'
 
@@ -98,6 +98,7 @@ export class CanvasManager {
   private onViewChange: ((state: ViewState) => void) | null = null
   private onTextInput: ((screenX: number, screenY: number, canvasX: number, canvasY: number) => void) | null = null
   private onSymmetryCenterChanged: ((cx: number, cy: number) => void) | null = null
+  private onVanishingPointsChanged: ((points: { x: number; y: number }[]) => void) | null = null
   private onLayerChange: LayerChangeCallback | null = null
   private onDocumentChange: (() => void) | null = null
   /** True while loadDocument runs, so loading isn't reported as a change. */
@@ -118,11 +119,12 @@ export class CanvasManager {
     // Wire symmetry engine to brush engine
     this.brushEngine.symmetryEngine = this.symmetryEngine
 
-    // Every history step and every layer change is a change to save.
+    // Every history step and every change to the layers is a change to save.
+    // Choosing a layer and redrawing the panel's thumbnails aren't (plan M1.4).
     this.brushEngine.undoManager.setChangeCallback(() => this.notifyDocumentChange())
-    this.layerManager.setChangeCallback((layers, activeId) => {
-      this.onLayerChange?.(layers, activeId)
-      this.notifyDocumentChange()
+    this.layerManager.setChangeCallback((layers, activeId, kind) => {
+      this.onLayerChange?.(layers, activeId, kind)
+      if (kind === 'document') this.notifyDocumentChange()
     })
     // And where the pixels changed, so a save reads back only those tiles.
     // A change the brush didn't make leaves its snapshot of the layer out of
@@ -385,10 +387,13 @@ export class CanvasManager {
   /**
    * Replace the document with saved layers (opening a project). Layer ids are
    * kept, history starts empty, and none of this counts as a change to save.
-   * Pixels of the wrong size are skipped, leaving that layer empty.
+   * Pixels of the wrong size are skipped, leaving that layer empty; layers
+   * without pixels start empty, for their tiles to be placed (`placeTiles`).
+   * Returns the ids of the layers made, bottom first: the saved ones, but a
+   * fresh id for one that repeats another's, and none past the layer limit.
    */
-  loadDocument(layers: readonly StoredLayer[], activeLayerId: string | null): void {
-    if (!this.app) return
+  loadDocument(layers: readonly StoredLayer[], activeLayerId: string | null): readonly string[] {
+    if (!this.app) return []
     this.loadingDocument = true
     try {
       this.brushEngine.clearSnapshotCache()
@@ -406,11 +411,35 @@ export class CanvasManager {
       this.compositor.invalidateCache()
       this.recomposite()
       this.layerManager.updateThumbnails()
+      return created.map((layer) => layer.info.id)
     } finally {
       this.loadingDocument = false
       // The document as loaded is the one saved: nothing has changed yet.
       this.changes.clear()
     }
+  }
+
+  /**
+   * Put saved tiles into a layer that `loadDocument` made empty (opening a
+   * project, plan M1.4): premultiplied 256 × 256 tiles, as the tile store
+   * keeps them. They are what was saved, so this isn't a change to save.
+   * The document shows once `finishLoading` runs.
+   */
+  placeTiles(layerId: string, tiles: readonly PremultipliedTile[]): void {
+    if (!this.app || this.destroyed || tiles.length === 0) return
+    const layer = this.layerManager.getLayerById(layerId)
+    if (!layer) return
+    this.brushEngine.clearSnapshotCache()
+    writeTiles(this.app.renderer, layer.texture, tiles)
+    this.compositor.invalidateCache()
+  }
+
+  /** Every saved tile is in place: show the document, and draw the layers' thumbnails. */
+  finishLoading(): void {
+    if (!this.app || this.destroyed) return
+    this.compositor.invalidateCache()
+    this.recomposite()
+    this.layerManager.updateThumbnails()
   }
 
   getPixiApp(): Application | null {
@@ -530,14 +559,20 @@ export class CanvasManager {
 
   /** Set the document dimensions and resize all layer/compositor textures to match. */
   setDocumentSize(width: number, height: number) {
+    const resized = width !== this.documentWidth || height !== this.documentHeight
     this.documentWidth = width
     this.documentHeight = height
 
-    // Update symmetry center to document center by default
-    this.symmetryEngine.centerX = width / 2
-    this.symmetryEngine.centerY = height / 2
-    this.guideManager.symmetryCenterX = width / 2
-    this.guideManager.symmetryCenterY = height / 2
+    // A new size centres symmetry on it, and the guide settings follow, so the
+    // centre saved with the document is the one shown (plan M1.4). The same
+    // size leaves the centre the document opened with.
+    if (resized) {
+      this.symmetryEngine.centerX = width / 2
+      this.symmetryEngine.centerY = height / 2
+      this.guideManager.symmetryCenterX = width / 2
+      this.guideManager.symmetryCenterY = height / 2
+      this.onSymmetryCenterChanged?.(width / 2, height / 2)
+    }
 
     // Resize layer textures and compositor to document dimensions
     if (this.app) {
@@ -555,6 +590,53 @@ export class CanvasManager {
     if (!this.container) return
     const { clientWidth: vw, clientHeight: vh } = this.container
     this.viewTransform.fitToDocument(this.documentWidth, this.documentHeight, vw, vh)
+  }
+
+  /**
+   * How the document is shown, to save with its project (plan M1.4). Null
+   * when there is no viewport to measure (the canvas isn't on the page).
+   */
+  getView(): SavedView | null {
+    const container = this.container
+    if (!container || this.destroyed) return null
+    const { clientWidth: vw, clientHeight: vh } = container
+    if (vw <= 0 || vh <= 0) return null
+    const centre = this.viewTransform.screenToCanvas(vw / 2, vh / 2)
+    const { zoom, rotation } = this.viewTransform.getState()
+    // Rounded, so a view that didn't change saves as the same numbers.
+    const round = (v: number, places: number) => Math.round(v * 10 ** places) / 10 ** places
+    const turn = 2 * Math.PI
+    return {
+      x: round(centre.x, 2),
+      y: round(centre.y, 2),
+      zoom: round(zoom, 5),
+      rotation: round((((rotation % turn) + turn) % turn), 5),
+    }
+  }
+
+  /**
+   * Show the document as a saved view had it, its point at the middle of the
+   * viewport. A point off the document is moved onto it, so some of the
+   * document always shows. False, with the view unchanged, when there is no
+   * viewport yet or the view isn't one.
+   */
+  restoreView(view: SavedView): boolean {
+    const container = this.container
+    if (!container || this.destroyed) return false
+    const { clientWidth: vw, clientHeight: vh } = container
+    if (vw <= 0 || vh <= 0) return false
+    const { x, y, zoom, rotation } = view
+    if (![x, y, zoom, rotation].every((v) => typeof v === 'number' && Number.isFinite(v)) || zoom <= 0) return false
+    const clamp = (v: number, max: number) => Math.min(Math.max(v, 0), max)
+    this.viewTransform.centerOn(
+      clamp(x, this.documentWidth),
+      clamp(y, this.documentHeight),
+      Math.min(Math.max(zoom, MIN_ZOOM), MAX_ZOOM),
+      rotation,
+      vw / 2,
+      vh / 2,
+    )
+    return true
   }
 
   // ── Image import ──────────────────────────────────────────────────
@@ -818,9 +900,14 @@ export class CanvasManager {
     this.onTextInput = cb
   }
 
-  /** Set callback for symmetry center changes (dragging the center handle). */
+  /** Set callback for symmetry center changes (dragging the center handle, or a new document size). */
   setSymmetryCenterChangedCallback(cb: (cx: number, cy: number) => void): void {
     this.onSymmetryCenterChanged = cb
+  }
+
+  /** Set callback for vanishing points dragged on the canvas, once the drag ends (plan M1.4: they are saved with the guides). */
+  setVanishingPointsChangedCallback(cb: ((points: { x: number; y: number }[]) => void) | null): void {
+    this.onVanishingPointsChanged = cb
   }
 
   /** Rasterize text at a position and import as a new layer. */
@@ -1102,9 +1189,10 @@ export class CanvasManager {
   }
 
   private handlePointerUp() {
-    // VP handle dragging finish
+    // VP handle dragging finish — notify React to sync store
     if (this.draggingVP !== null) {
       this.draggingVP = null
+      this.onVanishingPointsChanged?.(this.guideManager.vanishingPoints.map(({ x, y }) => ({ x, y })))
       return
     }
 

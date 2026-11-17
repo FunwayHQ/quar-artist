@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useGuideStore } from './guideStore.ts'
+import { defaultGuides, documentGuides, savedGuides, useGuideStore } from './guideStore.ts'
 
 describe('guideStore', () => {
   beforeEach(() => {
@@ -162,5 +162,88 @@ describe('guideStore', () => {
     expect(after.symmetryType).toBe('vertical')
     expect(after.perspectiveEnabled).toBe(false)
     expect(after.quickShapeEnabled).toBe(false)
+  })
+
+  // ── A document's guides (plan M1.4) ──
+
+  describe("a document's guides (plan M1.4)", () => {
+    it('start off and centred on the document, whatever its size (part of F33)', () => {
+      const guides = defaultGuides(2000, 600)
+      expect(guides).toMatchObject({
+        symmetryCenterX: 1000,
+        symmetryCenterY: 300,
+        vanishingPoints: [{ x: 1000, y: 300 }],
+        horizonY: 300,
+        gridEnabled: false,
+        symmetryEnabled: false,
+        perspectiveEnabled: false,
+      })
+      useGuideStore.getState().resetGuides(2000, 600)
+      expect(useGuideStore.getState().symmetryCenterX).toBe(1000)
+    })
+
+    it("are everything but QuickShape, which stays the user's", () => {
+      const s = useGuideStore.getState()
+      s.setQuickShapeEnabled(true)
+      const guides = documentGuides(useGuideStore.getState())
+      expect(guides).not.toHaveProperty('quickShapeEnabled')
+      expect(guides).not.toHaveProperty('setGridEnabled')
+      expect(Object.keys(guides).sort()).toEqual(Object.keys(defaultGuides()).sort())
+
+      s.loadGuides({ ...defaultGuides(100, 100), gridEnabled: true, symmetryAxes: 8 })
+      const after = useGuideStore.getState()
+      expect(after).toMatchObject({ gridEnabled: true, symmetryAxes: 8, symmetryCenterX: 50, quickShapeEnabled: true })
+    })
+
+    it('come back as saved when they are valid', () => {
+      const saved = {
+        ...defaultGuides(800, 600),
+        gridEnabled: true,
+        gridSpacing: 64,
+        gridColor: '#00ff88',
+        gridOpacity: 0.5,
+        perspectiveEnabled: true,
+        perspectiveType: '2-point' as const,
+        vanishingPoints: [{ x: -200, y: 300 }, { x: 1000, y: 300 }],
+        horizonY: 300,
+        symmetryEnabled: true,
+        symmetryType: 'radial' as const,
+        symmetryAxes: 12,
+        symmetryRotation: 1.5,
+        symmetryCenterX: 123.5,
+        symmetryCenterY: 456,
+      }
+      expect(savedGuides(saved, 800, 600)).toEqual(saved)
+    })
+
+    it('take the default for anything missing, of the wrong kind or out of range', () => {
+      const d = defaultGuides(800, 600)
+      expect(savedGuides(undefined, 800, 600)).toEqual(d)
+      expect(savedGuides('grid', 800, 600)).toEqual(d)
+      expect(
+        savedGuides(
+          {
+            gridEnabled: 'yes',
+            gridSpacing: 2,
+            gridColor: 'red',
+            gridOpacity: 3,
+            isometricSpacing: Number.NaN,
+            perspectiveType: '3-point',
+            vanishingPoints: [{ x: 1, y: Infinity }],
+            horizonY: 1e9,
+            perspectiveLineCount: 12.5,
+            symmetryType: 'spiral',
+            symmetryAxes: 100,
+            symmetryRotation: -1,
+            symmetryCenterX: '10',
+          },
+          800,
+          600,
+        ),
+      ).toEqual(d)
+      // Too many vanishing points for any perspective.
+      const four = [1, 2, 3, 4].map((x) => ({ x, y: 0 }))
+      expect(savedGuides({ vanishingPoints: four }, 800, 600).vanishingPoints).toEqual(d.vanishingPoints)
+    })
   })
 })

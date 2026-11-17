@@ -147,6 +147,65 @@ test('leaving with changes not saved yet asks first, and saves them at once (pla
   expect((await leave()).asks).toBe(false)
 })
 
+test('a project opens as it was left: its view, guides and selected layer (plan M1.4)', async ({ page }) => {
+  // Opens twice and compares whole-canvas screenshots each time: over a minute in Firefox under load.
+  test.slow()
+  await page.goto('/')
+  await waitForEngine(page)
+  await paint(page)
+  const zoom = page.getByTitle('Reset zoom to 100%')
+  // A new 1920 × 1080 document is fitted to the window: less than 100% here.
+  await expect(zoom).not.toHaveText('100%')
+
+  await page.locator('[data-testid="add-layer-btn"]').click()
+  const rows = page.locator('[data-testid="layer-row"]')
+  await expect(rows).toHaveCount(2)
+  // Rows list the top layer first: choose the bottom one again.
+  await rows.nth(1).click()
+  await expect(rows.nth(1)).toHaveAttribute('aria-selected', 'true')
+  await page.locator('[data-testid="menu-view"]').click()
+  await page.getByRole('menuitem', { name: 'Show Symmetry' }).click()
+  await zoom.click()
+  await expect(zoom).toHaveText('100%')
+  const left = await canvasShot(page)
+
+  const expectAsLeft = async () => {
+    await waitForEngine(page)
+    await expect(zoom).toHaveText('100%')
+    // The same part of the document, at the same place, with the symmetry line on it.
+    await expect.poll(async () => changedPixels(page, left, await canvasShot(page))).toBeLessThan(SAME)
+    await expect(rows.nth(1)).toHaveAttribute('aria-selected', 'true')
+    await page.locator('[data-testid="menu-view"]').click()
+    await expect(page.getByRole('menuitem', { name: 'Hide Symmetry' })).toBeVisible()
+    await page.keyboard.press('Escape')
+  }
+
+  await goToGallery(page)
+  await page.getByRole('button', { name: 'Open Untitled Project' }).click()
+  await expectAsLeft()
+
+  await page.reload()
+  await page.getByRole('button', { name: 'Continue Untitled Project' }).click()
+  await expectAsLeft()
+})
+
+test('a new project starts with its guides off, whatever the last project had (plan M1.4)', async ({ page }) => {
+  await page.goto('/')
+  await waitForEngine(page)
+  await page.locator('[data-testid="menu-view"]').click()
+  await page.getByRole('menuitem', { name: 'Show Grid' }).click()
+
+  await openFileMenuItem(page, 'New')
+  const dialog = page.getByRole('dialog', { name: 'New Project' })
+  await dialog.getByLabel('Project name').fill('Second')
+  await dialog.getByRole('button', { name: 'Create' }).click()
+  await expect(page.getByRole('textbox', { name: 'Project name' })).toHaveValue('Second')
+  await waitForEngine(page)
+  await page.locator('[data-testid="menu-view"]').click()
+  await expect(page.getByRole('menuitem', { name: 'Show Grid' })).toBeVisible()
+  await page.keyboard.press('Escape')
+})
+
 test('opening a project and leaving it unchanged keeps its modified date', async ({ page }) => {
   await page.goto('/')
   await waitForEngine(page)

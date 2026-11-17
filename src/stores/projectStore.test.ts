@@ -128,5 +128,37 @@ describe('projectStore', () => {
     expect(useProjectStore.getState()).toMatchObject({ gallerySort: 'name', openStackId: 's1', lastProjectId: 'p1' })
     expect(useProjectStore.getState().stacks).toHaveLength(1)
   })
-})
 
+  it('shows how far a saved document has loaded, from opening it until it is all in (plan M1.4)', () => {
+    const doc = { id: 'p1', name: 'Sketch', width: 640, height: 480, dpi: 72, colorSpace: 'srgb' as const }
+    useProjectStore.getState().openDocument({ ...doc, loadsSaved: true })
+    expect(useProjectStore.getState().openProgress).toBe(0)
+    useProjectStore.getState().setOpenProgress(0.5)
+    expect(useProjectStore.getState().openProgress).toBe(0.5)
+    useProjectStore.getState().setOpenProgress(null)
+    expect(useProjectStore.getState().openProgress).toBeNull()
+
+    // A new document has nothing to load; closing stops a load.
+    useProjectStore.getState().openDocument(doc)
+    expect(useProjectStore.getState().openProgress).toBeNull()
+    useProjectStore.getState().openDocument({ ...doc, loadsSaved: true })
+    useProjectStore.getState().clearCurrentProject()
+    expect(useProjectStore.getState().openProgress).toBeNull()
+  })
+
+  it('hands the view a project was saved with to the canvas once (plan M1.4)', () => {
+    const view = { x: 10, y: 20, zoom: 2, rotation: 0 }
+    const doc = { id: 'p1', name: 'Sketch', width: 640, height: 480, dpi: 72, colorSpace: 'srgb' as const }
+    useProjectStore.getState().openDocument({ ...doc, view })
+    expect(useProjectStore.getState().takeInitialView()).toEqual(view)
+    // A canvas that starts again later fits the document instead.
+    expect(useProjectStore.getState().takeInitialView()).toBeNull()
+
+    useProjectStore.getState().openDocument({ ...doc, view })
+    useProjectStore.getState().openDocument(doc)
+    expect(useProjectStore.getState().takeInitialView()).toBeNull()
+    useProjectStore.getState().openDocument({ ...doc, view })
+    useProjectStore.getState().clearCurrentProject()
+    expect(useProjectStore.getState().takeInitialView()).toBeNull()
+  })
+})
