@@ -10,13 +10,15 @@ import { legacyRecords, writeLegacyLayers } from '../../test/legacyLayout.ts'
 import { useProjectStore } from '../../stores/projectStore.ts'
 import { useUIStore } from '../../stores/uiStore.ts'
 import { decodeImageBlob } from '../importImage.ts'
-import { writeQart } from '../formats/qart/QartWriter.ts'
-import { readQart } from '../formats/qart/QartReader.ts'
+import { encodeQart } from '../formats/qart/QartWriter.ts'
+import { decodeQart } from '../formats/qart/QartReader.ts'
+import { entry, manifestOf, qartArchive, rawZip, solidTile, text } from '../formats/qart/testArchives.ts'
 import * as fileAccess from '../files/fileAccess.ts'
 import type { FileHandle } from '../files/fileAccess.ts'
 import { FakeDocumentEngine, layerInfo } from '../../test/fakeDocumentEngine.ts'
 import { sameBytes } from '../../test/bytes.ts'
 import { defaultGuides, documentGuides, useGuideStore } from '../../stores/guideStore.ts'
+import { encodeLayersThumbnail } from './thumbnail.ts'
 
 vi.mock('../importImage.ts', () => ({ decodeImageBlob: vi.fn() }))
 // Files on disk: the tests pick them, and see what is written to them.
@@ -744,7 +746,7 @@ describe('ProjectService', () => {
       await vi.waitFor(() => expect(files.downloadFile).toHaveBeenCalledOnce())
       const [[blob, name]] = files.downloadFile.mock.calls
       expect(name).toBe('Painting.qart')
-      expect((await readQart(blob)).layers.map((l) => l.pixels[0])).toEqual([5, 2])
+      expect((await decodeQart(blob)).layers.map((l) => l.pixels[0])).toEqual([5, 2])
 
       // It can't close either: it stays open, with the same way out.
       expect(await service.goToGallery()).toBe(false)
@@ -963,15 +965,15 @@ describe('ProjectService', () => {
 
   describe('import', () => {
     async function qartFile(name: string) {
-      const blob = await writeQart({
+      const blob = await encodeQart({
         name: 'ignored',
         width: 2,
         height: 2,
         dpi: 300,
         activeLayerId: 'l2',
         layers: [
-          { info: layerInfo('l1', 'Sky'), order: 0, pixels: filled(10) },
-          { info: layerInfo('l2', 'Ink', { blendMode: 'screen', opacity: 0.25 }), order: 1, pixels: filled(20) },
+          { info: layerInfo('l1', 'Sky'), pixels: filled(10) },
+          { info: layerInfo('l2', 'Ink', { blendMode: 'screen', opacity: 0.25 }), pixels: filled(20) },
         ],
       })
       return new File([blob], name)
@@ -1000,6 +1002,83 @@ describe('ProjectService', () => {
       const { engine } = await openAndAttach(project.id)
       expect(engine.loads[0].layers.map((l) => l.pixels?.[0])).toEqual([10, 20])
       expect(engine.loads[0].activeLayerId).toBe(layers[1].id)
+    })
+
+    it("draws an imported file's thumbnail once, where the file is read (review of M1.6)", async () => {
+      const file = await qartFile('Landscape.qart')
+      vi.mocked(encodeLayersThumbnail).mockClear()
+
+      await service.importFiles([file])
+
+      // Off the main thread in the app: the .qart worker draws it with the document's layers.
+      expect(encodeLayersThumbnail).toHaveBeenCalledOnce()
+      expect(store().projects.find((p) => p.name === 'Landscape')!.thumbnail?.type).toBe('image/webp')
+    })
+
+    it("keeps the file's resolution, colour space and guides (plan M1.6)", async () => {
+      const guides = { ...defaultGuides(2, 2), gridEnabled: true, gridSpacing: 48, symmetryEnabled: true }
+      const blob = await encodeQart({
+        name: 'ignored',
+        width: 2,
+        height: 2,
+        dpi: 144,
+        colorSpace: 'display-p3',
+        guides,
+        activeLayerId: 'l1',
+        layers: [{ info: layerInfo('l1', 'Sky'), pixels: filled(10) }],
+      })
+
+      await service.importFiles([new File([blob], 'Wide.qart')])
+
+      const project = (await db.getAllProjects()).find((p) => p.name === 'Wide')!
+      expect(project).toMatchObject({ dpi: 144, colorSpace: 'display-p3', guides })
+    })
+
+    it('refuses a .qart file with more layers than the app opens, rather than leave some out (plan M1.6)', async () => {
+      const layers = Array.from({ length: 21 }, (_, i) => ({ info: layerInfo(`l${i}`, `Layer ${i}`), pixels: filled(i) }))
+      const blob = await encodeQart({ name: 'ignored', width: 2, height: 2, dpi: 72, activeLayerId: 'l0', layers })
+
+      await service.importFiles([new File([blob], 'Many.qart')])
+
+      expect(toasts()).toEqual(["Couldn't import “Many.qart”: it has 21 layers, and QUAR Artist opens up to 20"])
+      expect((await db.getAllProjects()).map((p) => p.name)).toEqual(['Existing'])
+    })
+
+    it('imports a .qart file written before format version 1 (plan M1.6)', async () => {
+      const manifest = {
+        version: '1.0',
+        app: 'quar-artist',
+        canvas: { width: 2, height: 2, dpi: 300 },
+        layers: [{ id: 'a', name: 'Old', blendMode: 'overlay', opacity: 0.5, visible: true, order: 0, dataFile: 'layers/a.bin' }],
+        activeLayerId: 'a',
+      }
+      const bytes = rawZip([entry('manifest.json', text(JSON.stringify(manifest))), entry('layers/a.bin', filled(30))])
+
+      await service.importFiles([new File([bytes], 'Old.qart')])
+
+      const project = (await db.getAllProjects()).find((p) => p.name === 'Old')!
+      expect(project).toMatchObject({ width: 2, height: 2, dpi: 300, colorSpace: 'srgb' })
+      const [layer] = (await tiles.load(project.id))!.layers
+      expect(layer.info).toMatchObject({ name: 'Old', blendMode: 'overlay', opacity: 0.5 })
+      expect(layer.pixels?.[0]).toBe(30)
+      expect(project.activeLayerId).toBe(layer.info.id)
+    })
+
+    it('imports a .qart file with tiles it could not read, those transparent, and says so (plan M1.6)', async () => {
+      const bytes = qartArchive(manifestOf({ width: 2, height: 2, layerIds: ['a', 'b'] }), [
+        solidTile('a', 0, 0, 255),
+        solidTile('b', 0, 0, 255, { crc: 1 }),
+      ])
+
+      await service.importFiles([new File([bytes], 'Damaged.qart')])
+
+      expect(toasts()).toEqual([
+        "Part of “Damaged.qart” couldn't be read and shows as transparent (1 tile of 256 × 256 px)",
+        'Imported “Damaged”',
+      ])
+      const project = (await db.getAllProjects()).find((p) => p.name === 'Damaged')!
+      const layers = (await tiles.load(project.id))!.layers
+      expect(layers.map((l) => l.pixels?.[3] ?? 0)).toEqual([255, 0])
     })
 
     it('imports an image as a one-layer project named after the file', async () => {
@@ -1366,15 +1445,15 @@ describe('ProjectService', () => {
 
     /** A .qart file of a 2 × 2, 300 dpi document: a Sky layer under an active Ink layer. */
     async function qartFile(name: string) {
-      const blob = await writeQart({
+      const blob = await encodeQart({
         name: 'ignored',
         width: 2,
         height: 2,
         dpi: 300,
         activeLayerId: 'l2',
         layers: [
-          { info: layerInfo('l1', 'Sky'), order: 0, pixels: filled(10) },
-          { info: layerInfo('l2', 'Ink'), order: 1, pixels: filled(20) },
+          { info: layerInfo('l1', 'Sky'), pixels: filled(10) },
+          { info: layerInfo('l2', 'Ink'), pixels: filled(20) },
         ],
       })
       // As the fake disk has it: last modified at 1.
@@ -1384,9 +1463,9 @@ describe('ProjectService', () => {
     /** A write to a file (the last by default): the handle, and each layer's name and first grey, as the file has them. */
     async function written(call = -1) {
       const [handle, blob] = files.writeFile.mock.calls.at(call)!
-      const { manifest, layers } = await readQart(blob)
-      const active = layers.find((l) => l.manifest.id === manifest.activeLayerId)?.manifest.name
-      return { handle, layers: layers.map((l) => [l.manifest.name, l.pixels[0]]), active }
+      const doc = await decodeQart(blob)
+      const active = doc.layers.find((l) => l.info.id === doc.activeLayerId)?.info.name
+      return { handle, layers: doc.layers.map((l) => [l.info.name, l.pixels[0]]), active }
     }
 
     /** Start without storage, as a browser that blocks it does, with an engine on the canvas. */
@@ -1437,6 +1516,22 @@ describe('ProjectService', () => {
       expect(record.fileHandle).toEqual(picked)
       expect(record.fileModified).toBe(disk.get('Painting.qart'))
       expect(record.updatedAt.getTime()).toBe(modified)
+    })
+
+    it("writes the project's name, resolution, colour space and guides to the file (plan M1.6)", async () => {
+      const id = await seedProject('Painting', { colorSpace: 'display-p3' })
+      await service.start()
+      await openAndAttach(id)
+      useGuideStore.setState({ gridEnabled: true, gridSpacing: 48 })
+      files.canPickSaveFile.mockReturnValue(true)
+      files.pickSaveFile.mockResolvedValue(fileHandle('Painting.qart'))
+
+      expect(await service.saveAsFile()).toBe(true)
+
+      const doc = await decodeQart(files.writeFile.mock.calls.at(-1)![1])
+      expect(doc).toMatchObject({ formatVersion: 1, name: 'Painting', width: 2, height: 2, dpi: 72, colorSpace: 'display-p3' })
+      expect(doc.guides).toEqual(documentGuides(useGuideStore.getState()))
+      expect(doc.guides).toMatchObject({ gridEnabled: true, gridSpacing: 48 })
     })
 
     it('writes the file again with Ctrl+S, besides saving in the browser', async () => {
@@ -1515,7 +1610,7 @@ describe('ProjectService', () => {
 
       const [[blob, name]] = files.downloadFile.mock.calls
       expect(name).toBe('Painting.qart')
-      expect((await readQart(blob)).layers.map((l) => l.pixels[0])).toEqual([9, 2])
+      expect((await decodeQart(blob)).layers.map((l) => l.pixels[0])).toEqual([9, 2])
       expect(toasts()).toEqual(['Downloaded “Painting.qart”'])
       expect(await service.saveNow()).toBe(true)
       expect(files.writeFile).not.toHaveBeenCalled()
@@ -1615,6 +1710,54 @@ describe('ProjectService', () => {
       opened.paint(50)
       expect(await service.saveNow()).toBe(true)
       expect(await written()).toEqual({ handle, layers: [['Sky', 10], ['Ink', 50]], active: 'Ink' })
+    })
+
+    it("opens a .qart file with tiles it could not read, those transparent, and keeps Ctrl+S from writing over the file (plan M1.6)", async () => {
+      await seedProject('Painting')
+      await service.start()
+      const bytes = qartArchive(manifestOf({ width: 2, height: 2, layerIds: ['a', 'b'] }), [
+        solidTile('a', 0, 0, 255),
+        solidTile('b', 0, 0, 255, { crc: 1 }),
+      ])
+      files.pickOpenFile.mockResolvedValue({ file: new File([bytes], 'Damaged.qart', { lastModified: 1 }), handle: fileHandle('Damaged.qart') })
+
+      expect(await service.openFile()).toBe(true)
+
+      expect(toasts().at(-1)).toBe(
+        "Part of “Damaged.qart” couldn't be read and shows as transparent (1 tile of 256 × 256 px). Ctrl+S won't write to the file, which may still have it",
+      )
+      const project = (await db.getAllProjects()).find((p) => p.name === 'Damaged')!
+      expect(project.fileHandle).toBeUndefined()
+      const engine = new FakeDocumentEngine()
+      service.attachEngine(engine)
+      await service.settled()
+      // A layer with nothing in it loads without pixels.
+      expect(engine.loads[0].layers.map((l) => l.pixels?.[3] ?? 0)).toEqual([255, 0])
+      engine.paint(5)
+      expect(await service.saveNow()).toBe(true)
+      expect(files.writeFile).not.toHaveBeenCalled()
+    })
+
+    it('without storage, opens a .qart file with tiles it could not read, and Ctrl+S does not write over it (plan M1.6)', async () => {
+      await startUnsaved()
+      vi.mocked(encodeLayersThumbnail).mockClear()
+      // Made byte by byte: no thumbnail is drawn for it.
+      const bytes = qartArchive(manifestOf({ width: 2, height: 2, layerIds: ['a'] }), [solidTile('a', 0, 0, 255, { crc: 1 })])
+      files.pickOpenFile.mockResolvedValue({ file: new File([bytes], 'Damaged.qart', { lastModified: 1 }), handle: fileHandle('Damaged.qart') })
+
+      expect(await service.openFile()).toBe(true)
+
+      expect(toasts().at(-1)).toBe(
+        "Part of “Damaged.qart” couldn't be read and shows as transparent (1 tile of 256 × 256 px). Ctrl+S won't write to the file, which may still have it",
+      )
+      // There is no Gallery to show a thumbnail.
+      expect(encodeLayersThumbnail).not.toHaveBeenCalled()
+      const engine = new FakeDocumentEngine()
+      service.attachEngine(engine)
+      expect(engine.loads[0].layers.map((l) => l.pixels?.[3])).toEqual([0])
+      engine.paint(5)
+      await service.saveNow()
+      expect(files.writeFile).not.toHaveBeenCalled()
     })
 
     it('opens an image as a new project of its own, which Ctrl+S does not write to', async () => {

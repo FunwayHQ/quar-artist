@@ -1,153 +1,174 @@
-import { describe, it, expect } from 'vitest'
-import JSZip from 'jszip'
-import { writeQart, type QartWriterInput } from './QartWriter.ts'
-import type { QartManifest } from '../../../types/project.ts'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { unzipSync } from 'fflate'
+import { encodeQart, type QartWriterInput } from './QartWriter.ts'
+import { decodeQart } from './QartReader.ts'
+import { blobSource, readZipDirectory } from './zip.ts'
+import { solidLayer } from './testArchives.ts'
+import { TILE_BYTES, cutTile } from '../../tiles/tileFormat.ts'
+import type { LayerInfo } from '../../../types/layer.ts'
+import { defaultGuides } from '../../../stores/guideStore.ts'
+import { sameBytes } from '../../../test/bytes.ts'
 
-function createInput(overrides: Partial<QartWriterInput> = {}): QartWriterInput {
+function layer(id: string, overrides: Partial<LayerInfo> = {}): LayerInfo {
+  return { id, name: `Layer ${id}`, visible: true, opacity: 1, blendMode: 'normal', alphaLock: false, clippingMask: false, locked: false, ...overrides }
+}
+
+/** A 600 × 300 document (3 × 2 tiles): an empty layer under one painted at a single pixel of tile 2, 1. */
+function document(overrides: Partial<QartWriterInput> = {}): QartWriterInput {
+  const painted = new Uint8Array(600 * 300 * 4)
+  painted.set([200, 100, 50, 128], (290 * 600 + 590) * 4)
   return {
-    name: 'Test Project',
-    width: 100,
-    height: 100,
-    dpi: 72,
-    activeLayerId: 'layer-1',
-    layers: [{
-      info: {
-        id: 'layer-1',
-        name: 'Background',
-        visible: true,
-        opacity: 1,
-        blendMode: 'normal',
-        alphaLock: false,
-        clippingMask: false,
-        locked: false,
-      },
-      order: 0,
-      pixels: new Uint8Array([10, 20, 30, 40]),
-    }],
+    name: 'Sunset',
+    width: 600,
+    height: 300,
+    dpi: 144,
+    layers: [
+      { info: layer('bg'), pixels: new Uint8Array(600 * 300 * 4) },
+      { info: layer('ink', { blendMode: 'multiply', opacity: 0.5 }), pixels: painted },
+    ],
+    activeLayerId: 'bg',
     ...overrides,
   }
 }
 
-describe('QartWriter', () => {
-  it('produces a valid Blob', async () => {
-    const blob = await writeQart(createInput())
-    expect(blob).toBeInstanceOf(Blob)
-    expect(blob.size).toBeGreaterThan(0)
+const noThumbnail = async () => null
+
+afterEach(() => {
+  vi.useRealTimers()
+})
+
+async function entries(blob: Blob): Promise<Record<string, Uint8Array>> {
+  return unzipSync(new Uint8Array(await blob.arrayBuffer()))
+}
+
+async function manifest(blob: Blob) {
+  return JSON.parse(new TextDecoder().decode((await entries(blob))['manifest.json']))
+}
+
+describe('encodeQart', () => {
+  it('writes the manifest first, then the thumbnail, then the tiles with paint, bottom layer first', async () => {
+    const blob = await encodeQart(document(), async () => new Uint8Array([137, 80, 78, 71]))
+    expect(blob.type).toBe('application/x-quar-artist')
+    const names = (await readZipDirectory(blobSource(blob))).map((e) => e.name)
+    expect(names).toEqual(['manifest.json', 'thumbnail.png', 'tiles/ink/2_1.raw'])
+    expect((await entries(blob))['thumbnail.png']).toEqual(new Uint8Array([137, 80, 78, 71]))
   })
 
-  it('compresses the layers, so their empty parts take next to nothing', async () => {
-    const pixels = new Uint8Array(128 * 128 * 4)
-    pixels.fill(200, 0, 1024)
-    const blob = await writeQart(createInput({ width: 128, height: 128, layers: [{ ...createInput().layers[0], pixels }] }))
-    // The manifest and the ZIP's own records take most of it.
-    expect(blob.size).toBeLessThan(pixels.byteLength / 20)
-    const zip = await JSZip.loadAsync(blob)
-    const stored = await zip.file('layers/layer-1.bin')!.async('uint8array')
-    expect(stored).toEqual(pixels)
+  it('writes the name, the layers in order, the selected layer, the guides and the canvas', async () => {
+    const guides = { ...defaultGuides(600, 300), symmetryEnabled: true }
+    const m = await manifest(await encodeQart(document({ guides, colorSpace: 'display-p3' }), noThumbnail))
+    expect(m).toMatchObject({
+      format: 'qart',
+      formatVersion: 1,
+      name: 'Sunset',
+      canvas: { width: 600, height: 300, dpi: 144, colorSpace: 'display-p3' },
+      activeLayerId: 'bg',
+      thumbnail: null,
+      timelapse: null,
+    })
+    expect(m.layers.map((l: { id: string; name: string; blendMode: string; opacity: number }) => [l.id, l.name, l.blendMode, l.opacity])).toEqual([
+      ['bg', 'Layer bg', 'normal', 1],
+      ['ink', 'Layer ink', 'multiply', 0.5],
+    ])
+    expect(m.guides).toEqual(guides)
   })
 
-  it('produces a ZIP with manifest.json', async () => {
-    const blob = await writeQart(createInput())
-    const zip = await JSZip.loadAsync(blob)
-    expect(zip.file('manifest.json')).not.toBeNull()
+  it('stores tiles premultiplied, with zeros past the canvas', async () => {
+    const tile = (await entries(await encodeQart(document(), noThumbnail)))['tiles/ink/2_1.raw']
+    expect(tile).toHaveLength(TILE_BYTES)
+    // The pixel at 590, 290 is at 78, 34 in tile 2, 1.
+    const at = (34 * 256 + 78) * 4
+    expect([...tile.subarray(at, at + 4)]).toEqual([100, 50, 25, 128])
+    expect(tile.reduce((n, b) => n + (b ? 1 : 0), 0)).toBe(4)
   })
 
-  it('manifest has correct canvas size', async () => {
-    const blob = await writeQart(createInput({ width: 1920, height: 1080, dpi: 300 }))
-    const zip = await JSZip.loadAsync(blob)
-    const manifest: QartManifest = JSON.parse(await zip.file('manifest.json')!.async('text'))
-    expect(manifest.canvas.width).toBe(1920)
-    expect(manifest.canvas.height).toBe(1080)
-    expect(manifest.canvas.dpi).toBe(300)
-  })
-
-  it('manifest has correct app and version', async () => {
-    const blob = await writeQart(createInput())
-    const zip = await JSZip.loadAsync(blob)
-    const manifest: QartManifest = JSON.parse(await zip.file('manifest.json')!.async('text'))
-    expect(manifest.app).toBe('quar-artist')
-    expect(manifest.version).toBe('1.0')
-  })
-
-  it('includes layer data files', async () => {
-    const blob = await writeQart(createInput())
-    const zip = await JSZip.loadAsync(blob)
-    expect(zip.file('layers/layer-1.bin')).not.toBeNull()
-  })
-
-  it('layer data matches input pixels', async () => {
-    const blob = await writeQart(createInput())
-    const zip = await JSZip.loadAsync(blob)
-    const data = new Uint8Array(await zip.file('layers/layer-1.bin')!.async('arraybuffer'))
-    expect(data).toEqual(new Uint8Array([10, 20, 30, 40]))
-  })
-
-  it('manifest layers reference correct data files', async () => {
-    const blob = await writeQart(createInput())
-    const zip = await JSZip.loadAsync(blob)
-    const manifest: QartManifest = JSON.parse(await zip.file('manifest.json')!.async('text'))
-    expect(manifest.layers).toHaveLength(1)
-    expect(manifest.layers[0].dataFile).toBe('layers/layer-1.bin')
-  })
-
-  it('preserves layer properties', async () => {
-    const blob = await writeQart(createInput({
-      layers: [{
-        info: {
-          id: 'layer-2',
-          name: 'Sketch',
-          visible: false,
-          opacity: 0.7,
-          blendMode: 'multiply',
-          alphaLock: true,
-          clippingMask: false,
-          locked: true,
-        },
-        order: 1,
-        pixels: new Uint8Array(4),
-      }],
-    }))
-    const zip = await JSZip.loadAsync(blob)
-    const manifest: QartManifest = JSON.parse(await zip.file('manifest.json')!.async('text'))
-    const layer = manifest.layers[0]
-    expect(layer.name).toBe('Sketch')
-    expect(layer.visible).toBe(false)
-    expect(layer.opacity).toBe(0.7)
-    expect(layer.blendMode).toBe('multiply')
-    expect(layer.alphaLock).toBe(true)
-    expect(layer.locked).toBe(true)
-  })
-
-  it('handles multiple layers', async () => {
-    const blob = await writeQart(createInput({
+  it('gives fresh ids to layers whose id repeats or names no folder, and keeps the selected one', async () => {
+    const pixels = () => solidLayer(600, 300, [9, 9, 9, 255])
+    const input = document({
       layers: [
-        {
-          info: { id: 'l1', name: 'BG', visible: true, opacity: 1, blendMode: 'normal', alphaLock: false, clippingMask: false, locked: false },
-          order: 0,
-          pixels: new Uint8Array([1, 2, 3, 4]),
-        },
-        {
-          info: { id: 'l2', name: 'Lines', visible: true, opacity: 1, blendMode: 'normal', alphaLock: false, clippingMask: false, locked: false },
-          order: 1,
-          pixels: new Uint8Array([5, 6, 7, 8]),
-        },
+        { info: layer('a'), pixels: pixels() },
+        { info: layer('a', { name: 'Again' }), pixels: pixels() },
+        { info: layer('../up', { name: 'Odd' }), pixels: pixels() },
+        { info: layer('layer-1', { name: 'Taken' }), pixels: pixels() },
       ],
-    }))
-    const zip = await JSZip.loadAsync(blob)
-    const manifest: QartManifest = JSON.parse(await zip.file('manifest.json')!.async('text'))
-    expect(manifest.layers).toHaveLength(2)
-    expect(zip.file('layers/l1.bin')).not.toBeNull()
-    expect(zip.file('layers/l2.bin')).not.toBeNull()
+      activeLayerId: 'a',
+    })
+    const blob = await encodeQart(input, noThumbnail)
+    const m = await manifest(blob)
+    expect(m.layers.map((l: { id: string }) => l.id)).toEqual(['a', 'layer-2', 'layer-3', 'layer-1'])
+    expect(m.activeLayerId).toBe('a')
+    const read = await decodeQart(blob)
+    expect(read.layers.map((l) => l.info.name)).toEqual(['Layer a', 'Again', 'Odd', 'Taken'])
   })
 
-  it('sets custom dates when provided', async () => {
-    const blob = await writeQart(createInput({
-      createdAt: '2025-01-01T00:00:00Z',
-      updatedAt: '2025-06-01T00:00:00Z',
-    }))
-    const zip = await JSZip.loadAsync(blob)
-    const manifest: QartManifest = JSON.parse(await zip.file('manifest.json')!.async('text'))
-    expect(manifest.createdAt).toBe('2025-01-01T00:00:00Z')
-    expect(manifest.updatedAt).toBe('2025-06-01T00:00:00Z')
+  it('brings what the reader would refuse into range', async () => {
+    const input = document({ dpi: 0 })
+    input.layers[1].info = layer('ink', { opacity: 7, blendMode: 'glow' as never })
+    const blob = await encodeQart({ ...input, activeLayerId: 'none' }, noThumbnail)
+    const m = await manifest(blob)
+    expect(m.canvas.dpi).toBe(1)
+    expect(m.layers[1]).toMatchObject({ opacity: 1, blendMode: 'normal' })
+    expect(m.activeLayerId).toBe('ink')
+    await expect(decodeQart(blob)).resolves.toMatchObject({ dpi: 1 })
+  })
+
+  it('writes tiles any ZIP reader can unpack, which fflate\'s streaming Deflate got wrong for this layer', async () => {
+    const ink = new Uint8Array(300 * 200 * 4)
+    for (let i = 0; i < ink.length; i += 4) {
+      const n = i / 4
+      if (n % 7 === 0) ink.set([(n * 13) % 256, (n * 29) % 256, (n * 7) % 256, (n * 31) % 256], i)
+    }
+    const blob = await encodeQart({ ...document(), width: 300, height: 200, layers: [{ info: layer('ink'), pixels: ink }], activeLayerId: 'ink' }, noThumbnail)
+    const unzipped = await entries(blob)
+    expect(sameBytes(unzipped['tiles/ink/0_0.raw'], cutTile(ink, 300, 200, 0, 0))).toBe(true)
+    expect(sameBytes(unzipped['tiles/ink/1_0.raw'], cutTile(ink, 300, 200, 1, 0))).toBe(true)
+  })
+
+  it('compresses, so a few strokes take next to nothing', async () => {
+    const pixels = new Uint8Array(512 * 512 * 4)
+    for (let x = 100; x < 400; x++) pixels.set([255, 0, 0, 255], (200 * 512 + x) * 4)
+    const blob = await encodeQart({ ...document(), width: 512, height: 512, layers: [{ info: layer('a'), pixels }] }, noThumbnail)
+    expect(blob.size).toBeLessThan(4000)
+  })
+
+  it('writes the file without a thumbnail when making one fails', async () => {
+    const thrown = await encodeQart(document(), () => {
+      throw new Error('no canvas')
+    })
+    expect((await manifest(thrown)).thumbnail).toBeNull()
+    const rejected = await encodeQart(document(), async () => {
+      throw new Error('no canvas')
+    })
+    expect(Object.keys(await entries(rejected))).not.toContain('thumbnail.png')
+    expect((await manifest(rejected)).thumbnail).toBeNull()
+  })
+
+  it('cuts names to 256 characters, so no name can make the manifest too large to read (review of M1.6)', async () => {
+    const input = document({ name: 'n'.repeat(300) })
+    input.layers[0].info = layer('bg', { name: 'x'.repeat(1_100_000) })
+    // A character of two UTF-16 units across the cut is left out whole.
+    input.layers[1].info = layer('ink', { name: `${'a'.repeat(255)}😀` })
+
+    const blob = await encodeQart(input, noThumbnail)
+
+    const m = await manifest(blob)
+    expect(m.name).toBe('n'.repeat(256))
+    expect(m.layers.map((l: { name: string }) => l.name.length)).toEqual([256, 255])
+    const read = await decodeQart(blob)
+    expect(read.layers.map((l) => l.info.name)).toEqual(['x'.repeat(256), 'a'.repeat(255)])
+  })
+
+  it('writes no thumbnail where none can be drawn', async () => {
+    const blob = await encodeQart(document())
+    expect(Object.keys(await entries(blob))).not.toContain('thumbnail.png')
+    expect((await manifest(blob)).thumbnail).toBeNull()
+  })
+
+  it('refuses no layers, layers of the wrong size, and sizes the format can not hold', async () => {
+    await expect(encodeQart(document({ layers: [] }), noThumbnail)).rejects.toThrow('there are no layers to save')
+    const wrong = document()
+    wrong.layers[0].pixels = new Uint8Array(16)
+    await expect(encodeQart(wrong, noThumbnail)).rejects.toThrow("the layer “Layer bg” isn't the canvas's size")
+    await expect(encodeQart(document({ width: 20000 }), noThumbnail)).rejects.toThrow("a canvas of 20000 × 300 px can't be saved as a .qart file")
   })
 })

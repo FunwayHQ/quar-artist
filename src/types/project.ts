@@ -67,31 +67,3 @@ export interface ExportOptions {
   format: 'png' | 'jpeg' | 'psd' | 'qart'
   jpegQuality: number
 }
-
-export interface QartManifest {
-  version: string
-  app: string
-  canvas: {
-    width: number
-    height: number
-    dpi: number
-    colorSpace: string
-  }
-  layers: QartLayerManifest[]
-  activeLayerId: string
-  createdAt: string
-  updatedAt: string
-}
-
-export interface QartLayerManifest {
-  id: string
-  name: string
-  blendMode: BlendMode
-  opacity: number
-  visible: boolean
-  locked: boolean
-  alphaLock: boolean
-  clippingMask: boolean
-  order: number
-  dataFile: string
-}

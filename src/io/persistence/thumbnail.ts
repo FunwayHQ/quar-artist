@@ -39,6 +39,42 @@ export function thumbnailSize(width: number, height: number): { width: number; h
   return { width: Math.max(1, Math.round(width * scale)), height: Math.max(1, Math.round(height * scale)) }
 }
 
+/** A canvas to draw on: the page's, or in a worker an OffscreenCanvas. Null where there is neither. */
+function makeCanvas(width: number, height: number): HTMLCanvasElement | OffscreenCanvas | null {
+  if (typeof document !== 'undefined') {
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    return canvas
+  }
+  return typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(width, height) : null
+}
+
+/** How long encoding a thumbnail may take: none rather than one that never comes, which would hold up saving. */
+export const THUMBNAIL_ENCODE_MS = 10_000
+
+/**
+ * Encode a canvas, or resolve null when it can't be, or takes longer than
+ * THUMBNAIL_ENCODE_MS. An OffscreenCanvas encodes with convertToBlob:
+ * Firefox's has an old toBlob of its own too, which takes no callback, so
+ * waiting for one would never end.
+ */
+function encodeCanvas(canvas: HTMLCanvasElement | OffscreenCanvas, type: string, quality: number): Promise<Blob | null> {
+  const encoded =
+    'convertToBlob' in canvas
+      ? canvas.convertToBlob({ type, quality }).catch(() => null)
+      : new Promise<Blob | null>((resolve) => {
+          try {
+            canvas.toBlob(resolve, type, quality)
+          } catch {
+            resolve(null)
+          }
+        })
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<null>((resolve) => (timer = setTimeout(() => resolve(null), THUMBNAIL_ENCODE_MS)))
+  return Promise.race([encoded, late]).finally(() => clearTimeout(timer))
+}
+
 /** Encode a composited image as a Gallery thumbnail. */
 export function encodeThumbnail(
   pixels: Uint8Array | Uint8ClampedArray,
@@ -52,24 +88,23 @@ export function encodeThumbnail(
  * Composite layers into a thumbnail with the 2D canvas: each visible layer is
  * scaled down and drawn with its opacity and the nearest canvas blend mode.
  * Close enough to preview a project that hasn't been opened in the engine.
- * Resolves null where there is no 2D canvas (tests) or encoding fails.
+ * WebP by default; `type` asks for another format, which browsers that
+ * can't encode it replace with PNG. Works in workers too, where they have
+ * OffscreenCanvas. Resolves null where there is no 2D canvas (tests) or
+ * encoding fails.
  */
 export async function encodeLayersThumbnail(
   layers: readonly ThumbnailLayer[],
   width: number,
   height: number,
+  type = 'image/webp',
 ): Promise<StoredImage | null> {
   const size = thumbnailSize(width, height)
-  const out = document.createElement('canvas')
-  out.width = size.width
-  out.height = size.height
-  const ctx = out.getContext('2d')
-
-  const layerCanvas = document.createElement('canvas')
-  layerCanvas.width = width
-  layerCanvas.height = height
-  const layerCtx = layerCanvas.getContext('2d')
-  if (!ctx || !layerCtx) return null
+  const out = makeCanvas(size.width, size.height)
+  const layerCanvas = makeCanvas(width, height)
+  const ctx = out?.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null | undefined
+  const layerCtx = layerCanvas?.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null | undefined
+  if (!out || !layerCanvas || !ctx || !layerCtx) return null
 
   ctx.imageSmoothingQuality = 'high'
   for (const layer of layers) {
@@ -81,12 +116,6 @@ export async function encodeLayersThumbnail(
   }
 
   // Browsers that can't encode WebP fall back to PNG.
-  const blob = await new Promise<Blob | null>((resolve) => {
-    try {
-      out.toBlob(resolve, 'image/webp', 0.85)
-    } catch {
-      resolve(null)
-    }
-  })
+  const blob = await encodeCanvas(out, type, 0.85)
   return blob ? { type: blob.type || 'image/png', data: await blob.arrayBuffer() } : null
 }

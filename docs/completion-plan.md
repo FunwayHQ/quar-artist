@@ -134,7 +134,7 @@ flowchart LR
   M6 --> M10
 ```
 
-**Immediate next steps:** M0 is done (M0.2 skipped), and so are M1.1 to M1.5. Next is M1.6, the .qart format v1.
+**Immediate next steps:** M0 is done (M0.2 skipped), and so are M1.1 to M1.6. Next is M1.7, PSD export fixes and PSD import.
 
 ---
 
@@ -417,7 +417,7 @@ flowchart LR
       - The file input counted focus coming back without a file, after 300 ms, as a cancel, so a file arriving later (from a cloud drive or the photo library) was dropped. Every supported browser says when its picker is cancelled (Q9), so nothing else counts as cancelling now.
       - Without storage, a write finishing after the canvas restarted counted for the new canvas, so leaving the page didn't ask.
     - Tests: unit tests for the pickers, the file input, permissions, writing and naming files and the error words (`io/files/fileAccess.test.ts`), the window drop guard, the service (Ctrl+S with and without a file, failed and refused writes, a file moved away, one project per file, Save as with and without storage, downloads, opening .qart files and images by picker and by drop, sorting dropped files, the canvas without storage and its restart), the File menu, the shortcuts, the Export dialog and the writer's compression. `e2e/files.spec.ts` saves a two-layer project as a .qart file and opens it again, pixel for pixel, in Chromium, Firefox and WebKit: in Chromium through stand-in pickers that hand out files in the origin-private file system, elsewhere through a download and the file chooser. In Chromium it checks that Ctrl+S writes the file again, also after a reload, and leaves it once another program wrote it. It drops a text file, an image and a .qart file on the title bar, the Layers panel and the canvas.
-- [ ] **M1.6 .qart format v1** · M · fixes F05, F10, F11
+- [x] **M1.6 .qart format v1** · M · fixes F05, F10, F11
   - Write `docs/qart-format.md`. The format is a ZIP containing:
     - `manifest.json`: format and app versions, size, DPI, colour space, alpha convention, the layer tree with ids, properties and order, the active layer, guides and a timelapse reference;
     - `tiles/<layerId>/<tx>_<ty>.<codec>`;
@@ -433,6 +433,44 @@ flowchart LR
     - key entries by unique id;
     - write the project name and preserve layer order;
     - run in a worker with streaming ZIP output (fflate, see Q4) so large files don't freeze the UI.
+  - **Done 2026-11-17.** Notes:
+    - `docs/qart-format.md` describes version 1: its entries and tiles, the manifest, the limits readers enforce, damaged files, how QUAR Artist writes files, and the draft layout written before it, which still opens.
+    - Files are version 1 now. They hold the manifest, a PNG thumbnail, and each layer's tiles with paint in them: 256 × 256 px, premultiplied, compressed.
+      - The manifest has the project's name, resolution, colour space and guides, and the layers in order under unique ids.
+      - Opening or importing a file keeps its resolution, colour space and guides.
+      - A file with more layers than the app opens (20) is refused, rather than opened with some left out.
+    - The reader (`io/formats/qart/zip.ts`, `QartReader.ts`) finds entries through the ZIP central directory and reads only the ones it needs, a few megabytes at a time, never the whole file. Before reading any pixels, it checks:
+      - the canvas size against the device, the layer count against the app, and that the layers fit in 4 GiB;
+      - each entry's declared and compressed sizes;
+      - every tile's name, layer and place in the grid.
+    - The reader also refuses:
+      - archives that need ZIP64, are encrypted or span disks;
+      - duplicate names, entries that overlap or aren't where the directory says;
+      - unknown format versions, duplicate layer ids and a selected layer that isn't one of them.
+    - Inflating stops once an entry passes its declared size (a 64 MiB bomb stops at its first 16 KiB) and refuses the file. Every entry is checked against its CRC-32. A tile whose data is damaged opens transparent, a toast says how many, and Ctrl+S doesn't write over that file.
+    - Reading and writing run in a worker (`qartWorker.ts`, `qartCodec.ts`). Pixel buffers are handed over, not copied. Where a worker can't start, or stops, the main thread does the work.
+    - fflate replaces JSZip (Q4). fflate 0.8.3's streaming compressor writes broken streams for some tiles: neither fflate nor zlib can inflate them, for 41 of 300 sample tiles at level 6. So `ZipWriter` writes the archive itself, compressing each entry whole with `deflateSync`. The file is still made entry by entry, as a list of parts, never as one buffer. The archives test clean with `unzip`, `zipinfo` and Python's `zipfile`.
+    - Thumbnails can be drawn in workers, on an OffscreenCanvas. Firefox's OffscreenCanvas still has an old `toBlob` that never calls back, which hung Save as there, so `convertToBlob` is used. A thumbnail that takes over 10 s is left out.
+    - The manifest's app version comes from `package.json`.
+    - Tests:
+      - unit tests for the ZIP reader and writer, the manifest, the reader and writer, and the worker client with a stand-in worker;
+      - fuzz tests: 900 damaged files and manifests, each of which opens whole or is refused with a reason;
+      - the service: import and open keep the file's settings, more than 20 layers are refused, draft files open, damaged tiles open transparent without a link, Save as writes the settings;
+      - the thumbnail encoder in a worker;
+      - `e2e/files.spec.ts` checks the version 1 layout and the thumbnail of a saved file in Chromium, Firefox and WebKit, opens a dropped version 1 file, and opens a file with a damaged tile.
+    - Fixed after a review, before the commit:
+      - The app could save documents that it then refused to open. The reader held every document to 4 GiB of layers, but the app makes up to 20 layers of 8192 × 8192, which is 5 GiB. Without storage, that file was the only copy. Files now open within `appQartLimits()`: whatever the app can make on the device.
+      - Names weren't cut to 256 characters when written, so a very long pasted layer name made a manifest too large to read. Both the writer and the reader cut names, without splitting a character.
+      - Importing or opening a file drew its Gallery thumbnail on the main thread, compositing every full-size layer. The .qart worker now draws it as it reads the file.
+      - An archive of exactly 65,535 entries was taken for ZIP64 and refused. ZIP64 is now recognised by its locator record.
+      - The format doc said draft files with a selected layer that isn't one of theirs are refused. They open on their top layer, as before, and the doc now says so.
+    - Known, for later packages:
+      - Save as and Ctrl+S still read every layer back from the GPU on the main thread before the worker gets them (M2.2's asynchronous readback).
+      - Opening a file holds its whole layers in memory, up to 5 GiB at the app's limits (M2.2).
+    - Test fixes:
+      - An M1.3 end-to-end test (`e2e/tiles.spec.ts`) compared a reopened canvas with a screenshot that had the Ctrl+S toast over it. On a less busy machine the shot now came before the toast went, so it waits for the toast first.
+      - The file tests' helper that reads a file in the origin-private file system read it again when the app's write replaced it mid-read.
+      - An M1.2 unit test of the persistence worker's stall watchdog gave it 50 ms, which a busy machine's timers overran. It now has four times that, with the same proportions.
 - [ ] **M1.7 PSD export fixes and PSD import** · M · fixes F05, F09, F93 (PSD import)
   - Export:
     - opacity in the 0–1 range;
@@ -485,6 +523,7 @@ flowchart LR
   - Plain TypeScript with no GPU references, fully unit-tested.
 - [ ] **M2.2 Tile pool, residency and readback** · XL · fixes F07, F51, F97, F82, F103, F105
   - Implement D2 and D3, with memory budgets per device class.
+  - Open .qart files tile by tile: the reader hands each tile to the tile store as it reads it, so opening a file never holds whole layers. Save as reads layers back asynchronously (D3).
   - One utility converts between premultiplied and straight alpha.
   - No document-sized 2D canvases anywhere, because of iOS Safari's 16.7-megapixel limit. Uploading straight from buffers also ends F103.
   - Survive a lost GPU context: upload every layer again from the tiles kept outside the GPU, so the canvas comes back as it was (F105).
@@ -522,6 +561,7 @@ flowchart LR
 - [ ] **M2.7 Memory budgets and layer limits** · M
   - Determine the device class from `navigator.deviceMemory`, the platform and the maximum texture size.
   - Calculate the layer limit from device memory and canvas size (PRD 4.3) and warn before it's reached.
+  - Open .qart files within the same limit (`appQartLimits` in `io/formats/qart/qartCodec.ts`), so whatever the app can make opens again.
   - Report tile-pool statistics to the performance dashboard.
 
 ### M3 — Input and brushes v2
@@ -987,7 +1027,7 @@ These are the defaults I'll use unless you choose otherwise. Nothing here blocks
 | Q1 | The PRD names Dexie, but the code uses `idb` | Keep `idb`: it's already integrated and tested, and Dexie adds nothing we need. Update the PRD and CLAUDE.md | M1.2 |
 | Q2 | The PRD names perfect-freehand | Don't adopt it. The stamp-based brush engine already covers pressure-sensitive strokes. Reconsider later for a vector ink brush | M3 |
 | Q3 | The PRD names chroma.js | Don't adopt it for v1.0. The existing, tested colour maths plus Display P3 canvases cover what's needed; CMYK and ICC profiles are v2.0 | M7.3 |
-| Q4 | Which ZIP library | fflate in workers instead of JSZip: it streams, is faster and is smaller | M1.6 |
+| Q4 | Which ZIP library | fflate in workers instead of JSZip: it streams, is faster and is smaller. Its streaming compressor isn't used, since it writes broken streams for some data (see M1.6) | M1.6 |
 | Q5 | How to encode video | WebCodecs with a small MIT-licensed muxer. FFmpeg.wasm (LGPL, about 25 MB) only as a lazily loaded fallback | M7.7 |
 | Q6 | Backend for collaboration and cloud save: hosting, accounts or links, encryption | A Node relay users can host themselves, plus S3-compatible storage. No accounts in v1.0: share links carry the access, and content is end-to-end encrypted with the key in the URL fragment | M10 |
 | Q7 | Collaboration sync model: the PRD syncs strokes only, never pixels | Replay strokes for responsiveness, and also send the resulting tiles after each stroke, because different GPUs don't render identically | M10 |

@@ -164,6 +164,8 @@ test('a change is saved by itself, on top of the last save, and opens again as p
   expect(after.refs.length).toBeGreaterThan(before.refs.length)
   expect(second.stored).toEqual(expectedStored(second))
 
+  // The toast Ctrl+S showed lies over the canvas for a few seconds: the shots compare the painting alone.
+  await expect(page.getByText('Saved “Untitled Project”')).toBeHidden({ timeout: 10000 })
   const painted = await canvasShot(page)
   await page.reload()
   await page.getByRole('button', { name: 'Continue Untitled Project' }).click()

@@ -1,7 +1,8 @@
 /**
- * Files on disk in the real app (plan M1.5): Save as .qart… keeps every
- * layer, File › Open… opens the file again, Ctrl+S writes the file a project
- * was saved as, and files dropped anywhere never take the app away.
+ * Files on disk in the real app (plans M1.5 and M1.6): Save as .qart… keeps
+ * every layer, File › Open… opens the file again, Ctrl+S writes the file a
+ * project was saved as, files dropped anywhere never take the app away, and
+ * a file with damaged tiles opens with them transparent.
  *
  * Chromium has the File System Access API. Its pickers show the system's
  * dialogs, which a test can't use, so stand-ins hand out real handles to
@@ -9,7 +10,7 @@
  * download the file, and open one through a file input, as their users do.
  */
 import { test, expect, type Page } from '@playwright/test'
-import JSZip from 'jszip'
+import { unzipSync, zipSync, strToU8 } from 'fflate'
 import { readFile } from 'node:fs/promises'
 import { CANVAS, STROKE_PIXELS, canvasShot, changedPixels, drawStroke, waitForEngine } from './support/app.ts'
 import { decodePng } from './support/png.ts'
@@ -38,12 +39,21 @@ async function standInPickers(page: Page) {
   }, FILES)
 }
 
-/** A file the stand-in pickers keep. */
+/** A file the stand-in pickers keep, as it is once any write to it is done. */
 async function fileOnDisk(page: Page, name: string): Promise<Buffer> {
   const base64 = await page.evaluate(
     async ([folder, fileName]) => {
       const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle(folder)
-      const bytes = new Uint8Array(await (await (await dir.getFileHandle(fileName)).getFile()).arrayBuffer())
+      let bytes: Uint8Array | null = null
+      // A File is a snapshot: one the app writes over while it is read can't be read, and is read again.
+      for (let tries = 0; !bytes; tries++) {
+        try {
+          bytes = new Uint8Array(await (await (await dir.getFileHandle(fileName)).getFile()).arrayBuffer())
+        } catch (err) {
+          if ((err as DOMException).name !== 'NotReadableError' || tries >= 50) throw err
+          await new Promise((resolve) => setTimeout(resolve, 100))
+        }
+      }
       let text = ''
       for (let i = 0; i < bytes.length; i += 0x8000) text += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
       return btoa(text)
@@ -96,17 +106,70 @@ async function paint(page: Page, at?: { x: number; y: number }) {
   await expect.poll(async () => changedPixels(page, before, await canvasShot(page))).toBeGreaterThan(STROKE_PIXELS)
 }
 
-/** Pixels with any alpha in a .qart file's layers. */
+/** A .qart file's entries, unpacked. */
+function entries(bytes: Buffer): Record<string, Uint8Array> {
+  return unzipSync(new Uint8Array(bytes))
+}
+
+/** Pixels with any alpha in a .qart file's tiles. */
 async function paintedPixels(bytes: Buffer): Promise<number> {
-  const zip = await JSZip.loadAsync(bytes)
   let n = 0
-  for (const entry of Object.values(zip.files)) {
-    if (!entry.name.startsWith('layers/')) continue
-    const data = await entry.async('uint8array')
+  for (const [name, data] of Object.entries(entries(bytes))) {
+    if (!name.startsWith('tiles/')) continue
     for (let i = 3; i < data.length; i += 4) if (data[i] > 0) n++
   }
   return n
 }
+
+/** A tile of a .qart file (docs/qart-format.md): 256 × 256 px, premultiplied, the top left `width` × `height` of it `rgba`. */
+function tile(width: number, height: number, rgba: readonly number[]): Uint8Array {
+  const data = new Uint8Array(256 * 256 * 4)
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) data.set(rgba, (y * 256 + x) * 4)
+  return data
+}
+
+/** A version 1 manifest of a document of one layer per id, bottom first, the last selected. */
+function manifest(width: number, height: number, layers: { id: string; name: string }[]) {
+  return {
+    format: 'qart',
+    formatVersion: 1,
+    app: { name: 'A test', version: '1' },
+    name: 'Made elsewhere',
+    canvas: { width, height, dpi: 144, colorSpace: 'srgb' },
+    tiles: { size: 256, format: 'rgba8', alpha: 'premultiplied', codec: 'raw' },
+    layers: layers.map(({ id, name }) => ({
+      type: 'layer',
+      id,
+      name,
+      blendMode: 'normal',
+      opacity: 1,
+      visible: true,
+      locked: false,
+      alphaLock: false,
+      clippingMask: false,
+    })),
+    activeLayerId: layers[layers.length - 1].id,
+    guides: null,
+    thumbnail: null,
+    timelapse: null,
+  }
+}
+
+/** Give an entry of a ZIP archive a checksum its data doesn't have, in the central directory, which readers go by. */
+function breakChecksum(zip: Uint8Array, name: string): Uint8Array {
+  const view = new DataView(zip.buffer, zip.byteOffset, zip.byteLength)
+  for (let at = 0; at + 46 <= zip.length; at++) {
+    if (view.getUint32(at, true) !== 0x02014b50) continue
+    const length = view.getUint16(at + 28, true)
+    if (new TextDecoder().decode(zip.subarray(at + 46, at + 46 + length)) === name) {
+      view.setUint32(at + 16, view.getUint32(at + 16, true) ^ 0xffffffff, true)
+      return zip
+    }
+  }
+  throw new Error(`no entry ${name}`)
+}
+
+const base64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64')
 
 function storedProjectCount(page: Page) {
   return page.evaluate(
@@ -163,38 +226,13 @@ function drop(page: Page, selector: string, files: { name: string; type?: string
 }
 
 /** A .qart file made outside the app: a 64 × 64 document whose one layer, "Red", is opaque red. */
-async function redSquare(): Promise<string> {
-  const zip = new JSZip()
-  const pixels = new Uint8Array(64 * 64 * 4)
-  for (let i = 0; i < pixels.length; i += 4) pixels.set([255, 0, 0, 255], i)
-  zip.file('layers/red.bin', pixels)
-  const now = new Date().toISOString()
-  zip.file(
-    'manifest.json',
-    JSON.stringify({
-      version: '1.0',
-      app: 'quar-artist',
-      canvas: { width: 64, height: 64, dpi: 144, colorSpace: 'srgb' },
-      layers: [
-        {
-          id: 'red',
-          name: 'Red',
-          blendMode: 'normal',
-          opacity: 1,
-          visible: true,
-          locked: false,
-          alphaLock: false,
-          clippingMask: false,
-          order: 0,
-          dataFile: 'layers/red.bin',
-        },
-      ],
-      activeLayerId: 'red',
-      createdAt: now,
-      updatedAt: now,
+function redSquare(): string {
+  return base64(
+    zipSync({
+      'manifest.json': strToU8(JSON.stringify(manifest(64, 64, [{ id: 'red', name: 'Red' }]))),
+      'tiles/red/0_0.raw': tile(64, 64, [255, 0, 0, 255]),
     }),
   )
-  return zip.generateAsync({ type: 'base64', compression: 'DEFLATE' })
 }
 
 test('a project saved as a .qart file opens again from it, with every layer, pixel for pixel', async ({ page, browserName }) => {
@@ -210,10 +248,24 @@ test('a project saved as a .qart file opens again from it, with every layer, pix
   const file = await saveAs(page, browserName)
 
   expect(file.name).toBe('Untitled Project.qart')
-  const zip = await JSZip.loadAsync(file.bytes)
-  const manifest = JSON.parse(await zip.file('manifest.json')!.async('text'))
-  expect(manifest.canvas).toMatchObject({ width: 1920, height: 1080 })
-  expect(manifest.layers.map((l: { name: string }) => l.name)).toEqual(['Layer 1', 'Layer 2'])
+  // Version 1 of the format (docs/qart-format.md), as other programs can read it.
+  const unpacked = entries(file.bytes)
+  const written = JSON.parse(new TextDecoder().decode(unpacked['manifest.json']))
+  expect(written).toMatchObject({
+    format: 'qart',
+    formatVersion: 1,
+    name: 'Untitled Project',
+    canvas: { width: 1920, height: 1080 },
+    tiles: { size: 256, alpha: 'premultiplied', codec: 'raw' },
+    thumbnail: 'thumbnail.png',
+  })
+  expect(written.layers.map((l: { name: string }) => l.name)).toEqual(['Layer 1', 'Layer 2'])
+  expect([...unpacked['thumbnail.png'].subarray(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47])
+  // Only tiles with paint in them: a stroke is in a few of the 8 × 5 of each layer.
+  const tiles = Object.keys(unpacked).filter((name) => name.startsWith('tiles/'))
+  expect(tiles.length).toBeGreaterThan(1)
+  expect(tiles.length).toBeLessThan(20)
+  for (const name of tiles) expect(unpacked[name].length).toBe(256 * 256 * 4)
   // Compressed: far smaller than the two layers' 16 MB of pixels.
   expect(file.bytes.length).toBeLessThan(1_000_000)
 
@@ -291,7 +343,7 @@ test('files dropped anywhere never take the app away: images become layers, a .q
   await expect(page.getByText('Imported "dot.png" (32×32)')).toBeVisible()
 
   // A .qart file dropped on the canvas: it opens as a project, once the open one is saved.
-  expect(await drop(page, CANVAS, [{ name: 'Square.qart', base64: await redSquare() }])).toBe(true)
+  expect(await drop(page, CANVAS, [{ name: 'Square.qart', base64: redSquare() }])).toBe(true)
   await expect(page.getByRole('textbox', { name: 'Project name' })).toHaveValue('Square', { timeout: OPENING })
   await expect(rows).toHaveCount(1)
   await expect(rows.first().getByRole('textbox', { name: /^Layer name/ })).toHaveValue('Red')
@@ -306,4 +358,31 @@ test('files dropped anywhere never take the app away: images become layers, a .q
     .toBe(true)
   expect(await storedProjectCount(page)).toBe(2)
   expect(page.url()).toBe(url)
+})
+
+test('a .qart file with a damaged tile opens with it transparent, and says so (plan M1.6)', async ({ page }) => {
+  test.slow()
+  await page.goto('/')
+  await waitForEngine(page)
+  // 512 × 256: a red tile, then one whose checksum is wrong.
+  const zip = zipSync({
+    'manifest.json': strToU8(JSON.stringify(manifest(512, 256, [{ id: 'paint', name: 'Paint' }]))),
+    'tiles/paint/0_0.raw': tile(256, 256, [255, 0, 0, 255]),
+    'tiles/paint/1_0.raw': tile(256, 256, [0, 0, 255, 255]),
+  })
+
+  expect(await drop(page, CANVAS, [{ name: 'Damaged.qart', base64: base64(breakChecksum(zip, 'tiles/paint/1_0.raw')) }])).toBe(true)
+
+  await expect(page.getByRole('textbox', { name: 'Project name' })).toHaveValue('Damaged', { timeout: OPENING })
+  await expect(page.getByText("Part of “Damaged.qart” couldn't be read and shows as transparent (1 tile of 256 × 256 px)")).toBeVisible()
+  await waitForEngine(page)
+  // At 100%, the canvas's middle is where the two tiles meet: red on the left, nothing blue on the right.
+  await expect
+    .poll(async () => {
+      const shot = decodePng(await canvasShot(page))
+      const [lr, lg, lb] = shot.at(Math.floor(shot.width / 2) - 40, Math.floor(shot.height / 2))
+      const [rr, rg, rb] = shot.at(Math.floor(shot.width / 2) + 40, Math.floor(shot.height / 2))
+      return lr > 200 && lg < 40 && lb < 40 && !(rr < 60 && rg < 60 && rb > 200)
+    }, { timeout: 20000 })
+    .toBe(true)
 })

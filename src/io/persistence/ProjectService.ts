@@ -8,8 +8,8 @@ import { createDocumentStore } from '../tiles/WorkerDocumentStore.ts'
 import { TILE_SIZE, savedLayerInfo } from '../tiles/tileFormat.ts'
 import type { SaveStatus } from './AutoSave.ts'
 import { encodeLayersThumbnail } from './thumbnail.ts'
-import { readQart } from '../formats/qart/QartReader.ts'
-import { writeQart, type QartWriterInput } from '../formats/qart/QartWriter.ts'
+import { appQartLimits, openQart, writeQart } from '../formats/qart/qartCodec.ts'
+import type { QartWriterInput } from '../formats/qart/QartWriter.ts'
 import {
   QART_EXTENSION,
   canPickSaveFile,
@@ -30,8 +30,8 @@ import { decodeImageBlob } from '../importImage.ts'
 import { canvasSizeProblem } from '../../utils/deviceLimits.ts'
 import { createId } from '../../utils/id.ts'
 import { setDatabaseEventListener, type DatabaseEvent, type ProjectRecord } from '../../db/schema.ts'
-import type { GallerySort, NewProjectConfig } from '../../types/project.ts'
-import { MAX_LAYERS, type BlendMode, type LayerInfo, type StoredLayer } from '../../types/layer.ts'
+import type { GallerySort, NewProjectConfig, StoredImage } from '../../types/project.ts'
+import type { LayerInfo, StoredLayer } from '../../types/layer.ts'
 
 const SETTING_SORT = 'gallery.sort'
 const SETTING_LAST_PROJECT = 'gallery.lastProjectId'
@@ -152,6 +152,12 @@ interface FileDocument {
   /** Bottom first, at the document's size. */
   layers: StoredLayer[]
   activeLayerId: string
+  /** The guides the file has, for `savedGuides` to check. */
+  guides?: unknown
+  /** Tiles of 256 × 256 px the file has but that couldn't be read: they are transparent. */
+  unreadableTiles?: number
+  /** The Gallery's thumbnail, drawn where the file was read; made from the layers when there is none. */
+  thumbnail?: StoredImage | null
 }
 
 /** A document opened from a file without storage, waiting for the canvas made for it. */
@@ -712,13 +718,14 @@ export class ProjectService {
     const engine = this.engine
     if (!engine || this.loadingInto === engine) throw new Error("the canvas isn't ready yet")
     const { width, height } = engine.getDocumentSize()
-    const { currentProjectName: name, dpi } = this.store.getState()
-    const layers = engine.getLayerInfos().map((raw, order) => {
+    const { currentProjectName: name, dpi, colorSpace } = this.store.getState()
+    const layers = engine.getLayerInfos().map((raw) => {
       const pixels = engine.getLayerPixels(raw.id)
       if (!pixels) throw new Error(`the layer ${q(raw.name)} can't be read right now. Try again in a moment`)
-      return { info: savedLayerInfo(raw), order, pixels }
+      return { info: savedLayerInfo(raw), pixels }
     })
-    return { name, width, height, dpi, layers, activeLayerId: engine.getActiveLayerId() }
+    const guides = documentGuides(useGuideStore.getState())
+    return { name, width, height, dpi, colorSpace, layers, activeLayerId: engine.getActiveLayerId(), guides }
   }
 
   /**
@@ -815,17 +822,36 @@ export class ProjectService {
       this.toast(`Couldn't open ${q(file.name)}: ${describe(err)}`, 'error')
       return false
     }
-    // The project is made from the file as it is: Ctrl+S may write it while it stays so.
-    if (linked) await this.rememberFile(id, linked, file.lastModified)
+    const unreadable = doc.unreadableTiles ?? 0
+    // The project is made from the file as it is: Ctrl+S may write it while it stays so. Not over tiles it couldn't read.
+    if (linked && unreadable === 0) await this.rememberFile(id, linked, file.lastModified)
     // In the Gallery even if the open project can't close for it.
     await this.refresh().catch(() => undefined)
-    return this.openProject(id)
+    const opened = await this.openProject(id)
+    this.reportUnreadableFile(file, unreadable, linked !== null)
+    return opened
+  }
+
+  /** Say so when part of a file couldn't be read: its document opened with those tiles transparent. */
+  private reportUnreadableFile(file: File, n: number, linked: boolean) {
+    if (n === 0) return
+    const tiles = `${n} ${n === 1 ? 'tile' : 'tiles'} of ${TILE_SIZE} × ${TILE_SIZE} px`
+    const writes = linked ? '. Ctrl+S won\'t write to the file, which may still have it' : ''
+    this.toast(`Part of ${q(file.name)} couldn't be read and shows as transparent (${tiles})${writes}`, 'error', {
+      durationMs: 15000,
+    })
   }
 
   /** Without storage, a file opens in the canvas's place: asking first, when that loses changes. */
   private openUnsavedFile(file: File, doc: FileDocument, handle: FileHandle | null): boolean {
-    const link: FileLink | null = handle ? { handle, projectId: null, modified: file.lastModified, kept: false } : null
-    const open = () => this.openUnsaved(doc.config, doc, link)
+    const unreadable = doc.unreadableTiles ?? 0
+    // Not over tiles it couldn't read.
+    const link: FileLink | null =
+      handle && unreadable === 0 ? { handle, projectId: null, modified: file.lastModified, kept: false } : null
+    const open = () => {
+      this.openUnsaved(doc.config, doc, link)
+      this.reportUnreadableFile(file, unreadable, handle !== null)
+    }
     if (this.unsavedChanged) {
       this.toast(`The open canvas can't be saved in this browser, so opening ${q(file.name)} loses it`, 'error', {
         durationMs: 10000,
@@ -1224,7 +1250,7 @@ export class ProjectService {
    */
   private openUnsaved(
     config: NewProjectConfig,
-    doc: Pick<FileDocument, 'layers' | 'activeLayerId'> | null = null,
+    doc: Pick<FileDocument, 'layers' | 'activeLayerId' | 'guides'> | null = null,
     link: FileLink | null = null,
   ) {
     this.session = null
@@ -1233,7 +1259,7 @@ export class ProjectService {
     this.unsavedEdits = 0
     this.unsavedEditsWritten = 0
     this.link = link
-    this.showGuides(undefined, config.width, config.height)
+    this.showGuides(doc?.guides, config.width, config.height)
     this.store.getState().openDocument({ id: null, ...config, loadsSaved: doc !== null })
     const sessionId = this.store.getState().sessionId
     this.unsavedDoc = doc && sessionId ? { sessionId, layers: doc.layers, activeLayerId: doc.activeLayerId } : null
@@ -1518,8 +1544,10 @@ export class ProjectService {
         continue
       }
       try {
-        await this.addProject(importKind(file) === 'qart' ? await this.qartDocument(file) : await this.imageDocument(file))
+        const doc = importKind(file) === 'qart' ? await this.qartDocument(file) : await this.imageDocument(file)
+        await this.addProject(doc)
         imported.push(baseName(file.name))
+        this.reportUnreadableFile(file, doc.unreadableTiles ?? 0, false)
       } catch (err) {
         this.toast(`Couldn't import ${q(file.name)}: ${describe(err)}`, 'error')
       }
@@ -1540,37 +1568,38 @@ export class ProjectService {
     return { config: { name, width, height, dpi: 72, colorSpace: 'srgb' }, layers: [{ info, pixels: bytes }], activeLayerId: info.id }
   }
 
-  /** A .qart file's document, named after its file. */
+  /**
+   * A .qart file's document, named after its file (plan M1.6): read off the
+   * main thread, and refused before any pixels are read when it is larger
+   * than this device opens or has more layers than the app.
+   */
   private async qartDocument(file: File): Promise<FileDocument> {
-    const { manifest, layers } = await readQart(file)
-    const { width, height, dpi } = manifest.canvas
-    const problem = canvasSizeProblem(width, height)
-    if (problem) throw new Error(problem)
-
+    // Without storage there is no Gallery to show a thumbnail.
+    const { document: doc, thumbnail } = await openQart(file, appQartLimits(), { thumbnail: !this.unsaved })
     // Fresh ids: the same file imported twice makes two independent projects.
-    const ids = new Map<string, string>()
-    const stored: StoredLayer[] = [...layers]
-      .sort((a, b) => a.manifest.order - b.manifest.order)
-      .slice(0, MAX_LAYERS)
-      .map(({ manifest: layer, pixels }) => {
-        if (pixels.length !== width * height * 4) throw new Error(`layer ${q(layer.name)} has the wrong size`)
-        const info = savedLayerInfo({
-          ...newLayerInfo(String(layer.name)),
-          blendMode: layer.blendMode as BlendMode,
-          opacity: layer.opacity,
-          visible: layer.visible,
-          locked: layer.locked,
-          alphaLock: layer.alphaLock,
-          clippingMask: layer.clippingMask,
-        })
-        if (!ids.has(layer.id)) ids.set(layer.id, info.id)
-        return { info, pixels }
+    let activeLayerId = ''
+    const layers: StoredLayer[] = doc.layers.map(({ info: layer, pixels }) => {
+      const info = savedLayerInfo({
+        ...newLayerInfo(layer.name),
+        blendMode: layer.blendMode,
+        opacity: layer.opacity,
+        visible: layer.visible,
+        locked: layer.locked,
+        alphaLock: layer.alphaLock,
+        clippingMask: layer.clippingMask,
       })
-    if (stored.length === 0) throw new Error('it has no layers')
-
-    const activeLayerId = ids.get(manifest.activeLayerId) ?? stored[stored.length - 1].info.id
-    const config = { name: baseName(file.name), width, height, dpi: dpi > 0 ? dpi : 72, colorSpace: 'srgb' as const }
-    return { config, layers: stored, activeLayerId }
+      if (layer.id === doc.activeLayerId) activeLayerId = info.id
+      return { info, pixels }
+    })
+    const { width, height, dpi, colorSpace } = doc
+    return {
+      config: { name: baseName(file.name), width, height, dpi, colorSpace },
+      layers,
+      activeLayerId,
+      guides: doc.guides,
+      unreadableTiles: doc.unreadableTiles,
+      thumbnail,
+    }
   }
 
   /**
@@ -1578,24 +1607,31 @@ export class ProjectService {
    * thumbnail, and its layers saved. In the stack open in the Gallery, if
    * there is one. Returns its id.
    */
-  private async addProject({ config, layers, activeLayerId }: FileDocument): Promise<string> {
+  private async addProject({ config, layers, activeLayerId, guides, thumbnail: drawn }: FileDocument): Promise<string> {
     const { view, openStackId } = this.store.getState()
     const stackId = view === 'gallery' && openStackId ? openStackId : undefined
     // Before saving: the save hands the pixels over to the persistence worker.
-    const thumbnail = await encodeLayersThumbnail(
-      layers.flatMap(({ info, pixels }) =>
-        pixels ? [{ pixels, opacity: info.opacity, visible: info.visible, blendMode: info.blendMode }] : [],
-      ),
-      config.width,
-      config.height,
-    ).catch(() => null)
+    const thumbnail =
+      drawn ??
+      (await encodeLayersThumbnail(
+        layers.flatMap(({ info, pixels }) =>
+          pixels ? [{ pixels, opacity: info.opacity, visible: info.visible, blendMode: info.blendMode }] : [],
+        ),
+        config.width,
+        config.height,
+      ).catch(() => null))
     const id = await this.db.createProject(config.name, config.width, config.height, config.dpi, {
       colorSpace: config.colorSpace,
       ...(stackId ? { stackId } : {}),
     })
     try {
       await this.tiles.save(id, { width: config.width, height: config.height, layers })
-      await this.db.updateProject(id, { activeLayerId, ...(thumbnail ? { thumbnail } : {}) })
+      await this.db.updateProject(id, {
+        activeLayerId,
+        ...(thumbnail ? { thumbnail } : {}),
+        // The guides the file had, checked; without any, the project opens with fresh ones.
+        ...(guides !== undefined && guides !== null ? { guides: savedGuides(guides, config.width, config.height) } : {}),
+      })
     } catch (err) {
       // Leave no half-imported project in the Gallery.
       await this.removeProject(id).catch(() => undefined)

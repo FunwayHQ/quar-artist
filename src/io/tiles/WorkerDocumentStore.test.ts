@@ -263,15 +263,15 @@ describe('WorkerDocumentStore', () => {
     const inner = idbStore()
     const save = inner.save.bind(inner)
     vi.spyOn(inner, 'save').mockImplementation(async (...args) => {
-      // Four times the stall limit, reporting progress all along.
+      // Four times the stall limit, reporting progress all along, every fifth of it: a busy machine's timers run late.
       for (let i = 0; i < 20; i++) {
         inner.onProgress?.()
-        await new Promise((resolve) => setTimeout(resolve, 10))
+        await new Promise((resolve) => setTimeout(resolve, 40))
       }
       return save(...args)
     })
     const worker = new LoopbackWorker(inner, { progressIntervalMs: 5 })
-    const store = new WorkerDocumentStore(() => worker, idbStore, { stallMs: 50 })
+    const store = new WorkerDocumentStore(() => worker, idbStore, { stallMs: 200 })
 
     expect(await store.save('p', { width: 1, height: 1, layers: [{ info, pixels: opaque(1, 1) }] })).toMatchObject({
       written: 1,
