@@ -29,6 +29,7 @@ interface PickerWindow {
 }
 
 export const QART_EXTENSION = '.qart'
+export const PSD_EXTENSION = '.psd'
 const QART_MIME = 'application/x-quar-artist'
 const QART_TYPE: FilePickerType = { description: 'QUAR Artist project', accept: { [QART_MIME]: [QART_EXTENSION] } }
 const OPEN_TYPES: FilePickerType[] = [
@@ -36,13 +37,13 @@ const OPEN_TYPES: FilePickerType[] = [
     description: 'QUAR Artist projects, PSD files and images',
     accept: {
       [QART_MIME]: [QART_EXTENSION],
-      'image/vnd.adobe.photoshop': ['.psd'],
+      'image/vnd.adobe.photoshop': ['.psd', '.psb'],
       'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif'],
     },
   },
 ]
 /** The files File › Open… offers, where it has to use a file input. */
-export const OPEN_ACCEPT = '.qart,.psd,image/*'
+export const OPEN_ACCEPT = '.qart,.psd,.psb,image/*'
 /** The pickers start in the folder last used with this id. */
 const PICKER_ID = 'quar-artist'
 /** Longest project name kept in a file name: file systems allow 255 bytes. */

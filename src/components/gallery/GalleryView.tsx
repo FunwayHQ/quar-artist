@@ -127,7 +127,7 @@ export function GalleryView({ actions }: { actions: GalleryActions }) {
             type="file"
             multiple
             hidden
-            accept=".qart,.psd,image/*"
+            accept=".qart,.psd,.psb,image/*"
             aria-label="Import files"
             onChange={(e) => {
               const files = Array.from(e.target.files ?? [])

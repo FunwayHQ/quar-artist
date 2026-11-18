@@ -6,6 +6,7 @@
  * Pixel buffers are row-major, top row first.
  */
 import type { BlendMode, LayerInfo } from '../../src/types/layer.ts'
+import type { PsdNotes } from '../../src/io/formats/psd/PsdReader.ts'
 import type { ToolType } from '../../src/types/engine.ts'
 import type { BoundingBox } from '../../src/types/selection.ts'
 
@@ -97,6 +98,15 @@ export interface ReadTile extends TileAt {
 /** What changed since the last call, by layer id: the tiles touched ("x_y", sorted), or 'all'. */
 export type ChangedTiles = Record<string, string[] | 'all'>
 
+/** A PSD file as the harness opened it (plan M1.7). */
+export interface OpenedPsd {
+  /** The layers it became, bottom to top. */
+  layers: LayerInfo[]
+  activeLayerId: string
+  /** What it had that the app leaves out. */
+  notes: PsdNotes
+}
+
 /** How `reopen` opens the saved document again. */
 export type ReopenVia = 'tiles' | 'layers'
 
@@ -141,6 +151,13 @@ export interface QuarHarness {
    * as projects saved before M1.2 open (M1.1).
    */
   reopen(via?: ReopenVia): void
+
+  /**
+   * Open a PSD file as the app opens one (plan M1.7): the app's PSD reader
+   * reads it, and its layers take the place of the document's. The page must
+   * be open at the file's size.
+   */
+  openPsd(file: EncodedFile): Promise<OpenedPsd>
 
   /**
    * Read tiles of a layer back as an incremental save does, each with the

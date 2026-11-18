@@ -8,9 +8,12 @@ import { createDocumentStore } from '../tiles/WorkerDocumentStore.ts'
 import { TILE_SIZE, savedLayerInfo } from '../tiles/tileFormat.ts'
 import type { SaveStatus } from './AutoSave.ts'
 import { encodeLayersThumbnail } from './thumbnail.ts'
-import { appQartLimits, openQart, writeQart } from '../formats/qart/qartCodec.ts'
+import { appFileLimits, openPsd, openQart, writePsd, writeQart } from '../formats/fileCodec.ts'
 import type { QartWriterInput } from '../formats/qart/QartWriter.ts'
+import type { PsdNotes } from '../formats/psd/PsdReader.ts'
+import type { PsdWriterInput } from '../formats/psd/PsdWriter.ts'
 import {
+  PSD_EXTENSION,
   QART_EXTENSION,
   canPickSaveFile,
   describeFileError,
@@ -55,11 +58,11 @@ const GALLERY_SORTS: readonly GallerySort[] = ['updated', 'created', 'name']
 /** Tiles read and put into the canvas at a time while a document opens: 16 MB of pixels (plan M1.4). */
 export const LOAD_BATCH_TILES = 64
 
-/** What kind of file the Gallery was given to import. */
+/** What kind of file the Gallery was given to import. PSB files are large PSD files. */
 export function importKind(file: Pick<File, 'name' | 'type'>): 'qart' | 'psd' | 'image' | 'other' {
   const ext = file.name.toLowerCase().split('.').pop() ?? ''
   if (ext === 'qart') return 'qart'
-  if (ext === 'psd') return 'psd'
+  if (ext === 'psd' || ext === 'psb' || file.type === 'image/vnd.adobe.photoshop') return 'psd'
   if (file.type.startsWith('image/') || ['png', 'jpg', 'jpeg', 'webp', 'gif', 'bmp', 'avif'].includes(ext)) {
     return 'image'
   }
@@ -68,16 +71,14 @@ export function importKind(file: Pick<File, 'name' | 'type'>): 'qart' | 'psd' | 
 
 /** Why a file can't be opened or imported, or null when it can. */
 function refusal(file: Pick<File, 'name' | 'type'>): string | null {
-  const kind = importKind(file)
-  if (kind === 'psd') return `${q(file.name)}: PSD files can't be opened yet`
-  if (kind === 'other') return `${q(file.name)} isn't a .qart file or an image`
+  if (importKind(file) === 'other') return `${q(file.name)} isn't a .qart or PSD file, or an image`
   return null
 }
 
 /**
- * Files dropped on the canvas, by what becomes of them (plan M1.5): images
- * are added as layers, the first .qart file opens, and the rest are refused,
- * each with the reason.
+ * Files dropped on the canvas, by what becomes of them (plans M1.5, M1.7):
+ * images are added as layers, the first .qart or PSD file opens as a
+ * project, and the rest are refused, each with the reason.
  */
 export function sortDroppedFiles(files: readonly File[]): { images: File[]; project: File | null; refused: string[] } {
   const images: File[] = []
@@ -86,7 +87,7 @@ export function sortDroppedFiles(files: readonly File[]): { images: File[]; proj
   for (const file of files) {
     const kind = importKind(file)
     if (kind === 'image') images.push(file)
-    else if (kind === 'qart' && !project) project = file
+    else if ((kind === 'qart' || kind === 'psd') && !project) project = file
     else refused.push(refusal(file) ?? `${q(file.name)} wasn't opened: one project opens at a time`)
   }
   return { images, project, refused }
@@ -95,6 +96,38 @@ export function sortDroppedFiles(files: readonly File[]): { images: File[]; proj
 /** A file name without its extension, as a project name. */
 export function baseName(fileName: string): string {
   return fileName.replace(/\.[^.]+$/, '').trim() || 'Untitled'
+}
+
+/** `n` things, as toasts say it: "1 group", "3 groups". */
+function count(n: number, thing: string): string {
+  return `${n} ${thing}${n === 1 ? '' : 's'}`
+}
+
+/** Words as a list: "a", "a and b", "a, b and c". */
+function listed(words: readonly string[]): string {
+  return words.length < 2 ? (words[0] ?? '') : `${words.slice(0, -1).join(', ')} and ${words.at(-1)}`
+}
+
+/**
+ * What a PSD file had that didn't come with it, as the toast after opening
+ * it says (plan M1.7), or null when it had nothing of the kind.
+ */
+export function psdNotice(fileName: string, notes: PsdNotes): string | null {
+  const parts: string[] = []
+  if (notes.groups > 0) parts.push(`its ${notes.groups === 1 ? 'group' : count(notes.groups, 'group')} became plain layers`)
+  // Each with whether it is one thing: "1 adjustment layer was left out", "the layer effects of 1 layer were".
+  const left: [text: string, one: boolean][] = []
+  if (notes.adjustments > 0) left.push([count(notes.adjustments, 'adjustment layer'), notes.adjustments === 1])
+  if (notes.groupMasks > 0) left.push([count(notes.groupMasks, 'group mask'), notes.groupMasks === 1])
+  if (notes.effects > 0) left.push([`the layer effects of ${count(notes.effects, 'layer')}`, false])
+  if (notes.vectorMasks > 0) left.push([`the vector masks of ${count(notes.vectorMasks, 'layer')}`, false])
+  if (left.length > 0) parts.push(`${listed(left.map(([text]) => text))} ${left.length === 1 && left[0][1] ? 'was' : 'were'} left out`)
+  if (notes.blendModes.length > 0) {
+    const modes = notes.blendModes.map((m) => m.replace(/\b\w/g, (c) => c.toUpperCase()))
+    parts.push(`its ${listed(modes)} layers became Normal`)
+  }
+  if (parts.length === 0) return null
+  return `Some of ${q(fileName)} isn't in QUAR Artist yet: ${parts.join('; ')}`
 }
 
 /** A name as toasts show it. */
@@ -158,6 +191,8 @@ interface FileDocument {
   unreadableTiles?: number
   /** The Gallery's thumbnail, drawn where the file was read; made from the layers when there is none. */
   thumbnail?: StoredImage | null
+  /** What the file had that didn't come with it, as a toast says it once it opens (PSD files). */
+  notice?: string | null
 }
 
 /** A document opened from a file without storage, waiting for the canvas made for it. */
@@ -609,6 +644,38 @@ export class ProjectService {
     return true
   }
 
+  /**
+   * Export › PSD (plan M1.7): every layer, with its blend mode, opacity,
+   * visibility, clipping and locks, the resolution, and the composite image
+   * other apps show, written off the main thread and downloaded.
+   */
+  async exportPsd(): Promise<boolean> {
+    const state = this.store.getState()
+    if (state.view !== 'canvas' || state.openProgress !== null) return false
+    const fileName = fileNameFor(state.currentProjectName, PSD_EXTENSION)
+    try {
+      downloadFile(await writePsd(this.psdInput()), fileName)
+    } catch (err) {
+      this.toast(`Couldn't export ${q(state.currentProjectName)} as a PSD file: ${describe(err)}`, 'error')
+      return false
+    }
+    this.toast(`Exported ${q(fileName)}`, 'success')
+    return true
+  }
+
+  /** The open document as a PSD file has it, read from its canvas now: the layers, and what they make together. */
+  private psdInput(): PsdWriterInput {
+    // The layers would be written without the preview, and the composite with it.
+    if (this.engine?.isPreviewing()) throw new Error("a transform or filter isn't applied yet. Apply or cancel it, then export again")
+    const { width, height, dpi, layers, activeLayerId } = this.qartInput()
+    const composite = this.engine?.getCompositePixels() ?? null
+    if (!composite || composite.width !== width || composite.height !== height) {
+      throw new Error("the canvas can't be read right now. Try again in a moment")
+    }
+    const { pixels } = composite
+    return { width, height, dpi, layers, activeLayerId, composite: new Uint8Array(pixels.buffer, pixels.byteOffset, pixels.byteLength) }
+  }
+
   /** Toasts' way to keep a copy of the open project: save it as a .qart file. */
   private saveAsAction(): ToastOptions['action'] {
     return { label: 'Save as .qart…', run: () => void this.saveAsFile() }
@@ -810,12 +877,12 @@ export class ProjectService {
       this.toast(refused, 'error')
       return false
     }
-    const isQart = importKind(file) === 'qart'
-    const linked = isQart ? handle : null
+    // Ctrl+S writes .qart files only: the project of a PSD file or an image saves in the browser.
+    const linked = importKind(file) === 'qart' ? handle : null
     let doc: FileDocument
     let id: string
     try {
-      doc = isQart ? await this.qartDocument(file) : await this.imageDocument(file)
+      doc = await this.fileDocument(file)
       if (this.unsaved) return this.openUnsavedFile(file, doc, linked)
       id = await this.addProject(doc)
     } catch (err) {
@@ -829,7 +896,13 @@ export class ProjectService {
     await this.refresh().catch(() => undefined)
     const opened = await this.openProject(id)
     this.reportUnreadableFile(file, unreadable, linked !== null)
+    this.reportNotice(doc)
     return opened
+  }
+
+  /** Say what a file had that didn't come with it, once its project is made. */
+  private reportNotice(doc: FileDocument) {
+    if (doc.notice) this.toast(doc.notice, 'info', { durationMs: 15000 })
   }
 
   /** Say so when part of a file couldn't be read: its document opened with those tiles transparent. */
@@ -851,6 +924,7 @@ export class ProjectService {
     const open = () => {
       this.openUnsaved(doc.config, doc, link)
       this.reportUnreadableFile(file, unreadable, handle !== null)
+      this.reportNotice(doc)
     }
     if (this.unsavedChanged) {
       this.toast(`The open canvas can't be saved in this browser, so opening ${q(file.name)} loses it`, 'error', {
@@ -1544,10 +1618,11 @@ export class ProjectService {
         continue
       }
       try {
-        const doc = importKind(file) === 'qart' ? await this.qartDocument(file) : await this.imageDocument(file)
+        const doc = await this.fileDocument(file)
         await this.addProject(doc)
         imported.push(baseName(file.name))
         this.reportUnreadableFile(file, doc.unreadableTiles ?? 0, false)
+        this.reportNotice(doc)
       } catch (err) {
         this.toast(`Couldn't import ${q(file.name)}: ${describe(err)}`, 'error')
       }
@@ -1555,6 +1630,38 @@ export class ProjectService {
     if (imported.length === 0) return
     await this.refresh()
     this.toast(imported.length === 1 ? `Imported ${q(imported[0])}` : `Imported ${imported.length} files`, 'success')
+  }
+
+  /** A file's document, by its kind: a .qart or PSD file, or an image. */
+  private fileDocument(file: File): Promise<FileDocument> {
+    const kind = importKind(file)
+    if (kind === 'qart') return this.qartDocument(file)
+    if (kind === 'psd') return this.psdDocument(file)
+    return this.imageDocument(file)
+  }
+
+  /**
+   * A PSD file's document, named after its file (plan M1.7): read off the
+   * main thread, its groups flattened, and refused before any pixels are
+   * read when it is larger than this device opens or has more layers than
+   * the app. Its notice says what didn't come with it.
+   */
+  private async psdDocument(file: File): Promise<FileDocument> {
+    // Without storage there is no Gallery to show a thumbnail.
+    const { document: doc, thumbnail } = await openPsd(file, appFileLimits(), { thumbnail: !this.unsaved })
+    let activeLayerId = ''
+    const layers: StoredLayer[] = doc.layers.map(({ pixels, name, ...props }, i) => {
+      const info = savedLayerInfo({ ...newLayerInfo(name), ...props })
+      if (i === doc.activeLayer) activeLayerId = info.id
+      return { info, pixels }
+    })
+    return {
+      config: { name: baseName(file.name), width: doc.width, height: doc.height, dpi: doc.dpi, colorSpace: 'srgb' },
+      layers,
+      activeLayerId: activeLayerId || layers[layers.length - 1].info.id,
+      thumbnail,
+      notice: psdNotice(file.name, doc.notes),
+    }
   }
 
   /** An image as a one-layer document named after its file. */
@@ -1575,7 +1682,7 @@ export class ProjectService {
    */
   private async qartDocument(file: File): Promise<FileDocument> {
     // Without storage there is no Gallery to show a thumbnail.
-    const { document: doc, thumbnail } = await openQart(file, appQartLimits(), { thumbnail: !this.unsaved })
+    const { document: doc, thumbnail } = await openQart(file, appFileLimits(), { thumbnail: !this.unsaved })
     // Fresh ids: the same file imported twice makes two independent projects.
     let activeLayerId = ''
     const layers: StoredLayer[] = doc.layers.map(({ info: layer, pixels }) => {

@@ -89,8 +89,10 @@ const NON_SEPARABLE: Partial<Record<BlendMode, (cb: RGB, cs: RGB) => RGB>> = {
   color: (cb, cs) => setLum(cs, lum(cb)),
   luminosity: (cb, cs) => setLum(cb, lum(cs)),
   // Photoshop: pick whichever whole colour is darker / lighter
-  darkerColor: (cb, cs) => (cs[0] + cs[1] + cs[2] < cb[0] + cb[1] + cb[2] ? cs : cb),
-  lighterColor: (cb, cs) => (cs[0] + cs[1] + cs[2] > cb[0] + cb[1] + cb[2] ? cs : cb),
+  // By luminosity, not by the sum of the channels: Photoshop picks (116, 65, 217)
+  // as darker than grey 128 (e2e/gpu/psd.spec.ts), and so does the app.
+  darkerColor: (cb, cs) => (lum(cs) < lum(cb) ? cs : cb),
+  lighterColor: (cb, cs) => (lum(cs) > lum(cb) ? cs : cb),
 }
 
 /** B(Cb, Cs) for a blend mode, on straight colours in [0, 1]. */

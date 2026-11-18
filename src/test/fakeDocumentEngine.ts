@@ -56,6 +56,8 @@ export class FakeDocumentEngine implements DocumentEngine {
   failNextTileRead: { id: string; error: Error } | null = null
   /** Set to make the next composite read throw, once. */
   failNextComposite: Error | null = null
+  /** What a composite read gives: none, as when the canvas can't be read, unless a test sets one. */
+  composite: Uint8ClampedArray | null = null
   private onChange: (() => void) | null = null
   private changes = new Map<string, Set<string> | 'all'>()
 
@@ -159,7 +161,7 @@ export class FakeDocumentEngine implements DocumentEngine {
     const failure = this.failNextComposite
     this.failNextComposite = null
     if (failure) throw failure
-    return null
+    return this.composite ? { pixels: this.composite.slice(), width: this.width, height: this.height } : null
   }
 
   isPreviewing() {

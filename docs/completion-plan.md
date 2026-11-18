@@ -134,7 +134,7 @@ flowchart LR
   M6 --> M10
 ```
 
-**Immediate next steps:** M0 is done (M0.2 skipped), and so are M1.1 to M1.6. Next is M1.7, PSD export fixes and PSD import.
+**Immediate next steps:** M0 is done (M0.2 skipped), and so are M1.1 to M1.7. Next is M1.8, image export.
 
 ---
 
@@ -448,7 +448,7 @@ flowchart LR
       - duplicate names, entries that overlap or aren't where the directory says;
       - unknown format versions, duplicate layer ids and a selected layer that isn't one of them.
     - Inflating stops once an entry passes its declared size (a 64 MiB bomb stops at its first 16 KiB) and refuses the file. Every entry is checked against its CRC-32. A tile whose data is damaged opens transparent, a toast says how many, and Ctrl+S doesn't write over that file.
-    - Reading and writing run in a worker (`qartWorker.ts`, `qartCodec.ts`). Pixel buffers are handed over, not copied. Where a worker can't start, or stops, the main thread does the work.
+    - Reading and writing run in a worker (`qartWorker.ts`, `qartCodec.ts`; since M1.7 the files worker, `fileWorker.ts` and `fileCodec.ts`). Pixel buffers are handed over, not copied. Where a worker can't start, or stops, the main thread does the work.
     - fflate replaces JSZip (Q4). fflate 0.8.3's streaming compressor writes broken streams for some tiles: neither fflate nor zlib can inflate them, for 41 of 300 sample tiles at level 6. So `ZipWriter` writes the archive itself, compressing each entry whole with `deflateSync`. The file is still made entry by entry, as a list of parts, never as one buffer. The archives test clean with `unzip`, `zipinfo` and Python's `zipfile`.
     - Thumbnails can be drawn in workers, on an OffscreenCanvas. Firefox's OffscreenCanvas still has an old `toBlob` that never calls back, which hung Save as there, so `convertToBlob` is used. A thumbnail that takes over 10 s is left out.
     - The manifest's app version comes from `package.json`.
@@ -459,7 +459,7 @@ flowchart LR
       - the thumbnail encoder in a worker;
       - `e2e/files.spec.ts` checks the version 1 layout and the thumbnail of a saved file in Chromium, Firefox and WebKit, opens a dropped version 1 file, and opens a file with a damaged tile.
     - Fixed after a review, before the commit:
-      - The app could save documents that it then refused to open. The reader held every document to 4 GiB of layers, but the app makes up to 20 layers of 8192 × 8192, which is 5 GiB. Without storage, that file was the only copy. Files now open within `appQartLimits()`: whatever the app can make on the device.
+      - The app could save documents that it then refused to open. The reader held every document to 4 GiB of layers, but the app makes up to 20 layers of 8192 × 8192, which is 5 GiB. Without storage, that file was the only copy. Files now open within `appQartLimits()` (`appFileLimits()` since M1.7): whatever the app can make on the device.
       - Names weren't cut to 256 characters when written, so a very long pasted layer name made a manifest too large to read. Both the writer and the reader cut names, without splitting a character.
       - Importing or opening a file drew its Gallery thumbnail on the main thread, compositing every full-size layer. The .qart worker now draws it as it reads the file.
       - An archive of exactly 65,535 entries was taken for ZIP64 and refused. ZIP64 is now recognised by its locator record.
@@ -471,7 +471,7 @@ flowchart LR
       - An M1.3 end-to-end test (`e2e/tiles.spec.ts`) compared a reopened canvas with a screenshot that had the Ctrl+S toast over it. On a less busy machine the shot now came before the toast went, so it waits for the toast first.
       - The file tests' helper that reads a file in the origin-private file system read it again when the app's write replaced it mid-read.
       - An M1.2 unit test of the persistence worker's stall watchdog gave it 50 ms, which a busy machine's timers overran. It now has four times that, with the same proportions.
-- [ ] **M1.7 PSD export fixes and PSD import** · M · fixes F05, F09, F93 (PSD import)
+- [x] **M1.7 PSD export fixes and PSD import** · M · fixes F05, F09, F93 (PSD import)
   - Export:
     - opacity in the 0–1 range;
     - a real composite image;
@@ -480,6 +480,40 @@ flowchart LR
     - runs in a worker.
   - Import with ag-psd's `readPsd`: layers, blend modes, opacity, visibility and clipping. Groups are flattened until M7.1. Size limits apply.
   - Fidelity test: compare our composite with the PSD's embedded composite on a set of test files. The PRD target is at least a 95% match.
+  - **Done 2026-11-18.** Notes:
+    - `docs/psd-files.md` describes what PSD files keep and lose each way, what is refused, and the fidelity results.
+    - Export… › PSD downloads a PSD file (F05, F09). It has every layer, each only as large as its paint, with its blend mode, opacity from 0 to 1, visibility, clipping, alpha lock (Lock transparent pixels) and lock (Lock image pixels and position), the selected layer, the resolution, and the composite the canvas shows, transparency and all. A Display P3 project's file has no ICC profile, which ag-psd can't write. Groups and masks wait for M7.1.
+    - PSD and PSB files open through File › Open…, the Gallery's Import… and dropping, as new projects that are never linked to their file (F93, PSD import). The reader (`io/formats/psd/PsdReader.ts`) keeps layers, names, blend modes, opacity, visibility, clipping, alpha lock, lock, the selected layer and the resolution.
+      - Groups are flattened: a hidden group hides its layers, and a group's opacity multiplies into theirs.
+      - Layer masks are applied to the pixels, and so is a Normal Color Overlay on a Normal layer. Fill opacity multiplies into the opacity.
+      - The reader decodes every channel itself (`io/formats/psd/psdPixels.ts`): raw, RLE, ZIP and ZIP with prediction, at 8, 16 and 32 bits, into 8 bits, 32-bit colour through the sRGB curve. Grayscale, Indexed (through its palette) and Bitmap files open in RGB.
+      - A file without layers opens as its composite. Its extra channel is its transparency only when its layer count says so, as Photoshop reads it, and Photoshop's white matte is taken out.
+      - A toast says what was left out: adjustment layers, other layer effects (of layers and of groups), group masks, vector masks without pixels, and Linear Burn layers, which become Normal.
+    - Refused, with a reason: files that aren't PSD files, CMYK, Lab, Multichannel and Duotone files, files larger than the device's canvases or over 2 GiB, and files with more than 20 layers once flattened, all before any pixels are read. So are layers and masks with more pixels than a canvas, before any channel is decoded, and damaged channels: RLE rows that claim more bytes than the file has, found before any is unpacked, and ZIP-compressed channels that unpack to more than their layer holds, stopped within their first 16 KiB (ag-psd unpacks them whole). ag-psd is stopped where it would read past the end of the file and make up zeros.
+    - PSD export is refused while a transform or filter is previewed, and when the file would be over 2 GB. The composite of a document 1 or 2 px wide is written uncompressed: ag-psd's buffer for it is too small, and it cut the composite short.
+    - The .qart worker became the files worker (`io/formats/fileWorker.ts`, `fileCodec.ts`, `fileProtocol.ts`), which reads and writes PSD files too. `PsdExporter.ts` is gone. Pixel buffers are handed over, not copied, and the main thread does the work where a worker can't start.
+    - ag-psd no longer loads at start-up. The build put it in the `vendor-utils` chunk, which every page preloads: 266 kB, now 21 kB (87 kB gzipped, now 9 kB). It loads when a PSD file is exported or opened.
+    - Fidelity (PRD 10.1): `e2e/gpu/psd.spec.ts` opens nine files saved by Photoshop CS6, CC 2019 and 27.7 (`e2e/fixtures/psd`, from ag-psd's tests, MIT) in the real engine and compares each with the composite Photoshop saved. A pixel matches when its alpha and its colour times alpha are within 3 levels. Eight files match 100% of their pixels and the text layer file 97.48%, the same on Chromium (WebGL 2 and WebGPU), Firefox and WebKit. The target is 95%.
+    - Photoshop's blend-mode file has a square in each mode, each with a Color Overlay in its own mode. Photoshop draws the overlay over the composite in that mode, as a clipped layer would be. The test draws the same layers and compares each square: every mode the app has matches within 3 levels except Hue (F15) and Vivid Light, 7 levels off (F107, found here). Dissolve is random, and the app has no Linear Burn.
+    - Fixed on the way: the compositing reference (`e2e/reference/compositing.ts`) picked Darker and Lighter Color by the sum of the channels. Photoshop and the app compare luminosity. The M0.3 tests' colours rank the same both ways, so they didn't show it.
+    - Fixed after a review (`*.review.test.ts`):
+      - 16-bit files opened garbled: ag-psd reads their samples with the bytes swapped, and RLE at 8 bits only, so 16-bit RLE files were refused as damaged. The reader's own decoder reads Photoshop's 16- and 32-bit files (`e2e/fixtures/psd`) as ag-psd's images and Photoshop's thumbnail have them.
+      - A file of a few hundred bytes could make the reader hold a gigabyte before any check: ag-psd made up zeros, up to 100 MB a read, for data past the end of the file.
+      - RLE rows that claimed more bytes than the file or a row has made the work grow with the claims, not with the file.
+      - Groups nested thousands deep overflowed the stack. Flattening is a loop now.
+      - The resolution was multiplied by 2.54 when Photoshop showed it per centimetre, though PSD files always keep it per inch.
+      - A group's masks and layer effects were left out without a word. The toast counts them.
+      - Exporting a PSD file during a transform or filter preview wrote the layers without the preview and the composite with it.
+    - Checked once against ag-psd's 106 test files: 103 open, and the 3 refused are the CMYK file and two with 29 and 56 layers. Their 1,131 8-bit channels decode exactly as ag-psd decodes them. Composited on the CPU, the files with only Normal layers and nothing left out match Photoshop's composite for at least 97.24% of their pixels, text layers being the lowest. The rest differ by what the toast says was left out, or by Blend If and artboard backgrounds.
+    - Tests:
+      - unit tests for the reader (everything the writer writes, groups, masks, effects, fill opacity, layers off the canvas, files without layers and their transparency, grayscale, Photoshop's 16- and 32-bit files, ZIP channels, and every refusal, among them a 64 MiB ZIP bomb in a 2 × 2 layer and a file over 2 GiB), the channel decoder (`psdPixels.test.ts`), the writer (its 2 GB limit, and documents 1 or 2 px wide), the files worker client, the service (import, open, export during a preview, and the notice's wording) and the Export dialog;
+      - a fuzz test: 400 damaged PSD files, each of which opens or is refused with a reason;
+      - `e2e/files.spec.ts` exports a PSD file through the dialog and reads it back with ag-psd, opens a dropped PSD file with groups, and refuses one with 29 layers; `e2e/projects.spec.ts` imports one in the Gallery.
+    - Known, for later packages:
+      - Opening a PSD file holds every layer whole in memory, up to 5 GiB at the app's limits, as .qart files do (M2.2).
+      - Export is a download, as PNG and JPEG are (M1.8).
+      - Left out without a word: Blend If, a group's clipping, artboards' background colours (M7.1) and ICC profiles (M7.3).
+      - Photoshop blends a 32-bit file's layers in linear light, and the app blends them in gamma space, so soft edges look a little different (M7.3).
 - [ ] **M1.8 Image export** · M · fixes F07, F14 (DPI), F94, F103
   - PNG and JPEG use straight alpha from the single conversion point and record DPI (the PNG `pHYs` chunk and the JPEG JFIF density).
   - Encode PNGs from the pixel buffer, not from a 2D canvas, so Firefox's rounding can't shift semi-transparent colours (F103).
@@ -487,6 +521,7 @@ flowchart LR
   - Export at scale (new): 25–400% or a target size, with proper resampling.
   - Option to export only the current layer or the selection.
   - The export dialog shows a size estimate, progress, and a toast on success or failure.
+  - PNG and JPEG export write a transform or filter preview into the image before it is applied. Refuse them while one is, as PSD export does since M1.7.
 - [ ] **M1.9 Saved settings** · S · fixes F14 (presets), F69
   - Store palettes, recent colours, custom and edited brush presets, QuickMenu slots, shortcuts, panel layout and the global pressure curve in a versioned IndexedDB settings store with migrations.
   - Settings can be exported and imported as JSON.
@@ -529,7 +564,7 @@ flowchart LR
   - Survive a lost GPU context: upload every layer again from the tiles kept outside the GPU, so the canvas comes back as it was (F105).
 - [ ] **M2.3 Tiled write path** · L
   - `LayerSurface.beginWrite(region)` copies any affected tiles that history still uses, renders with per-tile offsets, and reports changed tiles to the compositor, history and autosave.
-- [ ] **M2.4 Shader compositor** · XL · fixes F15–F20, F27
+- [ ] **M2.4 Shader compositor** · XL · fixes F15–F20, F27, F107
   - Implement D4 with all 26 PRD modes:
     - Normal, Multiply, Darken, Color Burn, Linear Burn, Darker Color;
     - Lighten, Screen, Color Dodge, Add, Lighter Color;
@@ -538,9 +573,12 @@ flowchart LR
     - Hue, Saturation, Color, Luminosity.
   - Also Dissolve, and Pass Through for groups.
   - Clipping uses the base layer's alpha.
+    - A chain of clipped layers clips to its base, the first layer below it that isn't clipped (found in M1.7's review).
+    - A hidden base hides the layers clipped to it, as in Photoshop (found in M1.7's review).
     - Decide how clipped layers composite over semi-transparent base pixels: as a group (Photoshop's default: the clipped layers paint onto the base, which keeps its alpha), or each against the whole stack with its opacity scaled by the base alpha. The CPU reference (`e2e/reference/compositing.ts`) does the second today; change it first if M2.4 chooses the group behaviour. The M0.3 tests only use opaque bases, where both give the same result.
   - Merge Down and Flatten reuse the compositor, so the result matches what's on screen.
-  - Golden tests compare against the CPU reference on both backends.
+  - Golden tests compare against the CPU reference on both backends, and against Photoshop with its blend-mode file (`e2e/gpu/psd.spec.ts`).
+  - Vivid Light as Photoshop draws it (F107). Once there is a Linear Burn mode, PSD files keep it (`io/formats/psd/blendModeMap.ts`).
   - Remove the CPU blend path and the use of PixiJS blend modes and masks.
 - [ ] **M2.5 Command-based undo history** · XL · fixes F25, F26, F28, F37, F50, F70 (undo part)
   - Implement D6. Commands cover:
@@ -561,7 +599,7 @@ flowchart LR
 - [ ] **M2.7 Memory budgets and layer limits** · M
   - Determine the device class from `navigator.deviceMemory`, the platform and the maximum texture size.
   - Calculate the layer limit from device memory and canvas size (PRD 4.3) and warn before it's reached.
-  - Open .qart files within the same limit (`appQartLimits` in `io/formats/qart/qartCodec.ts`), so whatever the app can make opens again.
+  - Open .qart and PSD files within the same limit (`appFileLimits` in `io/formats/fileCodec.ts`), so whatever the app can make opens again.
   - Report tile-pool statistics to the performance dashboard.
 
 ### M3 — Input and brushes v2
@@ -852,7 +890,8 @@ flowchart LR
   - Groups: nesting, pass-through, collapse, and group opacity and blend mode.
   - Layer masks, reference layers and background-colour layers.
   - Drag layers into and out of groups.
-  - Groups and masks survive a PSD round trip.
+  - Groups and masks survive a PSD round trip, and so does a group's clipping, which PSD import drops without a word since M1.7.
+  - PSD artboards open as groups with their background colour, which PSD import leaves out since M1.7.
 - [ ] **M7.2 Filter suite** · XL · fixes F92
   - Filters:
     - motion blur, perspective blur, colour balance;
@@ -866,6 +905,8 @@ flowchart LR
 - [ ] **M7.3 Colour management** · M
   - Display P3 documents: P3 canvases, and a P3 colour picker that warns when a colour is outside sRGB.
   - Exported PNG and JPEG files carry a colour profile.
+  - PSD files: convert an imported file's colours from its ICC profile, which PSD import ignores since M1.7, taking them as sRGB. Write one on export, which ag-psd can't.
+  - Optionally blend in linear light, as Photoshop blends 32-bit files and does with Blend RGB Colors Using Gamma 1.0. Since M1.7, a 32-bit file's soft edges open blended in gamma space.
 - [ ] **M7.4 Brush import, export and library** · L
   - `.qbrush` files (JSON plus textures in a ZIP) and brush sets.
   - Photoshop `.abr` import, turning sampled brushes into shape textures.
@@ -1150,6 +1191,7 @@ All findings from the 2026-11-16 code review. Paths are relative to `src/`. Seve
 | F104 | M | Soft Light is wrong on WebGPU: PixiJS 8's WGSL passes the two halves of the formula to `select` in the wrong order, so every channel takes the other branch (found in M0.5) | PixiJS `advanced-blend-modes/SoftLightBlend`; worked around in `engine/layers/blendModes.ts` | M0.5 |
 | F105 | M | A lost GPU context (on an iPad when switching apps, or after a driver reset) takes every layer's pixels with it, and nothing brings them back. Since M1.1 a save refuses to read a lost context, so the last save is kept, but changes since then are lost and the page has to be reloaded (found in M1.1) | `engine/canvas/CanvasManager.ts` (`watchForContextLoss`) | M2.2 |
 | F106 | L | On WebGPU, PixiJS 8 reads a texture back by drawing it onto a WebGPU canvas and that onto a 2D canvas, then `getImageData` without `willReadFrequently`: every save copies each layer twice more than it needs to, and Chrome warns about repeated readbacks (found in M1.2's post-deploy check). Since M1.3, readbacks copy only the rectangle they need, through canvases of their own made for reading | PixiJS `GpuTextureSystem.getPixels`, called by `engine/utils/readback.ts` | M1.3 |
+| F107 | L | Vivid Light differs from Photoshop's by up to 7 levels: rgba(218, 251, 255) where Photoshop draws rgba(211, 248, 255), in Photoshop's blend-mode file, on every backend. The W3C-style formula the app and the reference use splits the two halves at 0.5 (found in M1.7) | `engine/shaders/blend/cpuBlend.ts`, `e2e/reference/compositing.ts` | M2.4 |
 
 ## Appendix B — PRD traceability
 

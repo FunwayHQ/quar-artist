@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import 'fake-indexeddb/auto'
 import { deleteDB, openDB } from 'idb'
-import { ProjectService, DEFAULT_PROJECT, DELETE_UNDO_MS, PURGE_GRACE_MS, baseName, importKind, sortDroppedFiles } from './ProjectService.ts'
+import { ProjectService, DEFAULT_PROJECT, DELETE_UNDO_MS, PURGE_GRACE_MS, baseName, importKind, psdNotice, sortDroppedFiles } from './ProjectService.ts'
 import { MetadataDB } from './MetadataDB.ts'
 import { DB_NAME, DB_VERSION, getDB, resetDB, type ProjectRecord } from '../../db/schema.ts'
 import { IdbTileBackend } from '../tiles/IdbTileBackend.ts'
@@ -13,6 +13,8 @@ import { decodeImageBlob } from '../importImage.ts'
 import { encodeQart } from '../formats/qart/QartWriter.ts'
 import { decodeQart } from '../formats/qart/QartReader.ts'
 import { entry, manifestOf, qartArchive, rawZip, solidTile, text } from '../formats/qart/testArchives.ts'
+import { encodePsd } from '../formats/psd/PsdWriter.ts'
+import { readPsd, writePsdUint8Array } from '../formats/psd/agPsd.ts'
 import * as fileAccess from '../files/fileAccess.ts'
 import type { FileHandle } from '../files/fileAccess.ts'
 import { FakeDocumentEngine, layerInfo } from '../../test/fakeDocumentEngine.ts'
@@ -1112,6 +1114,39 @@ describe('ProjectService', () => {
       expect((await db.getAllProjects()).map((p) => p.name)).toEqual(['Existing'])
     })
 
+    it('imports a PSD file as a project with its layers, and says what it had that the app does not (plan M1.7)', async () => {
+      const image = (grey: number) => ({ width: 2, height: 2, data: new Uint8ClampedArray(filled(grey)) })
+      const bytes = writePsdUint8Array(
+        {
+          width: 2,
+          height: 2,
+          imageResources: { resolutionInfo: { horizontalResolution: 150, horizontalResolutionUnit: 'PPI', widthUnit: 'Inches', verticalResolution: 150, verticalResolutionUnit: 'PPI', heightUnit: 'Inches' } },
+          children: [
+            { name: 'Paper', left: 0, top: 0, right: 2, bottom: 2, imageData: image(30) },
+            { name: 'Inks', opened: true, children: [{ name: 'Line', blendMode: 'multiply', opacity: 0.6, clipping: true, left: 0, top: 0, right: 2, bottom: 2, imageData: image(40) }] },
+            { name: 'Levels', adjustment: { type: 'invert' } },
+          ],
+        },
+        { noBackground: true },
+      )
+
+      await service.importFiles([new File([bytes as Uint8Array<ArrayBuffer>], 'Scan.psd')])
+
+      const project = store().projects.find((p) => p.name === 'Scan')!
+      expect(project).toMatchObject({ width: 2, height: 2, dpi: 150 })
+      expect(project.thumbnail?.type).toBe('image/webp')
+      const layers = (await tiles.load(project.id))!.layers
+      expect(layers.map((l) => [l.info.name, l.info.blendMode, Math.round(l.info.opacity * 10) / 10, l.info.clippingMask, l.pixels?.[0]])).toEqual([
+        ['Paper', 'normal', 1, false, 30],
+        ['Line', 'multiply', 0.6, true, 40],
+      ])
+      expect(project.activeLayerId).toBe(layers[1].info.id)
+      expect(toasts()).toEqual([
+        'Some of “Scan.psd” isn\'t in QUAR Artist yet: its group became plain layers; 1 adjustment layer was left out',
+        'Imported “Scan”',
+      ])
+    })
+
     it('says which files it could not import, and imports the rest', async () => {
       vi.mocked(decodeImageBlob).mockResolvedValue({ pixels: new Uint8ClampedArray(4), width: 9000, height: 1 })
 
@@ -1124,8 +1159,8 @@ describe('ProjectService', () => {
       ])
 
       expect(toasts()).toEqual([
-        "“scan.psd”: PSD files can't be opened yet",
-        "“notes.txt” isn't a .qart file or an image",
+        "Couldn't import “scan.psd”: it isn't a PSD file, or it is damaged",
+        "“notes.txt” isn't a .qart or PSD file, or an image",
         expect.stringMatching(/^Couldn't import “bad\.qart”: /),
         "Couldn't import “huge.png”: it is 9000 × 1 px. This device supports canvases up to 8192 × 8192 px",
         'Imported “Good”',
@@ -1518,6 +1553,58 @@ describe('ProjectService', () => {
       expect(record.updatedAt.getTime()).toBe(modified)
     })
 
+    it('exports a PSD file of every layer and the composite, as a download (plan M1.7)', async () => {
+      const id = await seedProject('Painting')
+      await service.start()
+      const { engine } = await openAndAttach(id)
+      engine.paint(9)
+      engine.composite = new Uint8ClampedArray(filled(77))
+
+      expect(await service.exportPsd()).toBe(true)
+
+      const [[blob, name]] = files.downloadFile.mock.calls
+      expect(name).toBe('Painting.psd')
+      const psd = readPsd(new Uint8Array(await blob.arrayBuffer()), { useImageData: true, skipThumbnail: true })
+      expect(psd.children!.map((l) => [l.name, l.blendMode, Math.round(l.opacity! * 10) / 10, l.imageData?.data[0]])).toEqual([
+        ['Background', 'normal', 1, 9],
+        ['Ink', 'multiply', 0.5, 2],
+      ])
+      expect(Array.from(psd.imageData!.data.subarray(0, 4))).toEqual([77, 77, 77, 255])
+      expect(psd.imageResources?.layerSelectionIds).toEqual([psd.children![0].id])
+      expect(toasts()).toEqual(['Exported “Painting.psd”'])
+    })
+
+    it("says why a PSD file couldn't be exported, and exports nothing outside the canvas", async () => {
+      const id = await seedProject('Painting')
+      await service.start()
+      await openAndAttach(id)
+
+      // The fake canvas has no composite to read.
+      expect(await service.exportPsd()).toBe(false)
+      expect(files.downloadFile).not.toHaveBeenCalled()
+      expect(toasts()).toEqual(["Couldn't export “Painting” as a PSD file: the canvas can't be read right now. Try again in a moment"])
+
+      expect(await service.goToGallery()).toBe(true)
+      expect(await service.exportPsd()).toBe(false)
+      expect(files.downloadFile).not.toHaveBeenCalled()
+    })
+
+    it('exports no PSD file while a transform or filter is previewed: its layers would be without it, and its composite with it', async () => {
+      const id = await seedProject('Painting')
+      await service.start()
+      const { engine } = await openAndAttach(id)
+      engine.composite = new Uint8ClampedArray(2 * 2 * 4).fill(77)
+      engine.previewing = true
+
+      expect(await service.exportPsd()).toBe(false)
+      expect(files.downloadFile).not.toHaveBeenCalled()
+      expect(toasts()).toEqual(["Couldn't export “Painting” as a PSD file: a transform or filter isn't applied yet. Apply or cancel it, then export again"])
+
+      engine.previewing = false
+      expect(await service.exportPsd()).toBe(true)
+      expect(files.downloadFile).toHaveBeenCalledOnce()
+    })
+
     it("writes the project's name, resolution, colour space and guides to the file (plan M1.6)", async () => {
       const id = await seedProject('Painting', { colorSpace: 'display-p3' })
       await service.start()
@@ -1712,6 +1799,34 @@ describe('ProjectService', () => {
       expect(await written()).toEqual({ handle, layers: [['Sky', 10], ['Ink', 50]], active: 'Ink' })
     })
 
+    it("opens a PSD file as a new project, which Ctrl+S saves in the browser and not to the file (plan M1.7)", async () => {
+      await seedProject('Painting')
+      await service.start()
+      const psd = encodePsd({
+        width: 2,
+        height: 2,
+        dpi: 72,
+        layers: [{ info: layerInfo('a', 'Sketch'), pixels: filled(60) }],
+        activeLayerId: 'a',
+        composite: filled(60),
+      })
+      files.pickOpenFile.mockResolvedValue({ file: new File([psd], 'Sketch.psd', { lastModified: 1 }), handle: fileHandle('Sketch.psd') })
+
+      expect(await service.openFile()).toBe(true)
+
+      expect(store()).toMatchObject({ view: 'canvas', currentProjectName: 'Sketch' })
+      const project = (await db.getAllProjects()).find((p) => p.name === 'Sketch')!
+      expect(project.fileHandle).toBeUndefined()
+      const engine = new FakeDocumentEngine()
+      service.attachEngine(engine)
+      await service.settled()
+      expect(engine.loads[0].layers.map((l) => l.pixels?.[0])).toEqual([60])
+      engine.paint(61)
+      expect(await service.saveNow()).toBe(true)
+      expect(files.writeFile).not.toHaveBeenCalled()
+      expect(await firstByte(project.id, engine.layers[0].info.id)).toBe(61)
+    })
+
     it("opens a .qart file with tiles it could not read, those transparent, and keeps Ctrl+S from writing over the file (plan M1.6)", async () => {
       await seedProject('Painting')
       await service.start()
@@ -1803,8 +1918,8 @@ describe('ProjectService', () => {
       for (let i = 0; i < 4; i++) expect(await service.openFile()).toBe(false)
 
       expect(toasts()).toEqual([
-        "“scan.psd”: PSD files can't be opened yet",
-        "“notes.txt” isn't a .qart file or an image",
+        "Couldn't open “scan.psd”: it isn't a PSD file, or it is damaged",
+        "“notes.txt” isn't a .qart or PSD file, or an image",
         expect.stringMatching(/^Couldn't open “bad\.qart”: /),
       ])
       expect(store()).toMatchObject({ view: 'canvas', currentProjectId: id })
@@ -2108,12 +2223,14 @@ describe('import helpers', () => {
   it('tells .qart, PSD and image files apart', () => {
     expect(importKind({ name: 'a.QART', type: '' })).toBe('qart')
     expect(importKind({ name: 'b.psd', type: 'image/vnd.adobe.photoshop' })).toBe('psd')
+    expect(importKind({ name: 'large.PSB', type: '' })).toBe('psd')
+    expect(importKind({ name: 'no extension', type: 'image/vnd.adobe.photoshop' })).toBe('psd')
     expect(importKind({ name: 'c', type: 'image/png' })).toBe('image')
     expect(importKind({ name: 'd.jpeg', type: '' })).toBe('image')
     expect(importKind({ name: 'e.txt', type: 'text/plain' })).toBe('other')
   })
 
-  it('sorts dropped files: images become layers, the first .qart file opens, and the rest are refused (plan M1.5)', () => {
+  it('sorts dropped files: images become layers, the first .qart or PSD file opens, and the rest are refused (plans M1.5, M1.7)', () => {
     const cat = new File(['png'], 'cat.png', { type: 'image/png' })
     const dog = new File(['jpg'], 'dog.jpg')
     const first = new File(['zip'], 'First.qart')
@@ -2125,12 +2242,24 @@ describe('import helpers', () => {
       images: [cat, dog],
       project: first,
       refused: [
-        "“notes.txt” isn't a .qart file or an image",
-        "“scan.psd”: PSD files can't be opened yet",
+        "“notes.txt” isn't a .qart or PSD file, or an image",
+        "“scan.psd” wasn't opened: one project opens at a time",
         "“Second.qart” wasn't opened: one project opens at a time",
       ],
     })
+    expect(sortDroppedFiles([scan, first]).project).toBe(scan)
     expect(sortDroppedFiles([])).toEqual({ images: [], project: null, refused: [] })
+  })
+
+  it("says what a PSD file had that the app doesn't, in one sentence (plan M1.7)", () => {
+    const none = { groups: 0, adjustments: 0, effects: 0, vectorMasks: 0, groupMasks: 0, blendModes: [] }
+    expect(psdNotice('a.psd', none)).toBeNull()
+    expect(psdNotice('a.psd', { ...none, groups: 3 })).toBe("Some of “a.psd” isn't in QUAR Artist yet: its 3 groups became plain layers")
+    expect(psdNotice('a.psd', { ...none, effects: 1 })).toBe("Some of “a.psd” isn't in QUAR Artist yet: the layer effects of 1 layer were left out")
+    expect(psdNotice('a.psd', { ...none, groups: 1, groupMasks: 1 })).toBe("Some of “a.psd” isn't in QUAR Artist yet: its group became plain layers; 1 group mask was left out")
+    expect(psdNotice('a.psd', { groups: 2, adjustments: 2, effects: 4, vectorMasks: 1, groupMasks: 2, blendModes: ['linear burn', 'pass through'] })).toBe(
+      "Some of “a.psd” isn't in QUAR Artist yet: its 2 groups became plain layers; 2 adjustment layers, 2 group masks, the layer effects of 4 layers and the vector masks of 1 layer were left out; its Linear Burn and Pass Through layers became Normal",
+    )
   })
 
   it('names a project after its file', () => {

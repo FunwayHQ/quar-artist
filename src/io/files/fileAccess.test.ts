@@ -97,7 +97,8 @@ describe('pickers (plan M1.5)', () => {
     expect(options.id).toBe('quar-artist')
     expect(options.types[0].accept).toEqual({
       'application/x-quar-artist': ['.qart'],
-      'image/vnd.adobe.photoshop': ['.psd'],
+      // PSB files are PSD files for canvases over 30,000 px (plan M1.7).
+      'image/vnd.adobe.photoshop': ['.psd', '.psb'],
       'image/*': ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif'],
     })
   })
@@ -110,7 +111,7 @@ describe('pickers (plan M1.5)', () => {
   it('opens a file through a file input where there is no open picker, without a handle', async () => {
     const opening = pickOpenFile()
     const input = fileInput()
-    expect(input.accept).toBe('.qart,.psd,image/*')
+    expect(input.accept).toBe('.qart,.psd,.psb,image/*')
     const file = new File(['png'], 'cat.png', { type: 'image/png' })
     choose(input, file)
 
@@ -134,7 +135,7 @@ describe('pickWithInput', () => {
 
   it('keeps a file that comes a while after the picker closed and focus came back (a cloud drive, the photo library)', async () => {
     vi.useFakeTimers()
-    const picking = pickWithInput('.qart,.psd,image/*')
+    const picking = pickWithInput('.qart,.psd,.psb,image/*')
     window.dispatchEvent(new Event('focus'))
     await vi.advanceTimersByTimeAsync(5000)
     const file = new File(['png'], 'cat.png', { type: 'image/png' })

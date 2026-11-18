@@ -319,6 +319,11 @@ export default function App() {
       void projectService.saveAsFile()
       return
     }
+    if (options.format === 'psd') {
+      useUIStore.getState().setShowExportDialog(false)
+      void projectService.exportPsd()
+      return
+    }
     if (!manager) return
     try {
       const result = manager.getCompositePixels()
@@ -332,7 +337,6 @@ export default function App() {
         downloadBlob(blob, `${projectName}.${ext}`)
         useUIStore.getState().addToast(`Exported ${projectName}.${ext}`, 'success')
       }
-      // PSD and QART exports can be added here when needed
     } catch (err) {
       console.error('Export failed:', err)
       useUIStore.getState().addToast('Export failed', 'error')

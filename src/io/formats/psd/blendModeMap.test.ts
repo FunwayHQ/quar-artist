@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { quarToPsdBlendMode, psdToQuarBlendMode } from './blendModeMap.ts'
+import { quarToPsdBlendMode, quarBlendModeOf } from './blendModeMap.ts'
 import { ALL_BLEND_MODES } from '../../../types/layer.ts'
 
 describe('blendModeMap', () => {
@@ -66,27 +66,29 @@ describe('blendModeMap', () => {
     })
   })
 
-  describe('psdToQuarBlendMode', () => {
+  describe('quarBlendModeOf', () => {
     it('maps soft light → softLight', () => {
-      expect(psdToQuarBlendMode('soft light')).toBe('softLight')
+      expect(quarBlendModeOf('soft light')).toBe('softLight')
     })
 
     it('maps linear dodge → add', () => {
-      expect(psdToQuarBlendMode('linear dodge')).toBe('add')
+      expect(quarBlendModeOf('linear dodge')).toBe('add')
     })
 
     it('maps dissolve → dissolve', () => {
-      expect(psdToQuarBlendMode('dissolve')).toBe('dissolve')
+      expect(quarBlendModeOf('dissolve')).toBe('dissolve')
     })
 
-    it('returns normal for unknown PSD mode', () => {
-      expect(psdToQuarBlendMode('unknown-mode')).toBe('normal')
+    it("has none for a mode the app doesn't have, so a PSD file's notice can name it (plan M1.7)", () => {
+      expect(quarBlendModeOf('linear burn')).toBeNull()
+      expect(quarBlendModeOf('pass through')).toBeNull()
+      expect(quarBlendModeOf('unknown-mode')).toBeNull()
     })
 
     it('round-trips all QUAR blend modes', () => {
       for (const mode of ALL_BLEND_MODES) {
         const psd = quarToPsdBlendMode(mode)
-        const back = psdToQuarBlendMode(psd)
+        const back = quarBlendModeOf(psd)
         expect(back).toBe(mode)
       }
     })

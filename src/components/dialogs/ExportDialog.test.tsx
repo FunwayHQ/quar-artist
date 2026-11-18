@@ -78,16 +78,14 @@ describe('ExportDialog', () => {
     expect(screen.getByText('3')).toBeInTheDocument()
   })
 
-  it("says PSD export isn't available yet, and doesn't offer it", async () => {
+  it('exports a PSD file, which keeps every layer for other apps (plan M1.7)', async () => {
     const user = userEvent.setup()
     render(<ExportDialog {...defaultProps} />)
     expect(screen.queryByRole('note')).toBeNull()
     await user.click(screen.getByText('PSD'))
-    expect(screen.getByRole('note')).toHaveTextContent("PSD export isn't available yet.")
-    const exportButton = screen.getByRole('button', { name: 'Export PSD' })
-    expect(exportButton).toBeDisabled()
-    await user.click(exportButton)
-    expect(defaultProps.onExport).not.toHaveBeenCalled()
+    expect(screen.getByRole('note')).toHaveTextContent('A PSD file keeps every layer, with its blend mode, opacity and visibility')
+    await user.click(screen.getByRole('button', { name: 'Export PSD' }))
+    expect(defaultProps.onExport).toHaveBeenCalledWith({ format: 'psd', jpegQuality: 0.85 })
   })
 
   it('exports a .qart file, which keeps every layer (plan M1.5)', async () => {

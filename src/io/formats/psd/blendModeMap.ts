@@ -49,6 +49,7 @@ export function quarToPsdBlendMode(mode: BlendMode): PsdBlendMode {
   return QUAR_TO_PSD[mode] ?? 'normal'
 }
 
-export function psdToQuarBlendMode(psdMode: string): BlendMode {
-  return PSD_TO_QUAR[psdMode] ?? 'normal'
+/** The app's blend mode for a PSD one, or null when the app doesn't have it (Linear Burn, for one). */
+export function quarBlendModeOf(psdMode: string): BlendMode | null {
+  return PSD_TO_QUAR[psdMode] ?? null
 }

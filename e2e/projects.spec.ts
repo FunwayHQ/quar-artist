@@ -3,6 +3,7 @@
  * opens again, and the Gallery's actions change what is stored.
  */
 import { test, expect, type Page } from '@playwright/test'
+import { readFile } from 'node:fs/promises'
 import { STROKE_PIXELS, canvasShot, changedPixels, drawStroke, waitForEngine } from './support/app.ts'
 
 /** Canvas screenshots of the same document differ by less than this (antialiasing, cursor). */
@@ -397,8 +398,10 @@ test('files dropped on the Gallery become projects', async ({ page }) => {
   await page.goto('/')
   await waitForEngine(page)
   await goToGallery(page)
+  // Saved by Photoshop: 300 × 200, three layers (plan M1.7).
+  const psd = (await readFile(new URL('./fixtures/psd/layers.psd', import.meta.url))).toString('base64')
 
-  const dataTransfer = await page.evaluateHandle(async () => {
+  const dataTransfer = await page.evaluateHandle(async (psd64) => {
     const canvas = document.createElement('canvas')
     canvas.width = 64
     canvas.height = 48
@@ -408,16 +411,19 @@ test('files dropped on the Gallery become projects', async ({ page }) => {
     const png = await new Promise<Blob>((resolve) => canvas.toBlob((b) => resolve(b!), 'image/png'))
     const transfer = new DataTransfer()
     transfer.items.add(new File([png], 'Swatch.png', { type: 'image/png' }))
+    transfer.items.add(new File([Uint8Array.from(atob(psd64), (c) => c.charCodeAt(0))], 'Layers.psd'))
     transfer.items.add(new File(['8BPS'], 'scan.psd'))
     return transfer
-  })
+  }, psd)
   const gallery = page.getByText('Your Projects').locator('xpath=ancestor::div[1]')
   await gallery.dispatchEvent('dragover', { dataTransfer })
   await gallery.dispatchEvent('drop', { dataTransfer })
 
+  // Said once they are all done, for 3 s.
+  await expect(page.getByText('Imported 2 files')).toBeVisible({ timeout: 30000 })
+  await expect(page.getByText("Couldn't import “scan.psd”: it isn't a PSD file, or it is damaged")).toBeVisible()
   await expect(page.getByRole('article', { name: 'Swatch' })).toContainText('64×48')
-  await expect(page.getByText('Imported “Swatch”')).toBeVisible()
-  await expect(page.getByText("“scan.psd”: PSD files can't be opened yet")).toBeVisible()
+  await expect(page.getByRole('article', { name: 'Layers' })).toContainText('300×200')
 
   await page.getByRole('button', { name: 'Open Swatch' }).click()
   await waitForEngine(page)

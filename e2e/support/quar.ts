@@ -16,6 +16,7 @@ import type {
   ChangedTiles,
   HarnessInfo,
   LayerProps,
+  OpenedPsd,
   PointerOptions,
   PointInput,
   Rect,
@@ -127,6 +128,11 @@ export class Quar {
   /** Save every layer and open the document again: as tiles, as projects open now, or as whole layers. */
   reopen(via: ReopenVia = 'tiles'): Promise<void> {
     return this.page.evaluate((v) => window.__quar!.reopen(v), via)
+  }
+
+  /** Open a PSD file as the app opens one. The page must be open at the file's size. */
+  openPsd(bytes: Uint8Array): Promise<OpenedPsd> {
+    return this.page.evaluate((f) => window.__quar!.openPsd(f), { base64: Buffer.from(bytes).toString('base64') })
   }
 
   /** Tiles of a layer as an incremental save reads them, each with the same tile from a whole-layer read. */

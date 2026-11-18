@@ -1,8 +1,9 @@
 /**
- * Files on disk in the real app (plans M1.5 and M1.6): Save as .qart… keeps
+ * Files on disk in the real app (plans M1.5 to M1.7): Save as .qart… keeps
  * every layer, File › Open… opens the file again, Ctrl+S writes the file a
- * project was saved as, files dropped anywhere never take the app away, and
- * a file with damaged tiles opens with them transparent.
+ * project was saved as, files dropped anywhere never take the app away, a
+ * file with damaged tiles opens with them transparent, and PSD files export
+ * with every layer and open with theirs.
  *
  * Chromium has the File System Access API. Its pickers show the system's
  * dialogs, which a test can't use, so stand-ins hand out real handles to
@@ -14,6 +15,7 @@ import { unzipSync, zipSync, strToU8 } from 'fflate'
 import { readFile } from 'node:fs/promises'
 import { CANVAS, STROKE_PIXELS, canvasShot, changedPixels, drawStroke, waitForEngine } from './support/app.ts'
 import { decodePng } from './support/png.ts'
+import { readPsd } from '../src/io/formats/psd/agPsd.ts'
 
 /** Canvas screenshots of the same document differ by less than this (antialiasing, cursor). */
 const SAME = 40
@@ -170,6 +172,11 @@ function breakChecksum(zip: Uint8Array, name: string): Uint8Array {
 }
 
 const base64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64')
+
+/** One of the PSD files Photoshop saved (e2e/fixtures/psd), base64-encoded. */
+async function psdFixture(name: string): Promise<string> {
+  return base64(await readFile(new URL(`./fixtures/psd/${name}.psd`, import.meta.url)))
+}
 
 function storedProjectCount(page: Page) {
   return page.evaluate(
@@ -335,7 +342,7 @@ test('files dropped anywhere never take the app away: images become layers, a .q
 
   // Dropped on the title bar: refused, and kept from opening in the tab.
   expect(await drop(page, '[data-testid="title-bar"]', [{ name: 'notes.txt', type: 'text/plain', base64: btoa('hi') }])).toBe(true)
-  await expect(page.getByText("“notes.txt” isn't a .qart file or an image")).toBeVisible()
+  await expect(page.getByText("“notes.txt” isn't a .qart or PSD file, or an image")).toBeVisible()
 
   // An image dropped on the Layers panel: a layer of its own.
   expect(await drop(page, '[data-testid="layers-panel"]', [{ name: 'dot.png', type: 'image/png', image: true }])).toBe(true)
@@ -385,4 +392,85 @@ test('a .qart file with a damaged tile opens with it transparent, and says so (p
       return lr > 200 && lg < 40 && lb < 40 && !(rr < 60 && rg < 60 && rb > 200)
     }, { timeout: 20000 })
     .toBe(true)
+})
+
+test('Export… as PSD keeps every layer and the picture, for Photoshop and other apps (plan M1.7)', async ({ page }) => {
+  test.slow()
+  await page.goto('/')
+  await waitForEngine(page)
+  await paint(page, { x: 0.35, y: 0.4 })
+  await page.locator('[data-testid="add-layer-btn"]').click()
+  await paint(page, { x: 0.6, y: 0.65 })
+
+  await menu(page, /^Export/)
+  const dialog = page.getByRole('dialog', { name: 'Export' })
+  await dialog.getByRole('button', { name: 'PSD', exact: true }).click()
+  const [download] = await Promise.all([page.waitForEvent('download'), dialog.getByRole('button', { name: 'Export PSD' }).click()])
+
+  expect(download.suggestedFilename()).toBe('Untitled Project.psd')
+  await expect(page.getByText('Exported “Untitled Project.psd”')).toBeVisible()
+  const psd = readPsd(await readFile(await download.path()), { useImageData: true, skipThumbnail: true })
+  expect(psd).toMatchObject({ width: 1920, height: 1080 })
+  expect(psd.imageResources?.resolutionInfo).toMatchObject({ horizontalResolution: 72, horizontalResolutionUnit: 'PPI' })
+  const [bottom, top] = psd.children!
+  expect(psd.children!.map((l) => [l.name, l.blendMode, l.opacity, l.hidden])).toEqual([
+    ['Layer 1', 'normal', 1, false],
+    ['Layer 2', 'normal', 1, false],
+  ])
+  // The active layer stays selected.
+  expect(psd.imageResources?.layerSelectionIds).toEqual([top.id])
+  // Each layer is kept where it was painted: its stroke, not the whole canvas.
+  for (const layer of [bottom, top]) {
+    expect(layer.right! - layer.left!).toBeGreaterThan(10)
+    expect(layer.right! - layer.left!).toBeLessThan(1920)
+  }
+  expect(bottom.left).toBeLessThan(top.left!)
+
+  // The picture other apps show: both strokes, and nothing where nothing was painted (F09 wrote it black).
+  const picture = psd.imageData!
+  const alpha = (x: number, y: number) => picture.data[(y * picture.width + x) * 4 + 3]
+  expect(alpha(0, 0)).toBe(0)
+  let painted = 0
+  for (const layer of [bottom, top]) {
+    const own = layer.imageData!
+    let covered = 0
+    let total = 0
+    for (let y = 0; y < own.height; y++) {
+      for (let x = 0; x < own.width; x++) {
+        if (own.data[(y * own.width + x) * 4 + 3] === 0) continue
+        total++
+        if (alpha(layer.left! + x, layer.top! + y) > 0) covered++
+      }
+    }
+    expect(covered).toBe(total)
+    painted += total
+  }
+  expect(painted).toBeGreaterThan(STROKE_PIXELS)
+})
+
+test('a PSD file dropped on the canvas opens as a project with its layers, and one with too many is refused (plan M1.7)', async ({ page }) => {
+  test.slow()
+  await page.goto('/')
+  await waitForEngine(page)
+  const rows = page.locator('[data-testid="layer-row"]')
+  const blank = await canvasShot(page)
+
+  expect(await drop(page, CANVAS, [{ name: 'groups.psd', base64: await psdFixture('groups') }])).toBe(true)
+
+  await expect(page.getByRole('textbox', { name: 'Project name' })).toHaveValue('groups', { timeout: OPENING })
+  await expect(page.getByText("Some of “groups.psd” isn't in QUAR Artist yet: its 2 groups became plain layers")).toBeVisible()
+  // Top first, as the Layers panel shows them.
+  const names = () => rows.getByRole('textbox', { name: /^Layer name/ }).evaluateAll((inputs) => inputs.map((i) => (i as HTMLInputElement).value))
+  await expect.poll(names).toEqual(['Layer 1', 'Layer 3', 'Layer 0'])
+  await waitForEngine(page)
+  await expect.poll(async () => changedPixels(page, blank, await canvasShot(page)), { timeout: 20000 }).toBeGreaterThan(STROKE_PIXELS)
+  expect(await storedProjectCount(page)).toBe(2)
+
+  // 29 layers, and the app has up to 20: refused before any are read, and the open project stays.
+  expect(await drop(page, CANVAS, [{ name: 'Blend modes.psd', base64: await psdFixture('2026-blend-modes') }])).toBe(true)
+  await expect(
+    page.getByText("Couldn't open “Blend modes.psd”: it has 29 layers, and QUAR Artist can have up to 20. Merge some in the app that made it, then open it again"),
+  ).toBeVisible()
+  await expect(page.getByRole('textbox', { name: 'Project name' })).toHaveValue('groups')
+  expect(await storedProjectCount(page)).toBe(2)
 })

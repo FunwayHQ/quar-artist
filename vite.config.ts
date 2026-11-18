@@ -30,7 +30,10 @@ export default defineConfig({
         manualChunks: {
           'pixi': ['pixi.js'],
           'react-vendor': ['react', 'react-dom'],
-          'vendor-utils': ['zustand', 'fflate', 'ag-psd', 'idb'],
+          // Not ag-psd: this chunk loads at start-up, and PSD files load
+          // their code when one is opened or exported (plan M1.7).
+          'vendor-utils': ['zustand', 'fflate', 'idb'],
+          'ag-psd': ['ag-psd'],
         },
       },
     },

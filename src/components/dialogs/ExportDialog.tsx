@@ -14,9 +14,6 @@ interface ExportDialogProps {
 
 type ExportFormat = ExportOptions['format']
 
-/** Formats the app can't write yet: PSD export comes with plan M1.7. */
-const NOT_YET: Partial<Record<ExportFormat, string>> = { psd: 'PSD' }
-
 const JPEG_PRESETS = [
   { label: 'Low', value: 0.3 },
   { label: 'Medium', value: 0.6 },
@@ -38,10 +35,7 @@ export function ExportDialog({
 
   if (!open) return null
 
-  const notYet = NOT_YET[format]
-  const handleExport = () => {
-    if (!notYet) onExport({ format, jpegQuality })
-  }
+  const handleExport = () => onExport({ format, jpegQuality })
 
   return (
     <div className={styles.overlay} onClick={onClose}>
@@ -79,9 +73,9 @@ export function ExportDialog({
           )}
         </div>
 
-        {notYet && (
+        {format === 'psd' && (
           <p className={styles.notYet} role="note">
-            {notYet} export isn't available yet. PNG keeps the picture with its transparency, as one layer.
+            A PSD file keeps every layer, with its blend mode, opacity and visibility, for Photoshop and other apps.
           </p>
         )}
 
@@ -123,7 +117,7 @@ export function ExportDialog({
 
         <div className={styles.footer}>
           <button className={styles.cancelBtn} onClick={onClose} type="button">Cancel</button>
-          <button className={styles.exportBtn} onClick={handleExport} type="button" disabled={notYet !== undefined}>
+          <button className={styles.exportBtn} onClick={handleExport} type="button">
             Export {format.toUpperCase()}
           </button>
         </div>

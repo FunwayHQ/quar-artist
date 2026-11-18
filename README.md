@@ -17,7 +17,7 @@
   <img src="https://img.shields.io/badge/Tests-Vitest_+_Playwright-brightgreen?style=flat-square" alt="Tests: Vitest and Playwright" />
 </p>
 
-> **In development.** Painting, layers, saving in the browser and to .qart files, and PNG/JPEG export work. See [Status](#status) and the [completion plan](docs/completion-plan.md).
+> **In development.** Painting, layers, saving in the browser and to .qart files, PNG/JPEG export, and PSD export and import work. See [Status](#status) and the [completion plan](docs/completion-plan.md).
 
 ---
 
@@ -60,8 +60,8 @@
 - **PNG** export — full-resolution composite
 - **JPEG** export — with quality slider (Low/Medium/High/Max)
 - **.qart** (a ZIP archive with a manifest, a thumbnail and each layer's painted 256 × 256 tiles, compressed; described in [docs/qart-format.md](docs/qart-format.md)): File › Save as .qart… or the Export dialog. In Chromium the project remembers its file, and Ctrl+S writes it again, unless something else wrote it since; Firefox and Safari download it
-- **PSD**: the writer exists but isn't connected to the Export dialog yet
-- **Opening files:** File › Open… opens .qart files and images as new projects. Images dropped on the canvas become layers, and a dropped .qart file opens; a file dropped anywhere never opens in the tab in the app's place
+- **PSD**: the Export dialog writes every layer, with its blend mode, opacity, visibility, clipping and locks, and the composite, for Photoshop and other apps. PSD and PSB files open as new projects: groups become plain layers, and a toast says what was left out, such as adjustment layers and effects. See [docs/psd-files.md](docs/psd-files.md)
+- **Opening files:** File › Open… opens .qart and PSD files and images as new projects. Images dropped on the canvas become layers, and a dropped .qart or PSD file opens; a file dropped anywhere never opens in the tab in the app's place
 - **Saving:** projects save themselves in the browser two seconds after each change, writing only the 256 × 256 tiles that changed, compressed, from a background worker: in the origin private file system where the browser offers it, in IndexedDB otherwise. The title bar shows whether the work is saved, and the page saves when it's hidden or closed. A project opens a batch of tiles at a time, with a progress bar, as it was left: the same view, drawing guides and selected layer. The Gallery lists the projects and how much storage they use
 
 ### Undo/Redo
@@ -192,12 +192,13 @@ QUAR Artist is not ready for real work yet. The remaining work for the MVP and v
 | Painting | Works: 12 brush presets, pressure, smoothing. Every brush stamps a plain round tip, strokes end up to one stamp short of where the pen lifts, and opacity builds up like flow (M3) |
 | Pen and touch | Pressure, pinch-zoom, two-finger rotate and pan work. The first finger of a pinch leaves a dab, and there's no palm rejection (M3.1, M3.2) |
 | Layers | Works: up to 20 layers, opacity, visibility, lock, reorder, duplicate, merge down. Clipping masks and alpha lock follow only the red channel, Merge Down ignores blend modes, and deleting, merging or reordering layers can't be undone (M2, M3) |
-| Blend modes | 24 of 26 match the reference over opaque layers. Hue and Dissolve draw as Normal, and most modes are wrong over transparent areas (M2.4) |
+| Blend modes | 24 of 26 match the reference over opaque layers, and all but Hue and Vivid Light match what Photoshop draws. Hue and Dissolve draw as Normal, and most modes are wrong over transparent areas (M2.4) |
 | Colour | Works: colour disc, harmonies, palettes, recent colours. Palettes aren't saved yet (M1.9) |
 | Selection and transform | The tools work, but brush strokes and transforms ignore the selection, Feather does nothing, and transform handles misbehave after a rotation (M4.1–M4.3) |
 | Filters | Gaussian blur, sharpen, HSB adjustment, curves. Strokes made while a filter dialog is open are lost (M4.10) |
-| Saving | Projects save themselves in the browser two seconds after each change, when you go back to the Gallery or press Ctrl+S, and when the page is hidden or closed, which asks first while changes aren't saved. A save reads back and writes only the 256 × 256 tiles that changed, compressed, from a background worker, and lands whole or not at all. The title bar shows whether the work is saved, and the app asks the browser to keep its storage. Opening a project streams its tiles to the GPU a batch at a time, with a progress bar, and brings back its view, drawing guides and selected layer. The Gallery lists projects with thumbnails, stacks, sorting, rename, duplicate, delete with undo, and import of .qart files and images, and shows the storage used. File › Save as .qart… writes the project to a file, which Ctrl+S then writes again (Chromium; Firefox and Safari download it), File › Open… opens .qart files and images, and dropped files never take the app away. .qart files are written and read in a background worker. They keep the layers, resolution, colour space and guides, and their format is documented ([docs/qart-format.md](docs/qart-format.md)). The reader refuses files made to exhaust memory, and opens one with damaged tiles with those transparent, saying so |
-| Export | PNG, JPEG and .qart work. PSD isn't connected yet (M1.7) |
+| Saving | Projects save themselves in the browser two seconds after each change, when you go back to the Gallery or press Ctrl+S, and when the page is hidden or closed, which asks first while changes aren't saved. A save reads back and writes only the 256 × 256 tiles that changed, compressed, from a background worker, and lands whole or not at all. The title bar shows whether the work is saved, and the app asks the browser to keep its storage. Opening a project streams its tiles to the GPU a batch at a time, with a progress bar, and brings back its view, drawing guides and selected layer. The Gallery lists projects with thumbnails, stacks, sorting, rename, duplicate, delete with undo, and import of .qart and PSD files and images, and shows the storage used. File › Save as .qart… writes the project to a file, which Ctrl+S then writes again (Chromium; Firefox and Safari download it), File › Open… opens .qart and PSD files and images, and dropped files never take the app away. .qart files are written and read in a background worker. They keep the layers, resolution, colour space and guides, and their format is documented ([docs/qart-format.md](docs/qart-format.md)). The reader refuses files made to exhaust memory, and opens one with damaged tiles with those transparent, saying so |
+| Export | PNG, JPEG, .qart and PSD work. PSD files keep every layer; groups and masks come with layer groups (M7.1). PNG and JPEG files don't record the resolution yet (M1.8) |
+| PSD files | Open as new projects, at 8, 16 or 32 bits, with their layers, blend modes, opacity, visibility, clipping and locks. Groups become plain layers, masks are applied, and a toast says what was left out. Nine files saved by Photoshop draw with 97–100% of pixels as Photoshop drew them, against a target of 95% ([docs/psd-files.md](docs/psd-files.md)) |
 | Rendering | WebGPU, or WebGL 2 where WebGPU isn't available |
 | Tests | Vitest unit tests, plus Playwright end-to-end and real-GPU pixel tests in Chromium (WebGPU and WebGL 2), Firefox and WebKit |
 

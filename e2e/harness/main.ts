@@ -15,6 +15,7 @@ import { CanvasManager } from '@engine/canvas/CanvasManager.ts'
 import { getBackend } from '@engine/renderer.ts'
 import { DEFAULT_PRESETS } from '@engine/brush/BrushParams.ts'
 import { exportImage } from '../../src/io/formats/image/ImageExporter.ts'
+import { decodePsd } from '../../src/io/formats/psd/PsdReader.ts'
 import { cutTiles, tileBounds, tileColumns, tileKey, tileRows } from '../../src/utils/tiles.ts'
 import { cutTile, isEmptyTile } from '../../src/io/tiles/tileFormat.ts'
 import type {
@@ -243,6 +244,18 @@ function createHarness(manager: CanvasManager, overlay: HTMLCanvasElement, info:
         for (let start = 0; start < stored[i].length; start += 2) manager.placeTiles(id, stored[i].slice(start, start + 2))
       })
       manager.finishLoading()
+    },
+
+    async openPsd({ base64 }) {
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))
+      const doc = await decodePsd(new Blob([bytes]))
+      if (doc.width !== info.width || doc.height !== info.height) {
+        throw new Error(`harness: the file is ${doc.width} × ${doc.height} px, and the page ${info.width} × ${info.height}`)
+      }
+      const layers = doc.layers.map(({ pixels, ...props }, i) => ({ info: { id: `psd-${i}`, ...props }, pixels }))
+      const activeLayerId = layers[doc.activeLayer].info.id
+      manager.loadDocument(layers, activeLayerId)
+      return { layers: manager.getLayerInfos(), activeLayerId: manager.getActiveLayerId(), notes: doc.notes }
     },
 
     readTiles(layerId, tiles) {
